@@ -1,162 +1,153 @@
-import SwiftUI
-import AVKit // Benötigt für VideoPlayer und AVPlayer
+// DetailViewContent.swift
 
-// Stellt die Detailansicht für einen einzelnen Post dar.
-// Zeigt entweder ein Bild oder ein Video an.
+import SwiftUI
+import AVKit // Für AVPlayer, VideoPlayer
+import Combine // Für KVO (NSKeyValueObservation)
+
 struct DetailViewContent: View {
-    // Das anzuzeigende Item-Objekt, wird von der ContentView übergeben.
     let item: Item
 
-    // State-Variable für den AVPlayer. @State sorgt dafür, dass die View
-    // den Player über Neuzeichnungen hinweg behält und auf Änderungen reagieren kann.
-    // Er ist optional (?), da wir ihn nur für Videos brauchen.
+    // Zugriff auf die globalen App-Einstellungen.
+    @EnvironmentObject var settings: AppSettings
+
+    // State für den Player wie gehabt.
     @State private var player: AVPlayer? = nil
+    // State zum Speichern des KVO-Beobachters für die isMuted-Eigenschaft.
+    @State private var muteObserver: NSKeyValueObservation? = nil
 
     var body: some View {
-        // ScrollView erlaubt es, den Inhalt zu scrollen, falls er
-        // (insbesondere das Bild/Video) größer als der Bildschirm ist.
-        ScrollView {
-            // VStack ordnet die Elemente (Bild/Video und Text) vertikal an.
-            VStack {
-                // --- Bedingte Anzeige: Video oder Bild ---
-                if item.isVideo {
-                    // Fall 1: Es ist ein Video
+        VStack(spacing: 0) {
+            Color.clear
+                .aspectRatio(guessAspectRatio(), contentMode: .fit)
+                .overlay(mediaView()) // mediaView wird jetzt komplexer
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
 
-                    // Wir versuchen sicherzustellen, dass die URL gültig ist.
-                    if let url = item.imageUrl {
-                        // Erzeuge den VideoPlayer. Er benötigt eine AVPlayer-Instanz.
-                        // Wir verwenden die @State-Variable 'player'.
-                        VideoPlayer(player: player)
-                            // Passt die Größe des Videos an den verfügbaren Platz an,
-                            // behält aber das Seitenverhältnis bei.
-                            .aspectRatio(contentMode: .fit)
-                            // .onAppear wird ausgeführt, wenn die View auf dem Bildschirm erscheint.
-                            .onAppear {
-                                // Erzeuge oder aktualisiere den AVPlayer.
-                                // Die Prüfung stellt sicher, dass wir nicht unnötig einen
-                                // neuen Player erstellen, wenn die View nur neu gezeichnet wird.
-                                if player == nil || player?.currentItem?.asset != AVURLAsset(url: url) {
-                                     player = AVPlayer(url: url)
-                                     // Optional: Wenn das Video automatisch starten soll:
-                                     // player?.play()
-                                }
-                            }
-                            // .onDisappear wird ausgeführt, wenn die View vom Bildschirm verschwindet.
-                            .onDisappear {
-                                // Pausiere das Video, um Ressourcen zu sparen und zu verhindern,
-                                // dass es im Hintergrund weiterläuft.
-                                player?.pause()
-                                // Optional: Player auf nil setzen, um Speicher freizugeben
-                                // player = nil
-                            }
-                            // Gib dem Player eine Mindesthöhe, damit der Bereich nicht
-                            // leer ist, bevor das Video geladen ist.
-                            .frame(minHeight: 200) // Passe die Höhe nach Bedarf an
+            // Metadatenbereich (unverändert)
+            HStack {
+                Text("ID: \(item.id)").font(.caption).lineLimit(1)
+                Spacer()
+                Text("⬆️ \(item.up)").font(.caption)
+                Text("⬇️ \(item.down)").font(.caption)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal)
+            .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // WICHTIG: KVO Observer entfernen, wenn die View verschwindet!
+        .onDisappear {
+            cleanupPlayerAndObserver()
+        }
+    }
 
-                    } else {
-                        // Fallback, wenn die Video-URL aus irgendeinem Grund ungültig ist.
-                        Text("Video konnte nicht geladen werden (Ungültige URL).")
-                            .foregroundColor(.red)
-                            .frame(minHeight: 200, alignment: .center)
-                            .padding()
+    // MARK: - Media View & Player Logic
+
+    @ViewBuilder
+    private func mediaView() -> some View {
+        if item.isVideo {
+            if let url = item.imageUrl {
+                // VideoPlayer verwendet die @State 'player'-Variable.
+                VideoPlayer(player: player)
+                    .onAppear {
+                        // Diese Funktion initialisiert den Player, setzt Mute und startet Autoplay.
+                        setupPlayer(url: url)
                     }
-                } else {
-                    // Fall 2: Es ist ein Bild
-
-                    // AsyncImage lädt Bilder asynchron von einer URL.
-                    AsyncImage(url: item.imageUrl) { phase in
-                        // 'phase' repräsentiert den Ladezustand des Bildes.
-                        switch phase {
-                        case .empty:
-                            // Zustand: Das Laden hat noch nicht begonnen.
-                            // Zeige eine Ladeanzeige.
-                            ProgressView()
-                                // Gib dem Platzhalter eine Mindesthöhe.
-                                .frame(minHeight: 200)
-                        case .success(let image):
-                            // Zustand: Das Bild wurde erfolgreich geladen.
-                            image
-                                .resizable() // Erlaube Größenänderung des Bildes.
-                                .scaledToFit() // Skaliere das Bild, sodass es passt, Seitenverhältnis bleibt erhalten.
-                        case .failure:
-                            // Zustand: Das Laden ist fehlgeschlagen.
-                            // Zeige eine Fehlermeldung.
-                            VStack {
-                                Image(systemName: "photo") // Symbol
-                                    .font(.largeTitle)
-                                Text("Bild konnte nicht geladen werden.")
-                                    .foregroundColor(.red)
-                            }
-                            .frame(minHeight: 200, alignment: .center)
-                            .padding()
-                        @unknown default:
-                            // Zukünftiger, unbekannter Zustand.
-                            EmptyView()
-                                .frame(minHeight: 200)
-                        }
-                    }
+                    // onDisappear wird jetzt vom .onDisappear des VStack gehandhabt
+            } else {
+                Text("Video URL ungültig").foregroundColor(.red)
+            }
+        } else {
+            // AsyncImage für Bilder (unverändert)
+            AsyncImage(url: item.imageUrl) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFit()
+                case .failure:
+                    Text("Bild konnte nicht geladen werden").foregroundColor(.red)
+                default:
+                    ProgressView()
                 }
-                // --- Ende der bedingten Anzeige ---
-
-                // Zeigt zusätzliche Informationen unter dem Bild/Video an.
-                HStack {
-                    Text("ID: \(item.id)")
-                        .font(.caption)
-                    Spacer() // Schiebt die Elemente auseinander
-                    Text("⬆️ \(item.up)")
-                        .font(.caption)
-                    Text("⬇️ \(item.down)")
-                        .font(.caption)
-                }
-                .padding(.horizontal) // Abstand links/rechts
-                .padding(.bottom) // Abstand nach unten
-
-                // Platzhalter für zukünftige Elemente (z.B. Kommentare)
-                // Text("Kommentare...")
-                //    .padding()
+            }
+            // WICHTIG: Stelle sicher, dass auch der Bild-Zweig den Player und Observer bereinigt,
+            // falls der Benutzer schnell zwischen Bild- und Videoposts wechselt.
+            .onAppear {
+                 // Wenn wir zu einem Bild wechseln, soll ein eventuell laufender
+                 // Player vom vorherigen Video gestoppt und der Observer entfernt werden.
+                 cleanupPlayerAndObserver()
             }
         }
-        // Setzt den Titel der Navigationsleiste für diese Ansicht.
-        .navigationTitle("Post \(item.id)")
-        // Hinweis: .navigationBarTitleDisplayMode(.inline) wird üblicherweise
-        // im .navigationDestination der aufrufenden View (ContentView) gesetzt,
-        // um plattformspezifischen Code dort zu bündeln.
+    }
+
+    // Funktion zum Initialisieren und Konfigurieren des AVPlayers
+    private func setupPlayer(url: URL) {
+        // Nur neu erstellen, wenn nötig
+        if player == nil || player?.currentItem?.asset != AVURLAsset(url: url) {
+            print("Setting up new player for URL: \(url)")
+            // Vorherigen Observer sicher entfernen, falls vorhanden
+            self.muteObserver?.invalidate()
+            self.muteObserver = nil
+
+            player = AVPlayer(url: url)
+
+            // 1. Stummschaltung basierend auf gespeicherter Einstellung anwenden
+            player?.isMuted = settings.isVideoMuted
+            print("Player initial mute state set to: \(settings.isVideoMuted)")
+
+            // 2. Beobachter (KVO) für die 'isMuted'-Eigenschaft des Players hinzufügen
+            // Wir wollen wissen, wann der *Benutzer* den Mute-Button im Player drückt.
+            self.muteObserver = player?.observe(\.isMuted, options: [.new]) { observedPlayer, change in
+                 guard let newMutedState = change.newValue else { return }
+
+                 // Aktualisiere die globale Einstellung, wenn sie sich vom Player-Status unterscheidet.
+                 // Dies passiert, wenn der Benutzer den Button drückt.
+                 if settings.isVideoMuted != newMutedState {
+                     print("User changed mute via player controls. New state: \(newMutedState)")
+                     settings.isVideoMuted = newMutedState
+                 }
+            }
+
+        } else {
+             // Player existiert bereits für diese URL, setze Mute-Status erneut
+             // (für den Fall, dass die Einstellung global geändert wurde, während dieser Player pausiert war)
+             print("Reusing existing player. Setting mute state to: \(settings.isVideoMuted)")
+             player?.isMuted = settings.isVideoMuted
+        }
+
+        // 3. Autoplay starten
+        player?.play()
+        print("Player started (Autoplay)")
+    }
+
+    // Funktion zum Aufräumen (Player stoppen, Observer entfernen)
+    private func cleanupPlayerAndObserver() {
+        print("Cleaning up player and observer.")
+        player?.pause() // Video anhalten
+        muteObserver?.invalidate() // KVO-Beobachtung beenden
+        muteObserver = nil
+        // Optional: Player auf nil setzen, um Ressourcen freizugeben, wenn gewünscht
+        // player = nil
+    }
+
+
+    // Hilfsfunktion für das Seitenverhältnis (unverändert)
+    private func guessAspectRatio() -> CGFloat? {
+        if item.width > 0 && item.height > 0 {
+            return CGFloat(item.width) / CGFloat(item.height)
+        }
+        return 16.0 / 9.0 // Fallback
     }
 }
 
 // MARK: - Preview
 
 #Preview {
-    // Erstelle Beispiel-Items für die Vorschau in Xcode.
-    // Es ist nützlich, Beispiele für Bild und Video zu haben.
+     let sampleVideoItem = Item(id: 2, image: "test.mp4", thumb: "tv.jpg", width: 1920, height: 1080, up: 20, down: 2)
+     let sampleImageItem = Item(id: 1, image: "test.jpg", thumb: "t.jpg", width: 800, height: 1200, up: 10, down: 1)
 
-    let sampleImageItem = Item(
-        id: 12345,
-        image: "example.jpg", // Fiktiver Dateiname
-        thumb: "example_thumb.jpg",
-        width: 800,
-        height: 600,
-        up: 250,
-        down: 15
-        // Stelle sicher, dass alle benötigten Felder von Item hier initialisiert werden.
-    )
-
-    let sampleVideoItem = Item(
-        id: 67890,
-        image: "example.mp4", // Wichtig: Video-Endung für die isVideo-Logik
-        thumb: "example_vid_thumb.jpg",
-        width: 1920,
-        height: 1080,
-        up: 500,
-        down: 5
-    )
-
-    // Zeige die Vorschau innerhalb einer NavigationStack, damit der Titel sichtbar ist.
-    NavigationStack {
-        // Wähle eines der Beispiel-Items für die Vorschau aus:
-        // DetailView(item: sampleImageItem)
-         DetailView(item: sampleVideoItem) // Oder dieses für die Video-Vorschau
+    return NavigationStack { // Für eine realistischere Vorschauumgebung
+        DetailViewContent(item: sampleVideoItem)
+             // WICHTIG FÜR PREVIEW: Füge hier ein EnvironmentObject hinzu!
+            .environmentObject(AppSettings()) // Erstellt eine temporäre Instanz für die Vorschau
     }
-    // Optional: .environmentObject oder andere Modifikatoren hier hinzufügen,
-    // falls deine View Abhängigkeiten hat.
 }
