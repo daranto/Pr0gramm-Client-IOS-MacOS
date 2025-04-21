@@ -1,29 +1,29 @@
 // DetailViewContent.swift
 
 import SwiftUI
-import AVKit // Für AVPlayer, VideoPlayer
-import Combine // Für KVO (NSKeyValueObservation)
+import AVKit
+import Combine
+import os
 
 struct DetailViewContent: View {
     let item: Item
 
-    // Zugriff auf die globalen App-Einstellungen.
     @EnvironmentObject var settings: AppSettings
 
-    // State für den Player wie gehabt.
     @State private var player: AVPlayer? = nil
-    // State zum Speichern des KVO-Beobachters für die isMuted-Eigenschaft.
     @State private var muteObserver: NSKeyValueObservation? = nil
+    @State private var loopObserver: NSObjectProtocol? = nil
+
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
 
     var body: some View {
         VStack(spacing: 0) {
             Color.clear
                 .aspectRatio(guessAspectRatio(), contentMode: .fit)
-                .overlay(mediaView()) // mediaView wird jetzt komplexer
+                .overlay(mediaView())
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
 
-            // Metadatenbereich (unverändert)
             HStack {
                 Text("ID: \(item.id)").font(.caption).lineLimit(1)
                 Spacer()
@@ -35,9 +35,8 @@ struct DetailViewContent: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // WICHTIG: KVO Observer entfernen, wenn die View verschwindet!
         .onDisappear {
-            cleanupPlayerAndObserver()
+            cleanupPlayerAndObservers()
         }
     }
 
@@ -47,107 +46,132 @@ struct DetailViewContent: View {
     private func mediaView() -> some View {
         if item.isVideo {
             if let url = item.imageUrl {
-                // VideoPlayer verwendet die @State 'player'-Variable.
                 VideoPlayer(player: player)
-                    .onAppear {
-                        // Diese Funktion initialisiert den Player, setzt Mute und startet Autoplay.
-                        setupPlayer(url: url)
-                    }
-                    // onDisappear wird jetzt vom .onDisappear des VStack gehandhabt
+                    .onAppear { setupPlayer(url: url) }
             } else {
                 Text("Video URL ungültig").foregroundColor(.red)
             }
         } else {
-            // AsyncImage für Bilder (unverändert)
             AsyncImage(url: item.imageUrl) { phase in
                 switch phase {
                 case .success(let image):
                     image.resizable().scaledToFit()
-                case .failure:
+                case .failure(let error):
+                    let _ = Self.logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)")
                     Text("Bild konnte nicht geladen werden").foregroundColor(.red)
                 default:
                     ProgressView()
                 }
             }
-            // WICHTIG: Stelle sicher, dass auch der Bild-Zweig den Player und Observer bereinigt,
-            // falls der Benutzer schnell zwischen Bild- und Videoposts wechselt.
             .onAppear {
-                 // Wenn wir zu einem Bild wechseln, soll ein eventuell laufender
-                 // Player vom vorherigen Video gestoppt und der Observer entfernt werden.
-                 cleanupPlayerAndObserver()
+                 cleanupPlayerAndObservers()
             }
         }
     }
+
+    // --- HIER SIND DIE FUNKTIONEN KORREKT DEFINIERT ---
 
     // Funktion zum Initialisieren und Konfigurieren des AVPlayers
     private func setupPlayer(url: URL) {
-        // Nur neu erstellen, wenn nötig
-        if player == nil || player?.currentItem?.asset != AVURLAsset(url: url) {
-            print("Setting up new player for URL: \(url)")
-            // Vorherigen Observer sicher entfernen, falls vorhanden
-            self.muteObserver?.invalidate()
-            self.muteObserver = nil
+        Self.logger.debug("Setting up player for URL: \(url.absoluteString)")
+        let needsNewPlayer = player == nil || player?.currentItem?.asset != AVURLAsset(url: url)
 
+        if needsNewPlayer {
+            cleanupPlayerAndObservers(keepPlayerInstance: true)
             player = AVPlayer(url: url)
-
-            // 1. Stummschaltung basierend auf gespeicherter Einstellung anwenden
-            player?.isMuted = settings.isVideoMuted
-            print("Player initial mute state set to: \(settings.isVideoMuted)")
-
-            // 2. Beobachter (KVO) für die 'isMuted'-Eigenschaft des Players hinzufügen
-            // Wir wollen wissen, wann der *Benutzer* den Mute-Button im Player drückt.
-            self.muteObserver = player?.observe(\.isMuted, options: [.new]) { observedPlayer, change in
-                 guard let newMutedState = change.newValue else { return }
-
-                 // Aktualisiere die globale Einstellung, wenn sie sich vom Player-Status unterscheidet.
-                 // Dies passiert, wenn der Benutzer den Button drückt.
-                 if settings.isVideoMuted != newMutedState {
-                     print("User changed mute via player controls. New state: \(newMutedState)")
-                     settings.isVideoMuted = newMutedState
-                 }
-            }
-
         } else {
-             // Player existiert bereits für diese URL, setze Mute-Status erneut
-             // (für den Fall, dass die Einstellung global geändert wurde, während dieser Player pausiert war)
-             print("Reusing existing player. Setting mute state to: \(settings.isVideoMuted)")
-             player?.isMuted = settings.isVideoMuted
+            Self.logger.debug("Reusing existing player.")
+            if loopObserver == nil, let currentItem = player?.currentItem {
+                 addLoopObserver(for: currentItem)
+                 Self.logger.debug("Re-added missing loop observer.")
+            }
         }
 
-        // 3. Autoplay starten
-        player?.play()
-        print("Player started (Autoplay)")
+        guard let player = player else {
+             Self.logger.error("Player instance is nil after setup attempt.")
+             return
+        }
+
+        player.isMuted = settings.isVideoMuted
+        Self.logger.info("Player initial mute state set to: \(self.settings.isVideoMuted)")
+
+        if muteObserver == nil {
+            self.muteObserver = player.observe(\.isMuted, options: [.new]) { observedPlayer, change in
+                 guard let newMutedState = change.newValue else { return }
+                 if self.settings.isVideoMuted != newMutedState {
+                     Self.logger.info("User changed mute via player controls. New state: \(newMutedState)")
+                     DispatchQueue.main.async {
+                         self.settings.isVideoMuted = newMutedState
+                     }
+                 }
+            }
+             Self.logger.debug("Added mute KVO observer.")
+        }
+
+        if needsNewPlayer || loopObserver == nil, let currentItem = player.currentItem {
+            addLoopObserver(for: currentItem)
+        }
+
+        player.play()
+         Self.logger.debug("Player started (Autoplay)")
     }
 
-    // Funktion zum Aufräumen (Player stoppen, Observer entfernen)
-    private func cleanupPlayerAndObserver() {
-        print("Cleaning up player and observer.")
-        player?.pause() // Video anhalten
-        muteObserver?.invalidate() // KVO-Beobachtung beenden
+    // Funktion zum Hinzufügen des Loop Observers
+    private func addLoopObserver(for item: AVPlayerItem) {
+        if let observer = self.loopObserver {
+            NotificationCenter.default.removeObserver(observer)
+            Self.logger.debug("Removed existing loop observer before adding new one.")
+        }
+
+        self.loopObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak player] notification in
+             Self.logger.debug("Video did play to end time. Seeking to zero.")
+            player?.seek(to: .zero)
+            player?.play()
+        }
+         Self.logger.debug("Added loop observer.")
+    }
+
+    // Funktion zum Aufräumen
+    private func cleanupPlayerAndObservers(keepPlayerInstance: Bool = false) {
+        Self.logger.debug("Cleaning up player and observers. Keep instance: \(keepPlayerInstance)")
+        player?.pause()
+
+        muteObserver?.invalidate()
         muteObserver = nil
-        // Optional: Player auf nil setzen, um Ressourcen freizugeben, wenn gewünscht
-        // player = nil
+        if let observer = loopObserver {
+            NotificationCenter.default.removeObserver(observer)
+            loopObserver = nil
+        }
+
+        if !keepPlayerInstance {
+            player = nil
+             Self.logger.debug("Player instance released.")
+        }
     }
 
-
-    // Hilfsfunktion für das Seitenverhältnis (unverändert)
+    // Hilfsfunktion für das Seitenverhältnis
     private func guessAspectRatio() -> CGFloat? {
         if item.width > 0 && item.height > 0 {
             return CGFloat(item.width) / CGFloat(item.height)
         }
         return 16.0 / 9.0 // Fallback
     }
-}
 
-// MARK: - Preview
+} // Ende struct DetailViewContent
 
+// --- KEINE extension DetailViewContent { ... } HIER MEHR ---
+
+// MARK: - Preview für DetailViewContent (VOLLSTÄNDIG)
 #Preview {
-     let sampleVideoItem = Item(id: 2, image: "test.mp4", thumb: "tv.jpg", width: 1920, height: 1080, up: 20, down: 2)
-     let sampleImageItem = Item(id: 1, image: "test.jpg", thumb: "t.jpg", width: 800, height: 1200, up: 10, down: 1)
+     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1)
+     let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 1, up: 10, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 1200, audio: false, source: "http://example.com", flags: 2, user: "UserB", mark: 2)
 
-    return NavigationStack { // Für eine realistischere Vorschauumgebung
+    return NavigationStack {
         DetailViewContent(item: sampleVideoItem)
-             // WICHTIG FÜR PREVIEW: Füge hier ein EnvironmentObject hinzu!
-            .environmentObject(AppSettings()) // Erstellt eine temporäre Instanz für die Vorschau
+            .environmentObject(AppSettings())
     }
 }
