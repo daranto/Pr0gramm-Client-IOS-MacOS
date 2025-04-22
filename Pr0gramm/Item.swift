@@ -1,12 +1,12 @@
 // Item.swift
 import Foundation
 
-struct ApiResponse: Codable {
-    let items: [Item]
-    // KEIN 'older' oder 'nextCursor' hier, da nicht dokumentiert für /items/get Response
-    let atEnd: Bool? // Beibehalten, falls nützlich
-    // let error: String?
-}
+// --- ApiResponse HIER ENTFERNT ---
+// struct ApiResponse: Codable {
+//     let items: [Item]
+//     let atEnd: Bool?
+//     // let error: String?
+// }
 
 // Item struct bleibt wie zuletzt (mit created und flags)
 struct Item: Codable, Identifiable, Hashable {

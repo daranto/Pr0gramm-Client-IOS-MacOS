@@ -5,12 +5,11 @@ import AVKit
 import Combine
 import os
 
-// --- DetailImageView (unverändert) ---
+// --- DetailImageView (Annahme: Existiert und ist korrekt) ---
 struct DetailImageView: View {
     let item: Item
     let logger: Logger
     let cleanupAction: () -> Void
-
     var body: some View {
         AsyncImage(url: item.imageUrl) { phase in
             switch phase {
@@ -23,132 +22,135 @@ struct DetailImageView: View {
                 ProgressView()
             }
         }
-        .onAppear {
-            logger.trace("Displaying image for item \(item.id). Ensuring player cleanup.")
-            logger.debug("DetailImageView onAppear for item \(item.id). Performing cleanup.")
-            cleanupAction()
-        }
+        .scaledToFit()
+        .onAppear { logger.trace("Displaying image for item \(item.id). Ensuring player cleanup."); logger.debug("DetailImageView onAppear for item \(item.id). Performing cleanup."); cleanupAction() }
     }
 }
 
-// --- FlowLayout (muss im Projekt vorhanden sein) ---
+// --- FlowLayout (Annahme: Existiert als eigene Struct) ---
 // struct FlowLayout: Layout { /* ... */ }
+
+// --- CommentsSection (Annahme: Existiert als eigene Struct) ---
+// struct CommentsSection: View { /* ... */ }
+
 
 struct DetailViewContent: View {
     let item: Item
+    // Erhält Handler von PagedDetailView
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
     @EnvironmentObject var settings: AppSettings
     @State private var player: AVPlayer? = nil
     @State private var muteObserver: NSKeyValueObservation? = nil
     @State private var loopObserver: NSObjectProtocol? = nil
 
-    // --- NEU: Empfange Tags und Status von außen ---
     let tags: [ItemTag]
-    let tagLoadingStatus: TagLoadingStatus // Verwende dasselbe Enum wie PagedDetailView
+    let comments: [ItemComment]
+    let infoLoadingStatus: InfoLoadingStatus // Verwendet globales Enum
 
-    // --- Entfernt: Eigene State-Variablen und API-Service ---
-    // @State private var isLoadingTags = false // Nicht mehr benötigt
-    // @State private var tagErrorMessage: String? = nil // Nicht mehr benötigt
-    // private let apiService = APIService() // Nicht mehr benötigt
-
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
 
-    var body: some View {
-        // --- NEU: Gesamten Inhalt in ScrollView packen ---
-        ScrollView {
-            VStack(spacing: 0) { // Bestehender VStack bleibt
+    // MARK: - Computed View Properties
 
-                // --- Media View Container ---
-                Group {
-                    if item.isVideo {
-                        CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler)
-                            .onAppear {
-                                Self.logger.debug("CustomVideoPlayerRepresentable container appeared for item \(item.id).")
-                            }
-                    } else {
-                        // AnyView kann wahrscheinlich entfernt werden, aber sicherheitshalber drinlassen
-                        AnyView(
-                            DetailImageView(item: item, logger: Self.logger, cleanupAction: { cleanupPlayerAndObservers() })
-                        )
-                    }
-                }
-                .aspectRatio(guessAspectRatio(), contentMode: .fit)
-                .frame(maxWidth: .infinity) // Max Breite ok, keine feste Höhe
-                .clipped()
-                .onAppear {
-                     if item.isVideo, let url = item.imageUrl {
-                         Self.logger.debug("Group onAppear for item \(item.id). Setting up player if video.")
-                         setupPlayer(url: url)
-                     } else if !item.isVideo {
-                         Self.logger.debug("Group onAppear for item \(item.id). Ensuring cleanup if image.")
-                         cleanupPlayerAndObservers()
-                     }
-                 }
-
-                // --- Infos & Tags ---
-                VStack(alignment: .leading, spacing: 8) { // Außen-VStack für Padding etc.
-                    HStack { // Votes
-                        Text("⬆️ \(item.up)")
-                        Text("⬇️ \(item.down)")
-                        Spacer()
-                    }
-                    .font(.caption)
-                    .padding(.bottom, 4) // Etwas Abstand zu den Tags
-
-                    // --- Geändert: Tag-Anzeige verwendet übergebenen Status/Tags ---
-                    switch tagLoadingStatus {
-                    case .idle, .loading: // Zeige Ladeanzeige bei idle oder loading
-                        ProgressView()
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 10) // Mehr Platz für Ladeanzeige
-                    case .error(let errorMsg):
-                        Text("Fehler beim Laden der Tags: \(errorMsg)")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .frame(maxWidth: .infinity, alignment: .center) // Fehler zentriert
-                    case .loaded:
-                        if !tags.isEmpty {
-                            // --- Verwende FlowLayout ---
-                            FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
-                                ForEach(tags) { tag in
-                                    Text(tag.tag)
-                                        .font(.caption)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(Color.gray.opacity(0.3))
-                                        .foregroundColor(.primary)
-                                        .cornerRadius(5)
-                                        .lineLimit(1) // Sicherstellen, dass Tags nicht intern umbrechen
-                                }
-                            }
-                            // --- Ende FlowLayout ---
-                        } else {
-                             // Optional: Platzhalter oder Text für keine Tags
-                             Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .center)
-                        }
-                    }
-                    // --- Ende Tag-Anzeige ---
-
-                }
-                .padding(.vertical, 8)
-                .padding(.horizontal) // Innenabstand für den Info/Tag-Bereich
-                .frame(maxWidth: .infinity, alignment: .leading) // Nimmt volle Breite
-
-            } // Ende äußerer VStack
-        } // --- Ende ScrollView ---
-
-        .frame(maxWidth: .infinity, maxHeight: .infinity) // Behält max. Größe
+    @ViewBuilder
+    private var mediaContent: some View {
+        Group {
+            if item.isVideo {
+                // --- Übergibt Handler an Representable ---
+                // Annahme: CustomVideoPlayerRepresentable existiert
+                CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler)
+                    .scaledToFit()
+                    .onAppear { Self.logger.debug("CustomVideoPlayerRepresentable container appeared for item \(item.id).") }
+            } else {
+                DetailImageView(item: item, logger: Self.logger, cleanupAction: { cleanupPlayerAndObservers() })
+            }
+        }
+        .frame(maxWidth: .infinity)
         .onAppear {
-             Self.logger.debug("DetailViewContent for item \(item.id) appearing.")
-             // Ladelogik wurde nach PagedDetailView verschoben
-        }
-        .onDisappear {
-            Self.logger.debug("DetailViewContent for item \(item.id) disappearing.")
-            cleanupPlayerAndObservers()
-        }
+             if item.isVideo, let url = item.imageUrl { setupPlayer(url: url) }
+             else if !item.isVideo { cleanupPlayerAndObservers() }
+         }
     }
 
-    // MARK: - Player Logic (unverändert)
+    @ViewBuilder
+    private var infoAndTagsContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+             HStack { Text("⬆️ \(item.up)"); Text("⬇️ \(item.down)"); Spacer() }
+                 .font(.caption)
+                 .padding(.bottom, 4)
+
+             if infoLoadingStatus == .loaded {
+                 if !tags.isEmpty {
+                     // Annahme: FlowLayout existiert
+                     FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+                         ForEach(tags) { tag in
+                             Text(tag.tag)
+                                 .font(.caption)
+                                 .padding(.horizontal, 8).padding(.vertical, 4)
+                                 .background(Color.gray.opacity(0.3))
+                                 .foregroundColor(.primary)
+                                 .cornerRadius(5)
+                                 .lineLimit(1)
+                         }
+                     }
+                 } else {
+                      Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .center)
+                 }
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var commentsContent: some View {
+        // Annahme: CommentsSection existiert
+        CommentsSection(comments: comments, status: infoLoadingStatus)
+            .padding(.top, horizontalSizeClass == .compact ? 8 : 0)
+    }
+
+    // MARK: - Body
+
+    var body: some View {
+        Group {
+            if horizontalSizeClass == .regular {
+                // --- Breites Layout (VStack innen) ---
+                HStack(alignment: .top, spacing: 0) {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                             mediaContent
+                             infoAndTagsContent
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    Divider()
+
+                    ScrollView {
+                        commentsContent
+                            .padding(.top)
+                    }
+                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 400, maxHeight: .infinity)
+                    .background(Color(.secondarySystemBackground))
+                }
+            } else {
+                // --- Schmales Layout ---
+                ScrollView {
+                    VStack(spacing: 0) {
+                        mediaContent
+                        infoAndTagsContent
+                        commentsContent
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
+        .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing."); cleanupPlayerAndObservers() }
+    }
+
+    // MARK: - Player Logic
     private func setupPlayer(url: URL) {
         Self.logger.debug("SetupPlayer called for item \(item.id), URL: \(url.absoluteString)")
         Self.logger.debug("Cleaning up existing player/observers before creating new one...")
@@ -220,27 +222,49 @@ struct DetailViewContent: View {
 
 } // Ende struct DetailViewContent
 
-// --- Preview (unverändert) ---
-#Preview {
+
+// MARK: - Preview
+#Preview("Compact") {
      let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1)
-     let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 1, up: 10, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 1200, audio: false, source: "http://example.com", flags: 2, user: "UserB", mark: 2)
-
-     let previewHandler = KeyboardActionHandler()
-     previewHandler.selectNextAction = { print("Preview: Select Next") }
-     previewHandler.selectPreviousAction = { print("Preview: Select Previous") }
-     let previewTags = [
-         ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"),
-         ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"),
-         ItemTag(id: 3, confidence: 0.5, tag: "Noch ein Tag")
-     ]
-
+     let previewHandler = KeyboardActionHandler() // Wird für die Preview benötigt
+     let previewTags = [ ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag") ]
+     let previewComments = [
+         ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1),
+         ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7)
+    ]
     return NavigationStack {
         DetailViewContent(
             item: sampleVideoItem,
-            keyboardActionHandler: previewHandler,
+            keyboardActionHandler: previewHandler, // Übergeben für Preview
             tags: previewTags,
-            tagLoadingStatus: .loaded
+            comments: previewComments,
+            infoLoadingStatus: .loaded
         )
-            .environmentObject(AppSettings())
+        .environment(\.horizontalSizeClass, .compact)
+        .environmentObject(AppSettings())
     }
+}
+
+#Preview("Regular") {
+    let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1)
+    let previewHandler = KeyboardActionHandler() // Wird für die Preview benötigt
+    let previewTags = [ ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")]
+    let previewComments = [
+         ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1),
+         ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7),
+         ItemComment(id: 3, parent: 0, content: "Zweiter Top-Level Kommentar mit etwas längerem Text, um zu sehen, wie er umbricht.", created: Int(Date().timeIntervalSince1970) - 60, up: 10, down: 3, confidence: 0.9, name: "UserC", mark: 3),
+         ItemComment(id: 4, parent: 3, content: "Antwort auf zweiten.", created: Int(Date().timeIntervalSince1970) - 30, up: 1, down: 0, confidence: 0.7, name: "UserA", mark: 1)
+    ]
+    return NavigationStack {
+        DetailViewContent(
+            item: sampleVideoItem,
+            keyboardActionHandler: previewHandler, // Übergeben für Preview
+            tags: previewTags,
+            comments: previewComments,
+            infoLoadingStatus: .loaded
+        )
+        .environment(\.horizontalSizeClass, .regular)
+        .environmentObject(AppSettings())
+    }
+    .previewDevice("iPad (10th generation)")
 }

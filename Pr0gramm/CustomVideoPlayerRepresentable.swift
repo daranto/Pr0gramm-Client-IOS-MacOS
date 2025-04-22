@@ -4,13 +4,13 @@ import AVKit
 
 struct CustomVideoPlayerRepresentable: UIViewControllerRepresentable {
     var player: AVPlayer?
-    // --- NEU: Handler entgegennehmen ---
+    // --- Benötigt: Handler entgegennehmen ---
     @ObservedObject var handler: KeyboardActionHandler
 
     func makeUIViewController(context: Context) -> CustomAVPlayerViewController {
         let controller = CustomAVPlayerViewController()
         controller.player = player
-        // --- NEU: Handler übergeben ---
+        // --- Handler übergeben ---
         controller.actionHandler = handler
         print("CustomVideoPlayerRepresentable: makeUIViewController")
         return controller
@@ -21,7 +21,7 @@ struct CustomVideoPlayerRepresentable: UIViewControllerRepresentable {
              print("CustomVideoPlayerRepresentable: Updating player.")
             uiViewController.player = player
         }
-        // --- NEU: Handler aktuell halten (wichtig!) ---
+        // --- Handler aktuell halten ---
         if uiViewController.actionHandler !== handler {
              print("CustomVideoPlayerRepresentable: Updating handler.")
              uiViewController.actionHandler = handler

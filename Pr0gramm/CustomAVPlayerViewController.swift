@@ -4,8 +4,10 @@ import UIKit
 
 class CustomAVPlayerViewController: AVPlayerViewController {
 
+    // --- Benötigt: Referenz zum Action Handler ---
     var actionHandler: KeyboardActionHandler?
 
+    // keyCommands override bleibt (entfernt Standard-Aktionen)
     override var keyCommands: [UIKeyCommand]? {
         let standardCommands = super.keyCommands ?? []
         let nonArrowCommands = standardCommands.filter { command in
@@ -20,36 +22,38 @@ class CustomAVPlayerViewController: AVPlayerViewController {
         return nonArrowCommands
     }
 
+    // --- pressesBegan behandelt Pfeiltasten direkt über Handler ---
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        var didHandleEvent = false
+        var didHandleEvent = false // Prüfen, ob WIR das Event behandelt haben
 
         for press in presses {
             guard let key = press.key else { continue }
 
-            print("CustomAVPlayerViewController: Key Pressed - HIDUsage: \(key.keyCode.rawValue), Modifiers: \(key.modifierFlags)")
+            print("CustomAVPlayerViewController: Key Pressed - HIDUsage: \(key.keyCode.rawValue), Modifiers: \(key.modifierFlags)") // Debugging
 
-            // --- Entfernt: Die Prüfung auf leere Modifier ---
-            // if key.modifierFlags.isEmpty {
-
-                // Switch direkt ausführen
+            // Prüfe auf Pfeiltasten ohne Modifier (oder ignoriere Modifier, falls nötig)
+             // if key.modifierFlags.isEmpty { // Diese Prüfung bei Bedarf wieder entfernen
                 switch key.keyCode {
                 case .keyboardLeftArrow:
                     print("CustomAVPlayerViewController: Left arrow detected, calling previous action.")
+                    // --- Aktion direkt im Handler aufrufen ---
                     actionHandler?.selectPreviousAction?()
-                    didHandleEvent = true
+                    didHandleEvent = true // Wir haben es behandelt
 
                 case .keyboardRightArrow:
                     print("CustomAVPlayerViewController: Right arrow detected, calling next action.")
+                    // --- Aktion direkt im Handler aufrufen ---
                     actionHandler?.selectNextAction?()
-                    didHandleEvent = true
+                    didHandleEvent = true // Wir haben es behandelt
 
                 default:
-                    break // Andere Tasten ignorieren
+                    // Andere Tasten werden ignoriert (von unserer Logik)
+                    break
                 }
-            // } // Ende des entfernten if-Blocks
+            // } // Ende if modifierFlags.isEmpty
 
             // Wenn wir eine Pfeiltaste behandelt haben, brauchen wir nicht weiter im Set zu suchen
-            if didHandleEvent { break }
+             if didHandleEvent { break }
         }
 
         // Rufe super.pressesBegan NUR auf, wenn WIR das Event NICHT behandelt haben.
@@ -58,8 +62,10 @@ class CustomAVPlayerViewController: AVPlayerViewController {
             super.pressesBegan(presses, with: event)
         } else {
              print("CustomAVPlayerViewController: Arrow key handled by us, NOT calling super.pressesBegan.")
+             // Event wird hier gestoppt.
         }
     }
+     // --- Ende pressesBegan override ---
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
