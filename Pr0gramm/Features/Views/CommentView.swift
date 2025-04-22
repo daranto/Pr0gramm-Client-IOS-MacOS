@@ -2,27 +2,26 @@
 import SwiftUI
 
 struct CommentView: View {
-    // Verwendet jetzt das globale ItemComment (sollte gefunden werden)
-    let comment: ItemComment
+    let comment: ItemComment // Nimmt weiterhin ItemComment entgegen (hat mark: Int)
+
+    // Abgeleitetes Enum für die Anzeige
+    private var markEnum: Mark {
+        // Fallback auf .schwuchtel (was rawValue 0 hat)
+        return Mark(rawValue: comment.mark) ?? .schwuchtel
+    }
 
     // Konvertiert UserMark in eine Farbe
     private var userMarkColor: Color {
-        // Diese Werte basieren auf den üblichen pr0gramm-Farben
-        switch comment.mark {
-        case 1: return .orange      // Schwuchtel
-        case 2: return .green       // Neuschwuchtel
-        case 3: return .blue        // Altschwuchtel
-        case 4: return .purple      // Admin
-        case 5: return .pink        // Gebannt
-        case 6: return .gray        // Pr0mium
-        case 7: return .yellow      // Mittelaltschwuchtel
-        case 8: return .white       // Uraltschwuchtel
-        case 9: return Color(red: 0.6, green: 0.8, blue: 1.0) // Legendenschwuchtel (hellblau)
-        case 10: return Color(red: 1.0, green: 0.8, blue: 0.4) // Wichtel (orange-gelb)
-        case 11: return Color(red: 0.4, green: 0.9, blue: 0.4) // Community Helfer (hellgrün)
-        case 12: return Color(red: 1.0, green: 0.6, blue: 0.6) // Moderator (hellrot)
-        default: return .secondary  // Standard/Unbekannt (Grau statt Weiß für besseren Kontrast oft)
-        }
+        return markEnum.displayColor // Verwendet Enum-Farbe
+    }
+
+    // Gibt den Namen für die Mark zurück
+    private var userMarkName: String {
+         // Spezialfall für API Mark 0
+         if comment.mark == 0 {
+             return "Standard"
+         }
+        return markEnum.displayName // Verwendet Enum-Namen
     }
 
     // Berechnet den Score
@@ -34,51 +33,53 @@ struct CommentView: View {
     private var relativeTime: String {
         let date = Date(timeIntervalSince1970: TimeInterval(comment.created))
         let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated // z.B. "5 min ago"
+        formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                // User Mark als kleiner Punkt
-                Circle()
+                Circle() // User Mark Punkt
                     .fill(userMarkColor)
                     .frame(width: 8, height: 8)
                 Text(comment.name)
                     .font(.caption.weight(.semibold))
                     .foregroundColor(userMarkColor) // Name in Mark-Farbe
-                Text("•") // Trenner
-                    .foregroundColor(.secondary)
+                Text("•").foregroundColor(.secondary)
                 Text("\(score)") // Score
                     .font(.caption)
-                    // Farbe basierend auf Score
                     .foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
-                Text("•") // Trenner
-                    .foregroundColor(.secondary)
+                Text("•").foregroundColor(.secondary)
                 Text(relativeTime) // Zeit
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Spacer() // Schiebt alles nach links
+                Spacer()
             }
-            // Kommentartext
-            Text(comment.content)
+            Text(comment.content) // Kommentartext
                 .font(.footnote)
                 .foregroundColor(.primary)
-                // Hier wäre Platz für Markdown-Rendering
         }
-        .padding(.vertical, 6) // Vertikaler Abstand für Listendarstellung
+        .padding(.vertical, 6)
     }
 }
 
 // Preview für CommentView
 #Preview {
-    // Beispiel-Kommentar mit globalem Struct
-    let sampleComment = ItemComment(id: 1, parent: 0, content: "Das ist ein Beispielkommentar.\nEr kann auch **Markdown** enthalten (theoretisch).", created: Int(Date().timeIntervalSince1970) - 120, up: 15, down: 2, confidence: 0.9, name: "TestUser", mark: 6) // Pr0mium
+    // Erstellt Beispielkommentar mit Int für mark
+    let sampleComment = ItemComment(id: 1, parent: 0, content: "Das ist ein Beispielkommentar.", created: Int(Date().timeIntervalSince1970) - 120, up: 15, down: 2, confidence: 0.9, name: "TestUser", mark: 1) // mark: 1 = Neuschwuchtel
 
-    // **** KORREKTUR: 'return' entfernt ****
     CommentView(comment: sampleComment)
         .padding()
-        .background(Color(.systemBackground)) // Systemhintergrund verwenden
-        .previewLayout(.sizeThatFits) // Passt Größe an Inhalt an
+        .background(Color(.systemBackground))
+        .previewLayout(.sizeThatFits)
+}
+
+#Preview("Mark 0") {
+    let sampleCommentMark0 = ItemComment(id: 2, parent: 0, content: "Kommentar von Standard-User.", created: Int(Date().timeIntervalSince1970) - 60, up: 5, down: 0, confidence: 0.95, name: "StandardUser", mark: 0) // mark: 0
+
+    CommentView(comment: sampleCommentMark0)
+        .padding()
+        .background(Color(.systemBackground))
+        .previewLayout(.sizeThatFits)
 }
