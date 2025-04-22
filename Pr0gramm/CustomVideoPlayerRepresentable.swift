@@ -22,6 +22,8 @@ struct CustomVideoPlayerRepresentable: UIViewControllerRepresentable {
             uiViewController.player = player
         }
         // --- Handler aktuell halten ---
+        // Überprüfe, ob der übergebene Handler sich geändert hat (sollte selten passieren bei @ObservedObject von außen)
+        // und weise ihn ggf. neu zu.
         if uiViewController.actionHandler !== handler {
              print("CustomVideoPlayerRepresentable: Updating handler.")
              uiViewController.actionHandler = handler

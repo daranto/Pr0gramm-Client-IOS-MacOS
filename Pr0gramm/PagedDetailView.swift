@@ -5,14 +5,52 @@ import os
 
 // InfoLoadingStatus Enum muss vorhanden sein (z.B. in CommentsSection.swift oder global)
 
+// --- Eigene View für den Inhalt eines Tabs ---
+struct PagedDetailTabViewItem: View {
+    // Benötigte Daten für DIESES Item
+    let item: Item
+    @ObservedObject var keyboardActionHandler: KeyboardActionHandler // Wird weitergegeben
+    let tags: [ItemTag]
+    let comments: [ItemComment]
+    let infoLoadingStatus: InfoLoadingStatus
+
+    // Callbacks für Aktionen
+    let loadInfoAction: (Item) async -> Void
+    let preloadInfoAction: (Item) async -> Void
+
+    // Kontext für Preloading
+    let allItems: [Item]
+    let currentIndex: Int // Der Index dieses Items
+
+    var body: some View {
+        // DetailViewContent wird hier instanziiert und erhält den Handler
+        DetailViewContent(
+            item: item,
+            keyboardActionHandler: keyboardActionHandler, // Korrekt: Handler wird übergeben
+            tags: tags,
+            comments: comments,
+            infoLoadingStatus: infoLoadingStatus
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            // Lade Infos für dieses Item
+            Task { await loadInfoAction(item) }
+            // Preload für Nachbarn basierend auf currentIndex
+            if currentIndex + 1 < allItems.count { Task { await preloadInfoAction(allItems[currentIndex + 1]) } }
+            if currentIndex > 0 { Task { await preloadInfoAction(allItems[currentIndex - 1]) } }
+        }
+    }
+}
+// --- Ende PagedDetailTabViewItem ---
+
+
 struct PagedDetailView: View {
     let items: [Item] // Muss Identifiable sein
     @State private var selectedIndex: Int
     @Environment(\.dismiss) var dismiss
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
-    // Handler wird erstellt und weitergegeben
-    @StateObject private var keyboardActionHandler = KeyboardActionHandler()
+    @StateObject private var keyboardActionHandler = KeyboardActionHandler() // Handler für UIKit Bridge
 
     @State private var loadedInfos: [Int: ItemsInfoResponse] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
@@ -26,30 +64,24 @@ struct PagedDetailView: View {
 
     var body: some View {
         TabView(selection: $selectedIndex) {
-            ForEach(items) { currentItem in
-                // Berechne Status und Daten sicher
+            ForEach(items.indices, id: \.self) { index in
+                let currentItem = items[index]
                 let statusForItem = infoLoadingStatus[currentItem.id] ?? .idle
                 let tagsForItem = loadedInfos[currentItem.id]?.tags.sorted { $0.confidence > $1.confidence } ?? []
                 let commentsForItem = loadedInfos[currentItem.id]?.comments ?? []
 
-                DetailViewContent(
+                PagedDetailTabViewItem(
                     item: currentItem,
-                    // --- Handler wird an DetailViewContent übergeben ---
                     keyboardActionHandler: keyboardActionHandler,
                     tags: tagsForItem,
                     comments: commentsForItem,
-                    infoLoadingStatus: statusForItem
+                    infoLoadingStatus: statusForItem,
+                    loadInfoAction: loadInfoIfNeeded,
+                    preloadInfoAction: loadInfoIfNeeded,
+                    allItems: items,
+                    currentIndex: index
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .tag(items.firstIndex(where: { $0.id == currentItem.id }) ?? -1) // Finde Index für Tagging
-                .onAppear {
-                    Task { await loadInfoIfNeeded(for: currentItem) }
-                    // Preload Logik
-                    if let currentIndex = items.firstIndex(where: { $0.id == currentItem.id }) {
-                        if currentIndex + 1 < items.count { Task { await loadInfoIfNeeded(for: items[currentIndex + 1]) } }
-                        if currentIndex > 0 { Task { await loadInfoIfNeeded(for: items[currentIndex - 1]) } }
-                    }
-                }
+                .tag(index)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
@@ -58,17 +90,12 @@ struct PagedDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .onChange(of: selectedIndex) { oldIndex, newIndex in
-             // Stelle sicher, dass newIndex gültig ist
-             guard newIndex >= 0 && newIndex < items.count else {
-                 Self.logger.warning("onChange: Invalid newIndex \(newIndex)")
-                 return
-             }
+             guard newIndex >= 0 && newIndex < items.count else { return }
              Self.logger.info("Selected index changed from \(oldIndex) to \(newIndex)")
              Task { await loadInfoIfNeeded(for: items[newIndex]) }
         }
         .onAppear {
             Self.logger.info("PagedDetailView appeared. Setting up keyboard actions.")
-            // Aktionen für den Handler setzen
             keyboardActionHandler.selectNextAction = self.selectNext
             keyboardActionHandler.selectPreviousAction = self.selectPrevious
             if selectedIndex >= 0 && selectedIndex < items.count {
@@ -80,7 +107,8 @@ struct PagedDetailView: View {
              keyboardActionHandler.selectNextAction = nil
              keyboardActionHandler.selectPreviousAction = nil
         }
-        // --- ENTFERNT: Kein .background oder .overlay mit KeyCommandView ---
+        // Annahme: KeyCommandView und KeyboardActionHandler existieren
+        .background(KeyCommandView(handler: keyboardActionHandler))
     }
 
     // --- loadInfoIfNeeded ---
@@ -105,31 +133,10 @@ struct PagedDetailView: View {
     }
 
     // --- Helper für Navigation ---
-    private func selectNext() {
-        if canSelectNext {
-            Self.logger.info("Executing selectNext action (triggered by Handler).")
-            selectedIndex += 1
-        } else {
-             Self.logger.info("Cannot selectNext (already at end).")
-        }
-    }
-
-    private var canSelectNext: Bool {
-        return selectedIndex < items.count - 1
-    }
-
-    private func selectPrevious() {
-        if canSelectPrevious {
-             Self.logger.info("Executing selectPrevious action (triggered by Handler).")
-            selectedIndex -= 1
-        } else {
-             Self.logger.info("Cannot selectPrevious (already at start).")
-        }
-    }
-
-    private var canSelectPrevious: Bool {
-        return selectedIndex > 0
-    }
+    private func selectNext() { if canSelectNext { selectedIndex += 1 } }
+    private var canSelectNext: Bool { selectedIndex < items.count - 1 }
+    private func selectPrevious() { if canSelectPrevious { selectedIndex -= 1 } }
+    private var canSelectPrevious: Bool { selectedIndex > 0 }
 
     // --- currentItemTitle ---
     private var currentItemTitle: String {
@@ -157,7 +164,8 @@ struct PagedDetailView: View {
         Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970 - 100), image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserB", mark: 2),
         Item(id: 3, promoted: nil, userId: 2, down: 3, up: 30, created: Int(Date().timeIntervalSince1970), image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 500, height: 500, audio: false, source: nil, flags: 2, user: "UserC", mark: 0)
     ]
-    return NavigationStack {
+    // --- Korrigiert: Kein return ---
+    NavigationStack {
         PagedDetailView(items: sampleItems, selectedIndex: 1)
             .environmentObject(AppSettings())
     }

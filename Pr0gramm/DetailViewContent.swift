@@ -5,7 +5,7 @@ import AVKit
 import Combine
 import os
 
-// --- DetailImageView (Annahme: Existiert und ist korrekt) ---
+// --- DetailImageView (Korrigiert: Nur .resizable()) ---
 struct DetailImageView: View {
     let item: Item
     let logger: Logger
@@ -14,7 +14,7 @@ struct DetailImageView: View {
         AsyncImage(url: item.imageUrl) { phase in
             switch phase {
             case .success(let image):
-                image.resizable().scaledToFit()
+                image.resizable() // Nur resizable, Skalierung kommt von außen
             case .failure(let error):
                 let _ = logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)")
                 Text("Bild konnte nicht geladen werden").foregroundColor(.red)
@@ -22,21 +22,19 @@ struct DetailImageView: View {
                 ProgressView()
             }
         }
-        .scaledToFit()
         .onAppear { logger.trace("Displaying image for item \(item.id). Ensuring player cleanup."); logger.debug("DetailImageView onAppear for item \(item.id). Performing cleanup."); cleanupAction() }
     }
 }
 
-// --- FlowLayout (Annahme: Existiert als eigene Struct) ---
+// --- FlowLayout (Annahme: Existiert) ---
 // struct FlowLayout: Layout { /* ... */ }
 
-// --- CommentsSection (Annahme: Existiert als eigene Struct) ---
+// --- CommentsSection (Annahme: Existiert) ---
 // struct CommentsSection: View { /* ... */ }
 
 
 struct DetailViewContent: View {
     let item: Item
-    // Erhält Handler von PagedDetailView
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
     @EnvironmentObject var settings: AppSettings
     @State private var player: AVPlayer? = nil
@@ -45,7 +43,7 @@ struct DetailViewContent: View {
 
     let tags: [ItemTag]
     let comments: [ItemComment]
-    let infoLoadingStatus: InfoLoadingStatus // Verwendet globales Enum
+    let infoLoadingStatus: InfoLoadingStatus
 
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
@@ -54,18 +52,20 @@ struct DetailViewContent: View {
 
     @ViewBuilder
     private var mediaContent: some View {
-        Group {
+        Group { // Container für Video oder Bild
             if item.isVideo {
-                // --- Übergibt Handler an Representable ---
-                // Annahme: CustomVideoPlayerRepresentable existiert
+                // Annahme: CustomVideoPlayerRepresentable füllt seinen Bereich
                 CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler)
-                    .scaledToFit()
-                    .onAppear { Self.logger.debug("CustomVideoPlayerRepresentable container appeared for item \(item.id).") }
             } else {
                 DetailImageView(item: item, logger: Self.logger, cleanupAction: { cleanupPlayerAndObservers() })
             }
         }
-        .frame(maxWidth: .infinity)
+        // --- WICHTIG: .scaledToFit() HIER anwenden ---
+        // Passt den Inhalt (Bild oder Video) an den verfügbaren Platz an,
+        // behält das Seitenverhältnis bei.
+        .scaledToFit()
+        // Erlaube maximale Ausdehnung, .scaledToFit() begrenzt es dann.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
              if item.isVideo, let url = item.imageUrl { setupPlayer(url: url) }
              else if !item.isVideo { cleanupPlayerAndObservers() }
@@ -81,7 +81,6 @@ struct DetailViewContent: View {
 
              if infoLoadingStatus == .loaded {
                  if !tags.isEmpty {
-                     // Annahme: FlowLayout existiert
                      FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
                          ForEach(tags) { tag in
                              Text(tag.tag)
@@ -96,6 +95,10 @@ struct DetailViewContent: View {
                  } else {
                       Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .center)
                  }
+            } else if infoLoadingStatus == .loading {
+                ProgressView().frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 5)
+            } else if case .error(let msg) = infoLoadingStatus {
+                Text("Fehler Tags: \(msg)").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .center)
             }
         }
         .padding(.vertical, 8)
@@ -105,9 +108,8 @@ struct DetailViewContent: View {
 
     @ViewBuilder
     private var commentsContent: some View {
-        // Annahme: CommentsSection existiert
         CommentsSection(comments: comments, status: infoLoadingStatus)
-            .padding(.top, horizontalSizeClass == .compact ? 8 : 0)
+            .padding(.top)
     }
 
     // MARK: - Body
@@ -115,30 +117,30 @@ struct DetailViewContent: View {
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
-                // --- Breites Layout (VStack innen) ---
+                // --- Breites Layout ---
                 HStack(alignment: .top, spacing: 0) {
-                    ScrollView {
-                        VStack(spacing: 0) {
-                             mediaContent
-                             infoAndTagsContent
-                        }
+                    // Linke Spalte: VStack enthält Media + Infos
+                    VStack(spacing: 0) {
+                         mediaContent // Enthält jetzt .scaledToFit()
+                         infoAndTagsContent
+                         Spacer() // Drückt Inhalt nach oben, falls Platz
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Flexibel
 
                     Divider()
 
+                    // Rechte Spalte: Kommentare
                     ScrollView {
                         commentsContent
-                            .padding(.top)
                     }
-                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 400, maxHeight: .infinity)
+                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 400, maxHeight: .infinity) // Flexibel
                     .background(Color(.secondarySystemBackground))
                 }
             } else {
                 // --- Schmales Layout ---
                 ScrollView {
                     VStack(spacing: 0) {
-                        mediaContent
+                        mediaContent // Enthält jetzt .scaledToFit()
                         infoAndTagsContent
                         commentsContent
                     }
@@ -215,6 +217,7 @@ struct DetailViewContent: View {
         }
     }
 
+    // guessAspectRatio wird nicht mehr direkt im Body verwendet, aber intern gebraucht
     private func guessAspectRatio() -> CGFloat? {
         if item.width > 0 && item.height > 0 { return CGFloat(item.width) / CGFloat(item.height) }
         return 16.0 / 9.0
@@ -226,16 +229,16 @@ struct DetailViewContent: View {
 // MARK: - Preview
 #Preview("Compact") {
      let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1)
-     let previewHandler = KeyboardActionHandler() // Wird für die Preview benötigt
+     let previewHandler = KeyboardActionHandler()
      let previewTags = [ ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag") ]
      let previewComments = [
          ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1),
          ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7)
     ]
-    return NavigationStack {
+    NavigationStack {
         DetailViewContent(
             item: sampleVideoItem,
-            keyboardActionHandler: previewHandler, // Übergeben für Preview
+            keyboardActionHandler: previewHandler,
             tags: previewTags,
             comments: previewComments,
             infoLoadingStatus: .loaded
@@ -247,7 +250,7 @@ struct DetailViewContent: View {
 
 #Preview("Regular") {
     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1)
-    let previewHandler = KeyboardActionHandler() // Wird für die Preview benötigt
+    let previewHandler = KeyboardActionHandler()
     let previewTags = [ ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")]
     let previewComments = [
          ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1),
@@ -255,10 +258,10 @@ struct DetailViewContent: View {
          ItemComment(id: 3, parent: 0, content: "Zweiter Top-Level Kommentar mit etwas längerem Text, um zu sehen, wie er umbricht.", created: Int(Date().timeIntervalSince1970) - 60, up: 10, down: 3, confidence: 0.9, name: "UserC", mark: 3),
          ItemComment(id: 4, parent: 3, content: "Antwort auf zweiten.", created: Int(Date().timeIntervalSince1970) - 30, up: 1, down: 0, confidence: 0.7, name: "UserA", mark: 1)
     ]
-    return NavigationStack {
+    NavigationStack {
         DetailViewContent(
             item: sampleVideoItem,
-            keyboardActionHandler: previewHandler, // Übergeben für Preview
+            keyboardActionHandler: previewHandler,
             tags: previewTags,
             comments: previewComments,
             infoLoadingStatus: .loaded
