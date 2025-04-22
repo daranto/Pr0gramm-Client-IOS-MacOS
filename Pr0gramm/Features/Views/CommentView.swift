@@ -2,6 +2,7 @@
 import SwiftUI
 
 struct CommentView: View {
+    // Verwendet jetzt das globale ItemComment (sollte gefunden werden)
     let comment: ItemComment
 
     // Konvertiert UserMark in eine Farbe
@@ -20,7 +21,7 @@ struct CommentView: View {
         case 10: return Color(red: 1.0, green: 0.8, blue: 0.4) // Wichtel (orange-gelb)
         case 11: return Color(red: 0.4, green: 0.9, blue: 0.4) // Community Helfer (hellgrün)
         case 12: return Color(red: 1.0, green: 0.6, blue: 0.6) // Moderator (hellrot)
-        default: return .gray       // Standard/Unbekannt
+        default: return .secondary  // Standard/Unbekannt (Grau statt Weiß für besseren Kontrast oft)
         }
     }
 
@@ -51,7 +52,8 @@ struct CommentView: View {
                     .foregroundColor(.secondary)
                 Text("\(score)") // Score
                     .font(.caption)
-                    .foregroundColor(score >= 0 ? .green : .red)
+                    // Farbe basierend auf Score
+                    .foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
                 Text("•") // Trenner
                     .foregroundColor(.secondary)
                 Text(relativeTime) // Zeit
@@ -59,20 +61,24 @@ struct CommentView: View {
                     .foregroundColor(.secondary)
                 Spacer() // Schiebt alles nach links
             }
-            // Kommentartext (Markdown wird hier noch nicht gerendert!)
+            // Kommentartext
             Text(comment.content)
                 .font(.footnote)
                 .foregroundColor(.primary)
-                // TODO: Markdown-Rendering hinzufügen (z.B. mit AttributedString oder einer Bibliothek)
+                // Hier wäre Platz für Markdown-Rendering
         }
-        .padding(.vertical, 6) // Vertikaler Abstand zwischen Kommentaren
+        .padding(.vertical, 6) // Vertikaler Abstand für Listendarstellung
     }
 }
 
 // Preview für CommentView
 #Preview {
+    // Beispiel-Kommentar mit globalem Struct
     let sampleComment = ItemComment(id: 1, parent: 0, content: "Das ist ein Beispielkommentar.\nEr kann auch **Markdown** enthalten (theoretisch).", created: Int(Date().timeIntervalSince1970) - 120, up: 15, down: 2, confidence: 0.9, name: "TestUser", mark: 6) // Pr0mium
-    return CommentView(comment: sampleComment)
+
+    // **** KORREKTUR: 'return' entfernt ****
+    CommentView(comment: sampleComment)
         .padding()
-        .background(Color.black) // Hintergrund für Kontrast
+        .background(Color(.systemBackground)) // Systemhintergrund verwenden
+        .previewLayout(.sizeThatFits) // Passt Größe an Inhalt an
 }
