@@ -39,7 +39,7 @@ struct ProfileView: View {
                 if let user = authService.currentUser {
                     HStack { Text("Username"); Spacer(); Text(user.name).foregroundColor(.secondary) }
                     // Übergibt Int an UserMarkView
-                    HStack { Text("Rang"); Spacer(); UserMarkView(markValue: user.mark) }
+                    HStack { Text("Rang"); Spacer(); UserMarkView(markValue: user.mark) } // UserMarkView wird hier verwendet
                     HStack { Text("Benis"); Spacer(); Text("\(user.score)").foregroundColor(.secondary) }
                     HStack { Text("Registriert seit"); Spacer(); Text(Date(timeIntervalSince1970: TimeInterval(user.registered)), style: .date).foregroundColor(.secondary) }
                 } else {
@@ -75,22 +75,20 @@ struct ProfileView: View {
     }
 }
 
-// MARK: - UserMarkView (Korrigierter Init und Static Func)
+// MARK: - UserMarkView (Angepasst für Textfarbe)
 struct UserMarkView: View {
     let markValue: Int
     private var markEnum: Mark // Nicht-optional
 
     init(markValue: Int) {
         self.markValue = markValue
-        // **** KORREKTUR: Verwende den sicheren Initializer aus Mark ****
-        // Dieser gibt immer einen gültigen Mark zurück (ggf. .unbekannt)
+        // Nutzt den sicheren Initializer aus Mark
         self.markEnum = Mark(rawValue: markValue)
     }
 
     // Statische Funktion, um Namen von außen zu bekommen
     static func getMarkName(for mark: Int) -> String {
-        // **** KORREKTUR: Nutze den sicheren Initializer ****
-        // Gibt den Namen für den Enum-Wert oder für .unbekannt zurück
+        // Nutzt den sicheren Initializer
         return Mark(rawValue: mark).displayName
     }
 
@@ -104,8 +102,17 @@ struct UserMarkView: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Circle().fill(markColor).frame(width: 8, height: 8)
-            Text(markName).font(.subheadline).foregroundColor(markColor)
+            Circle()
+                .fill(markColor)
+                .overlay(
+                    Circle().stroke(Color.black, lineWidth: 0.5) // Dünner schwarzer Rand
+                )
+                .frame(width: 8, height: 8)
+
+            Text(markName)
+                .font(.subheadline)
+                // --- GEÄNDERT: Explizit auf .secondary setzen ---
+                .foregroundColor(.secondary)
         }
     }
 }

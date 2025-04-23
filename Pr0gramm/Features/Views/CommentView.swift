@@ -6,8 +6,8 @@ struct CommentView: View {
 
     // Abgeleitetes Enum für die Anzeige
     private var markEnum: Mark {
-        // Fallback auf .schwuchtel (was rawValue 0 hat)
-        return Mark(rawValue: comment.mark) ?? .schwuchtel
+        // --- KORRIGIERT: ?? .schwuchtel entfernt, da Mark(rawValue:) nie nil ist ---
+        return Mark(rawValue: comment.mark)
     }
 
     // Konvertiert UserMark in eine Farbe
@@ -42,10 +42,17 @@ struct CommentView: View {
             HStack(spacing: 6) {
                 Circle() // User Mark Punkt
                     .fill(userMarkColor)
+                    // --- HINZUGEFÜGT: Schwarzer Rand um den Kreis ---
+                    .overlay(
+                        Circle().stroke(Color.black, lineWidth: 0.5) // Dünner schwarzer Rand
+                    )
                     .frame(width: 8, height: 8)
-                Text(comment.name)
+
+                Text(comment.name) // Username Text
                     .font(.caption.weight(.semibold))
-                    .foregroundColor(userMarkColor) // Name in Mark-Farbe
+                    // --- ENTFERNT: .foregroundColor(userMarkColor) ---
+                    // Verwendet jetzt die Standard-Vordergrundfarbe (.primary)
+
                 Text("•").foregroundColor(.secondary)
                 Text("\(score)") // Score
                     .font(.caption)
@@ -79,6 +86,15 @@ struct CommentView: View {
     let sampleCommentMark0 = ItemComment(id: 2, parent: 0, content: "Kommentar von Standard-User.", created: Int(Date().timeIntervalSince1970) - 60, up: 5, down: 0, confidence: 0.95, name: "StandardUser", mark: 0) // mark: 0
 
     CommentView(comment: sampleCommentMark0)
+        .padding()
+        .background(Color(.systemBackground))
+        .previewLayout(.sizeThatFits)
+}
+
+#Preview("Unknown Mark") { // Add preview for unknown mark
+    let sampleCommentUnknown = ItemComment(id: 3, parent: 0, content: "Kommentar von unbekanntem Rang.", created: Int(Date().timeIntervalSince1970) - 30, up: 1, down: 1, confidence: 0.5, name: "MysteryUser", mark: 99) // mark: 99
+
+    CommentView(comment: sampleCommentUnknown)
         .padding()
         .background(Color(.systemBackground))
         .previewLayout(.sizeThatFits)

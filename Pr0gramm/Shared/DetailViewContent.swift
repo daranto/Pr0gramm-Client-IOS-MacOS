@@ -5,7 +5,8 @@ import AVKit
 import Combine
 import os
 
-// --- DetailImageView (Korrigiert: Nur .resizable()) ---
+// --- DetailImageView ---
+// ... (bleibt gleich)
 struct DetailImageView: View {
     let item: Item
     let logger: Logger
@@ -14,7 +15,7 @@ struct DetailImageView: View {
         AsyncImage(url: item.imageUrl) { phase in
             switch phase {
             case .success(let image):
-                image.resizable() // Nur resizable, Skalierung kommt von außen
+                image.resizable()
             case .failure(let error):
                 let _ = logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)")
                 Text("Bild konnte nicht geladen werden").foregroundColor(.red)
@@ -25,6 +26,7 @@ struct DetailImageView: View {
         .onAppear { logger.trace("Displaying image for item \(item.id). Ensuring player cleanup."); logger.debug("DetailImageView onAppear for item \(item.id). Performing cleanup."); cleanupAction() }
     }
 }
+
 
 // --- FlowLayout (Annahme: Existiert) ---
 // struct FlowLayout: Layout { /* ... */ }
@@ -52,19 +54,15 @@ struct DetailViewContent: View {
 
     @ViewBuilder
     private var mediaContent: some View {
-        Group { // Container für Video oder Bild
+        // ... (bleibt gleich) ...
+        Group {
             if item.isVideo {
-                // Annahme: CustomVideoPlayerRepresentable füllt seinen Bereich
                 CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler)
             } else {
                 DetailImageView(item: item, logger: Self.logger, cleanupAction: { cleanupPlayerAndObservers() })
             }
         }
-        // --- WICHTIG: .scaledToFit() HIER anwenden ---
-        // Passt den Inhalt (Bild oder Video) an den verfügbaren Platz an,
-        // behält das Seitenverhältnis bei.
         .scaledToFit()
-        // Erlaube maximale Ausdehnung, .scaledToFit() begrenzt es dann.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
              if item.isVideo, let url = item.imageUrl { setupPlayer(url: url) }
@@ -72,75 +70,123 @@ struct DetailViewContent: View {
          }
     }
 
+
+    // --- Vote View mit .fixedSize() ---
+    @ViewBuilder
+    private var voteCounterView: some View {
+        VStack(alignment: .leading, spacing: 6) { // Vertikal
+            // Upvote Zeile
+            HStack(spacing: 5) { // Icon + Zahl
+                Image(systemName: "arrow.up.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .green)
+                    .imageScale(.medium)
+                Text("\(item.up)") // Echte Zahl
+                    .font(.subheadline) // Gewünschter Font
+                    .foregroundColor(.secondary) // Gewünschte Farbe
+                    // --- NEU: Text zwingen, seine Größe zu nehmen ---
+                    .fixedSize(horizontal: true, vertical: false)
+                    // .layoutPriority(1) // Entfernt
+            }
+
+            // Downvote Zeile
+            HStack(spacing: 5) { // Icon + Zahl
+                Image(systemName: "arrow.down.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .red)
+                    .imageScale(.medium)
+                 Text("\(item.down)") // Echte Zahl
+                    .font(.subheadline) // Gewünschter Font
+                    .foregroundColor(.secondary) // Gewünschte Farbe
+                    // --- NEU: Text zwingen, seine Größe zu nehmen ---
+                    .fixedSize(horizontal: true, vertical: false)
+                    // .layoutPriority(1) // Entfernt
+            }
+        }
+    }
+
+
+    // --- infoAndTagsContent (unverändert) ---
     @ViewBuilder
     private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-             HStack { Text("⬆️ \(item.up)"); Text("⬇️ \(item.down)"); Spacer() }
-                 .font(.caption)
-                 .padding(.bottom, 4)
+             HStack(alignment: .top, spacing: 15) { // Abstand Votes <-> Tags
+                 voteCounterView // Mit .fixedSize() innen
 
-             if infoLoadingStatus == .loaded {
-                 if !tags.isEmpty {
-                     FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
-                         ForEach(tags) { tag in
-                             Text(tag.tag)
-                                 .font(.caption)
-                                 .padding(.horizontal, 8).padding(.vertical, 4)
-                                 .background(Color.gray.opacity(0.3))
-                                 .foregroundColor(.primary)
-                                 .cornerRadius(5)
-                                 .lineLimit(1)
+                 Group { // Tags oder Status
+                     if infoLoadingStatus == .loaded {
+                         if !tags.isEmpty {
+                             FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+                                 ForEach(tags) { tag in
+                                     Text(tag.tag)
+                                         .font(.caption)
+                                         .padding(.horizontal, 8).padding(.vertical, 4)
+                                         .background(Color.gray.opacity(0.2))
+                                         .foregroundColor(.primary)
+                                         .clipShape(Capsule())
+                                         .lineLimit(1)
+                                 }
+                             }
+                         } else {
+                              Text("Keine Tags vorhanden")
+                                  .font(.caption).foregroundColor(.secondary)
+                                  .frame(maxWidth: .infinity, alignment: .leading)
+                                  .padding(.vertical, 5)
                          }
-                     }
-                 } else {
-                      Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .center)
+                    } else if infoLoadingStatus == .loading {
+                        ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                    } else if case .error(let msg) = infoLoadingStatus {
+                        Text("Fehler Tags: \(msg)")
+                            .font(.caption).foregroundColor(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 5)
+                    }
                  }
-            } else if infoLoadingStatus == .loading {
-                ProgressView().frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 5)
-            } else if case .error(let msg) = infoLoadingStatus {
-                Text("Fehler Tags: \(msg)").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .center)
-            }
+                 .layoutPriority(1)
+             }
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
         .padding(.horizontal)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+
     @ViewBuilder
     private var commentsContent: some View {
+        // ... (bleibt gleich) ...
         CommentsSection(comments: comments, status: infoLoadingStatus)
             .padding(.top)
     }
 
     // MARK: - Body
-
     var body: some View {
+        // ... (bleibt gleich) ...
         Group {
             if horizontalSizeClass == .regular {
                 // --- Breites Layout ---
                 HStack(alignment: .top, spacing: 0) {
-                    // Linke Spalte: VStack enthält Media + Infos
-                    VStack(spacing: 0) {
-                         mediaContent // Enthält jetzt .scaledToFit()
-                         infoAndTagsContent
-                         Spacer() // Drückt Inhalt nach oben, falls Platz
+                    ScrollView {
+                        VStack(spacing: 0) {
+                             mediaContent
+                             infoAndTagsContent
+                             Spacer()
+                        }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Flexibel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     Divider()
 
-                    // Rechte Spalte: Kommentare
                     ScrollView {
                         commentsContent
                     }
-                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 400, maxHeight: .infinity) // Flexibel
+                    .frame(minWidth: 280, idealWidth: 320, maxWidth: 400, maxHeight: .infinity)
                     .background(Color(.secondarySystemBackground))
                 }
             } else {
                 // --- Schmales Layout ---
                 ScrollView {
                     VStack(spacing: 0) {
-                        mediaContent // Enthält jetzt .scaledToFit()
+                        mediaContent
                         infoAndTagsContent
                         commentsContent
                     }
@@ -152,7 +198,9 @@ struct DetailViewContent: View {
         .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing."); cleanupPlayerAndObservers() }
     }
 
-    // MARK: - Player Logic
+
+    // MARK: - Player Logic (unverändert)
+    // ... (Restlicher Code bleibt gleich) ...
     private func setupPlayer(url: URL) {
         Self.logger.debug("SetupPlayer called for item \(item.id), URL: \(url.absoluteString)")
         Self.logger.debug("Cleaning up existing player/observers before creating new one...")
@@ -217,7 +265,6 @@ struct DetailViewContent: View {
         }
     }
 
-    // guessAspectRatio wird nicht mehr direkt im Body verwendet, aber intern gebraucht
     private func guessAspectRatio() -> CGFloat? {
         if item.width > 0 && item.height > 0 { return CGFloat(item.width) / CGFloat(item.height) }
         return 16.0 / 9.0
@@ -226,11 +273,16 @@ struct DetailViewContent: View {
 } // Ende struct DetailViewContent
 
 
-// MARK: - Preview
+// MARK: - Preview (unverändert)
+// ... (Previews bleiben gleich) ...
 #Preview("Compact") {
      let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1)
      let previewHandler = KeyboardActionHandler()
-     let previewTags = [ ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag") ]
+     let previewTags = [
+        ItemTag(id: 1, confidence: 0.9, tag: "Cool"), ItemTag(id: 2, confidence: 0.7, tag: "Video"),
+        ItemTag(id: 3, confidence: 0.8, tag: "Ein etwas längerer Tag"), ItemTag(id: 4, confidence: 0.6, tag: "Mehr"),
+        ItemTag(id: 5, confidence: 0.5, tag: "Tags"), ItemTag(id: 6, confidence: 0.4, tag: "Test")
+     ]
      let previewComments = [
          ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1),
          ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7)
@@ -249,7 +301,7 @@ struct DetailViewContent: View {
 }
 
 #Preview("Regular") {
-    let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1)
+    let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1)
     let previewHandler = KeyboardActionHandler()
     let previewTags = [ ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")]
     let previewComments = [
@@ -260,7 +312,7 @@ struct DetailViewContent: View {
     ]
     NavigationStack {
         DetailViewContent(
-            item: sampleVideoItem,
+            item: sampleImageItem, // Use image item for this preview
             keyboardActionHandler: previewHandler,
             tags: previewTags,
             comments: previewComments,
