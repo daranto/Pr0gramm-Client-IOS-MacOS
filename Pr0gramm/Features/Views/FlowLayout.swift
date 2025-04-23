@@ -9,41 +9,46 @@ struct FlowLayout: Layout {
 
     // Berechnet die benötigte Größe für das gesamte Layout.
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let availableWidth = proposal.width, !subviews.isEmpty else { return .zero }
+        // --- Breitenprüfung HIER hinzugefügt ---
+        // Wenn keine Breite vorgeschlagen wird oder sie sehr klein ist, gib Zero zurück.
+        // Der Mindestwert (z.B. 10) verhindert ungültige Berechnungen bei extremen Größen.
+        guard let availableWidth = proposal.width, availableWidth > 10, !subviews.isEmpty else { return .zero }
+        // --- Ende Breitenprüfung ---
 
         var currentHeight: CGFloat = 0
         var currentRowWidth: CGFloat = 0
         var rowMaxHeight: CGFloat = 0
-
-        // Bestimme die Höhen der einzelnen Reihen
         var rowHeights: [CGFloat] = []
 
         for subview in subviews {
             let subviewSize = subview.sizeThatFits(.unspecified)
-
-            // Passt es in die aktuelle Reihe?
             if currentRowWidth + subviewSize.width + (currentRowWidth == 0 ? 0 : horizontalSpacing) <= availableWidth {
-                // Ja: Füge zur Reihe hinzu
                 currentRowWidth += subviewSize.width + (currentRowWidth == 0 ? 0 : horizontalSpacing)
                 rowMaxHeight = max(rowMaxHeight, subviewSize.height)
             } else {
-                // Nein: Schließe aktuelle Reihe ab und beginne neue
-                rowHeights.append(rowMaxHeight) // Höhe der vollen Reihe speichern
+                rowHeights.append(rowMaxHeight)
                 currentRowWidth = subviewSize.width
                 rowMaxHeight = subviewSize.height
             }
         }
-        rowHeights.append(rowMaxHeight) // Höhe der letzten Reihe speichern
+        rowHeights.append(rowMaxHeight)
 
-        // Gesamthöhe berechnen
         currentHeight = rowHeights.reduce(0, +) + max(0, CGFloat(rowHeights.count - 1)) * verticalSpacing
 
-        return CGSize(width: availableWidth, height: currentHeight)
+        // Stelle sicher, dass wir keine negative oder unendlich kleine Höhe zurückgeben
+        return CGSize(width: availableWidth, height: max(0, currentHeight))
     }
 
     // Platziert die Unteransichten innerhalb der gegebenen Grenzen.
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard !subviews.isEmpty else { return }
+        // --- Breiten- und Subview-Prüfung HIER hinzugefügt ---
+        // Nur platzieren, wenn Breite sinnvoll ist und Subviews vorhanden sind.
+        guard bounds.width > 10, !subviews.isEmpty else {
+            // Wenn die Breite zu klein ist, platziere nichts.
+            return
+        }
+        // --- Ende Prüfung ---
+
 
         // Schritt 1: Bestimme, welche Subviews in welche Reihe gehören und deren Höhen
         var rowLayouts: [[(subview: LayoutSubviews.Element, size: CGSize)]] = []
@@ -56,22 +61,19 @@ struct FlowLayout: Layout {
             let subviewSize = subview.sizeThatFits(.unspecified)
             let effectiveSpacing = currentRowItems.isEmpty ? 0 : horizontalSpacing
 
+            // Verwende bounds.width als Limit für die Zeilenbreite
             if currentRowWidth + effectiveSpacing + subviewSize.width <= bounds.width {
                 currentRowWidth += effectiveSpacing + subviewSize.width
                 currentRowMaxHeight = max(currentRowMaxHeight, subviewSize.height)
                 currentRowItems.append((subview, subviewSize))
             } else {
-                // Schließe aktuelle Reihe ab
                 rowLayouts.append(currentRowItems)
                 rowHeights.append(currentRowMaxHeight)
-
-                // Beginne neue Reihe
                 currentRowItems = [(subview, subviewSize)]
                 currentRowWidth = subviewSize.width
                 currentRowMaxHeight = subviewSize.height
             }
         }
-        // Füge die letzte (möglicherweise unvollständige) Reihe hinzu
         if !currentRowItems.isEmpty {
             rowLayouts.append(currentRowItems)
             rowHeights.append(currentRowMaxHeight)
@@ -82,19 +84,22 @@ struct FlowLayout: Layout {
         for rowIndex in 0..<rowLayouts.count {
             let rowContent = rowLayouts[rowIndex]
             let rowHeight = rowHeights[rowIndex]
-            // Berechne die Gesamtbreite dieser spezifischen Reihe
             let currentLineWidth = rowContent.reduce(0) { $0 + $1.size.width } + max(0, CGFloat(rowContent.count - 1) * horizontalSpacing)
-            // Berechne den Startpunkt X für die Zentrierung
-            var currentX = bounds.minX + (bounds.width - currentLineWidth) / 2
+             // Stelle sicher, dass die Breite nicht negativ wird (kann bei extremer Verkleinerung passieren)
+             let availableRowWidth = max(0, bounds.width)
+            // Berechne den Startpunkt X sicher
+            var currentX = bounds.minX + max(0, (availableRowWidth - currentLineWidth) / 2)
 
-            // Platziere die Elemente dieser Reihe
             for (subview, size) in rowContent {
-                let viewProposal = ProposedViewSize(width: size.width, height: size.height)
-                // Platziere am oberen Rand der Zeile, horizontal zentriert als Reihe
-                subview.place(at: CGPoint(x: currentX, y: currentY), anchor: .topLeading, proposal: viewProposal)
+                 // Stelle sicher, dass die vorgeschlagene Größe nicht negativ ist
+                 let viewProposal = ProposedViewSize(width: max(0, size.width), height: max(0, size.height))
+                 // Platziere nur, wenn die Position innerhalb vernünftiger Grenzen liegt
+                 // (Diese Prüfung ist vielleicht übertrieben, aber sicher ist sicher)
+                 if currentX.isFinite && currentY.isFinite {
+                     subview.place(at: CGPoint(x: currentX, y: currentY), anchor: .topLeading, proposal: viewProposal)
+                 }
                 currentX += size.width + horizontalSpacing
             }
-            // Gehe zur Y-Position der nächsten Reihe
             currentY += rowHeight + verticalSpacing
         }
     }
