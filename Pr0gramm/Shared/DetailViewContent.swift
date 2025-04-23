@@ -50,7 +50,7 @@ struct DetailViewContent: View {
 
     // MARK: - Computed View Properties
 
-    // mediaContentInternal: Enthält nur die reine View ohne äußere Skalierungsmodifier
+    // mediaContentInternal: Reine View
     @ViewBuilder
     private var mediaContentInternal: some View {
         Group {
@@ -108,62 +108,73 @@ struct DetailViewContent: View {
                  .layoutPriority(1)
              }
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal)
+        // Padding wird jetzt je nach Kontext (links oder rechts) gesetzt
+        // .padding(.vertical, 10)
+        // .padding(.horizontal)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var commentsContent: some View {
         CommentsSection(comments: comments, status: infoLoadingStatus)
-            .padding(.top, 10)
+            // Padding wird jetzt je nach Kontext gesetzt
+            // .padding(.top, 10)
     }
 
-    // MARK: - Body (Anpassung der mediaContent-Modifier)
+    // MARK: - Body (Regular Layout angepasst)
      var body: some View {
-        Group { // Group für Hauptunterscheidung
+        Group {
             if horizontalSizeClass == .regular {
                 // --- REGULAR LAYOUT (macOS / iPad) ---
                 HStack(alignment: .top, spacing: 0) {
-                    // --- GeometryReader NUR für linke Spalte ---
+                    // Linke Spalte: Media Content
+                    // GeometryReader für korrekte Rahmengröße auf Mac
                     GeometryReader { geometry in
-                        ScrollView {
-                            VStack(spacing: 0) {
-                                 mediaContentInternal
-                                     // --- Modifier für Regular ---
-                                     .scaledToFit() // Skaliert Inhalt
-                                     .frame(width: geometry.size.width, height: geometry.size.height) // Nutzt GR Größe
-                                     .clipped()
-                                 infoAndTagsContent.fixedSize(horizontal: false, vertical: true)
-                            }
-                            .frame(width: geometry.size.width) // VStack Breite
-                        }
+                        // ScrollView nicht mehr nötig, da nur ein Element
+                        mediaContentInternal
+                             // --- Modifier für Regular (funktionierend) ---
+                             .scaledToFit() // Skaliert Inhalt
+                             .frame(width: geometry.size.width, height: geometry.size.height) // Nutzt GR Größe
+                             .clipped()
+                             // -------------------------
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Linke ScrollView füllt Platz
+                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Linke Spalte flexibel
 
                     Divider()
 
-                    ScrollView { commentsContent }
-                    .frame(width: 320) // Breite Kommentare
+                    // Rechte Spalte: Infos + Kommentare
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 15) { // spacing anpassen nach Bedarf
+                            // Infos/Tags zuerst
+                            infoAndTagsContent
+                                .padding([.horizontal, .top]) // Oben + Seiten
+
+                            // Kommentare darunter
+                            commentsContent
+                                 .padding([.horizontal, .bottom]) // Unten + Seiten
+                        }
+                    }
+                    // --- Flexiblere Breite für rechte Spalte ---
+                    .frame(minWidth: 300, idealWidth: 450, maxWidth: 600)
                     .background(Color(.secondarySystemBackground))
                 }
             } else {
-                // --- COMPACT LAYOUT (iOS) ---
-                // KEIN GeometryReader hier
+                // --- COMPACT LAYOUT (iOS - unverändert) ---
                 ScrollView {
                     VStack(spacing: 0) {
                          mediaContentInternal
-                             // --- Modifier für Compact ---
                              .scaledToFit() // Nur .scaledToFit
-                         infoAndTagsContent // Nimmt benötigte Höhe
-                         commentsContent    // Nimmt benötigte Höhe
+                         infoAndTagsContent
+                             .padding(.horizontal) // Padding für Infos/Tags
+                             .padding(.vertical, 10)
+                         commentsContent
+                             .padding(.horizontal) // Padding für Kommentare
+                             .padding(.bottom, 10)
                      }
-                     // Die VStack nimmt die Breite der ScrollView ein
-                     // und ihre Höhe ergibt sich aus dem Inhalt.
                 }
             }
         } // Ende Haupt-Group
-        .frame(maxWidth: .infinity, maxHeight: .infinity) // Äußerster Rahmen flexibel
+        .frame(maxWidth: .infinity, maxHeight: .infinity) // Äußerster Rahmen bleibt flexibel
         .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
         .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
     }
