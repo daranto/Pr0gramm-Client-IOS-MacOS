@@ -4,14 +4,18 @@ import AVKit
 
 struct CustomVideoPlayerRepresentable: UIViewControllerRepresentable {
     var player: AVPlayer?
-    // --- Benötigt: Handler entgegennehmen ---
     @ObservedObject var handler: KeyboardActionHandler
+    // Callbacks werden wieder benötigt
+    var onWillBeginFullScreen: () -> Void
+    var onWillEndFullScreen: () -> Void
 
     func makeUIViewController(context: Context) -> CustomAVPlayerViewController {
         let controller = CustomAVPlayerViewController()
         controller.player = player
-        // --- Handler übergeben ---
         controller.actionHandler = handler
+        // Callbacks an VC weitergeben
+        controller.willBeginFullScreen = onWillBeginFullScreen
+        controller.willEndFullScreen = onWillEndFullScreen
         print("CustomVideoPlayerRepresentable: makeUIViewController")
         return controller
     }
@@ -21,12 +25,12 @@ struct CustomVideoPlayerRepresentable: UIViewControllerRepresentable {
              print("CustomVideoPlayerRepresentable: Updating player.")
             uiViewController.player = player
         }
-        // --- Handler aktuell halten ---
-        // Überprüfe, ob der übergebene Handler sich geändert hat (sollte selten passieren bei @ObservedObject von außen)
-        // und weise ihn ggf. neu zu.
         if uiViewController.actionHandler !== handler {
              print("CustomVideoPlayerRepresentable: Updating handler.")
              uiViewController.actionHandler = handler
         }
+        // Callbacks aktuell halten
+        uiViewController.willBeginFullScreen = onWillBeginFullScreen
+        uiViewController.willEndFullScreen = onWillEndFullScreen
     }
 }

@@ -6,7 +6,6 @@ import Combine
 import os
 
 // --- DetailImageView ---
-// ... (bleibt gleich)
 struct DetailImageView: View {
     let item: Item
     let logger: Logger
@@ -23,7 +22,7 @@ struct DetailImageView: View {
                 ProgressView()
             }
         }
-        .onAppear { logger.trace("Displaying image for item \(item.id). Ensuring player cleanup."); logger.debug("DetailImageView onAppear for item \(item.id). Performing cleanup."); cleanupAction() }
+        .onAppear { logger.trace("Displaying image for item \(item.id).") }
     }
 }
 
@@ -38,11 +37,10 @@ struct DetailImageView: View {
 struct DetailViewContent: View {
     let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
-    @EnvironmentObject var settings: AppSettings
-    @State private var player: AVPlayer? = nil
-    @State private var muteObserver: NSKeyValueObservation? = nil
-    @State private var loopObserver: NSObjectProtocol? = nil
-
+    let player: AVPlayer?
+    // Callbacks werden wieder benötigt
+    let onWillBeginFullScreen: () -> Void
+    let onWillEndFullScreen: () -> Void
     let tags: [ItemTag]
     let comments: [ItemComment]
     let infoLoadingStatus: InfoLoadingStatus
@@ -54,66 +52,65 @@ struct DetailViewContent: View {
 
     @ViewBuilder
     private var mediaContent: some View {
-        // ... (bleibt gleich) ...
         Group {
             if item.isVideo {
-                CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler)
+                if let player = player {
+                    // Callbacks werden wieder übergeben
+                    CustomVideoPlayerRepresentable(
+                        player: player,
+                        handler: keyboardActionHandler,
+                        onWillBeginFullScreen: onWillBeginFullScreen, // Übergeben
+                        onWillEndFullScreen: onWillEndFullScreen      // Übergeben
+                    )
+                         .id(item.id)
+                } else {
+                     Rectangle().fill(.black).overlay(ProgressView().tint(.white))
+                }
             } else {
-                DetailImageView(item: item, logger: Self.logger, cleanupAction: { cleanupPlayerAndObservers() })
+                DetailImageView(item: item, logger: Self.logger, cleanupAction: { })
             }
         }
         .scaledToFit()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-             if item.isVideo, let url = item.imageUrl { setupPlayer(url: url) }
-             else if !item.isVideo { cleanupPlayerAndObservers() }
-         }
     }
 
-
-    // --- Vote View mit .fixedSize() ---
+    // --- Vote View ---
+    // ... (bleibt gleich)
     @ViewBuilder
     private var voteCounterView: some View {
-        VStack(alignment: .leading, spacing: 6) { // Vertikal
-            // Upvote Zeile
-            HStack(spacing: 5) { // Icon + Zahl
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
                 Image(systemName: "arrow.up.circle.fill")
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(.white, .green)
                     .imageScale(.medium)
-                Text("\(item.up)") // Echte Zahl
-                    .font(.subheadline) // Gewünschter Font
-                    .foregroundColor(.secondary) // Gewünschte Farbe
-                    // --- NEU: Text zwingen, seine Größe zu nehmen ---
+                Text("\(item.up)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
                     .fixedSize(horizontal: true, vertical: false)
-                    // .layoutPriority(1) // Entfernt
             }
-
-            // Downvote Zeile
-            HStack(spacing: 5) { // Icon + Zahl
+            HStack(spacing: 5) {
                 Image(systemName: "arrow.down.circle.fill")
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(.white, .red)
                     .imageScale(.medium)
-                 Text("\(item.down)") // Echte Zahl
-                    .font(.subheadline) // Gewünschter Font
-                    .foregroundColor(.secondary) // Gewünschte Farbe
-                    // --- NEU: Text zwingen, seine Größe zu nehmen ---
+                 Text("\(item.down)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
                     .fixedSize(horizontal: true, vertical: false)
-                    // .layoutPriority(1) // Entfernt
             }
         }
     }
 
 
-    // --- infoAndTagsContent (unverändert) ---
-    @ViewBuilder
+    // --- infoAndTagsContent ---
+    // ... (bleibt gleich)
+     @ViewBuilder
     private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-             HStack(alignment: .top, spacing: 15) { // Abstand Votes <-> Tags
-                 voteCounterView // Mit .fixedSize() innen
-
-                 Group { // Tags oder Status
+             HStack(alignment: .top, spacing: 15) {
+                 voteCounterView
+                 Group {
                      if infoLoadingStatus == .loaded {
                          if !tags.isEmpty {
                              FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
@@ -153,173 +150,84 @@ struct DetailViewContent: View {
 
     @ViewBuilder
     private var commentsContent: some View {
-        // ... (bleibt gleich) ...
         CommentsSection(comments: comments, status: infoLoadingStatus)
             .padding(.top)
     }
 
     // MARK: - Body
-    var body: some View {
-        // ... (bleibt gleich) ...
+     var body: some View {
+       // ... (bleibt gleich)
         Group {
             if horizontalSizeClass == .regular {
-                // --- Breites Layout ---
                 HStack(alignment: .top, spacing: 0) {
-                    ScrollView {
-                        VStack(spacing: 0) {
-                             mediaContent
-                             infoAndTagsContent
-                             Spacer()
-                        }
-                    }
+                    ScrollView { VStack(spacing: 0) { mediaContent; infoAndTagsContent; Spacer() } }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-
                     Divider()
-
-                    ScrollView {
-                        commentsContent
-                    }
+                    ScrollView { commentsContent }
                     .frame(minWidth: 280, idealWidth: 320, maxWidth: 400, maxHeight: .infinity)
                     .background(Color(.secondarySystemBackground))
                 }
             } else {
-                // --- Schmales Layout ---
-                ScrollView {
-                    VStack(spacing: 0) {
-                        mediaContent
-                        infoAndTagsContent
-                        commentsContent
-                    }
-                }
+                ScrollView { VStack(spacing: 0) { mediaContent; infoAndTagsContent; commentsContent } }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
-        .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing."); cleanupPlayerAndObservers() }
+        .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
     }
 
 
-    // MARK: - Player Logic (unverändert)
-    // ... (Restlicher Code bleibt gleich) ...
-    private func setupPlayer(url: URL) {
-        Self.logger.debug("SetupPlayer called for item \(item.id), URL: \(url.absoluteString)")
-        Self.logger.debug("Cleaning up existing player/observers before creating new one...")
-        cleanupPlayerAndObservers(keepPlayerInstance: false)
-        Self.logger.debug("Creating new AVPlayer instance for item \(item.id).")
-        let newPlayer = AVPlayer(url: url)
-        self.player = newPlayer
-        newPlayer.isMuted = settings.isVideoMuted
-        Self.logger.info("Player initial mute state for item \(item.id) set to: \(settings.isVideoMuted)")
-        self.muteObserver = newPlayer.observe(\.isMuted, options: [.new]) { _, change in
-            guard let newMutedState = change.newValue else { return }
-            if self.settings.isVideoMuted != newMutedState {
-                Self.logger.info("User changed mute via player controls for item \(item.id). New state: \(newMutedState). Updating global setting.")
-                DispatchQueue.main.async { self.settings.isVideoMuted = newMutedState }
-            }
-        }
-        Self.logger.debug("Added mute KVO observer for item \(item.id).")
-        guard let currentItem = newPlayer.currentItem else {
-             Self.logger.error("Newly created player has no currentItem for item \(item.id). Cannot add loop observer.")
-             return
-        }
-        addLoopObserver(for: currentItem)
-        newPlayer.play()
-        Self.logger.debug("Player started (Autoplay) for item \(item.id)")
-    }
+    // --- Player Logic Methoden ENTFERNT ---
 
-    private func addLoopObserver(for itemPlayerItem: AVPlayerItem) {
-        if let observer = self.loopObserver {
-            NotificationCenter.default.removeObserver(observer)
-            Self.logger.debug("Removed existing loop observer before adding new one for item \(self.item.id).")
-            self.loopObserver = nil
-        }
-        self.loopObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime, object: itemPlayerItem, queue: .main
-        ) { notification in
-            Self.logger.debug("Video did play to end time for item \(self.item.id). Seeking to zero.")
-            self.player?.seek(to: .zero)
-            self.player?.play()
-        }
-        Self.logger.debug("Added loop observer for item \(self.item.id).")
-    }
-
-    private func cleanupPlayerAndObservers(keepPlayerInstance: Bool = false) {
-        guard player != nil || muteObserver != nil || loopObserver != nil else { return }
-        Self.logger.debug("Cleanup called for item \(item.id). Keep instance: \(keepPlayerInstance)")
-        let playerToPause = self.player
-        playerToPause?.pause()
-        Self.logger.debug("Player paused (if existed) for item \(item.id).")
-        muteObserver?.invalidate()
-        if muteObserver != nil { Self.logger.debug("Mute observer invalidated for item \(item.id).") }
-        muteObserver = nil
-        if let observer = loopObserver {
-            NotificationCenter.default.removeObserver(observer)
-            Self.logger.debug("Loop observer removed for item \(item.id).")
-            loopObserver = nil
-        }
-        if !keepPlayerInstance {
-            self.player = nil
-            Self.logger.debug("Player instance state set to nil for item \(item.id).")
-        } else {
-            Self.logger.debug("Keeping player instance state for item \(item.id).")
-        }
-    }
-
+    // --- guessAspectRatio (unverändert) ---
     private func guessAspectRatio() -> CGFloat? {
         if item.width > 0 && item.height > 0 { return CGFloat(item.width) / CGFloat(item.height) }
         return 16.0 / 9.0
     }
-
 } // Ende struct DetailViewContent
 
-
-// MARK: - Preview (unverändert)
-// ... (Previews bleiben gleich) ...
+// MARK: - Preview (Angepasst: Übergibt leere Closures)
+// ... (Previews wie im vorherigen Schritt, mit leeren Closures für Callbacks)
 #Preview("Compact") {
      let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1)
      let previewHandler = KeyboardActionHandler()
-     let previewTags = [
-        ItemTag(id: 1, confidence: 0.9, tag: "Cool"), ItemTag(id: 2, confidence: 0.7, tag: "Video"),
-        ItemTag(id: 3, confidence: 0.8, tag: "Ein etwas längerer Tag"), ItemTag(id: 4, confidence: 0.6, tag: "Mehr"),
-        ItemTag(id: 5, confidence: 0.5, tag: "Tags"), ItemTag(id: 6, confidence: 0.4, tag: "Test")
-     ]
-     let previewComments = [
-         ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1),
-         ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7)
-    ]
-    NavigationStack {
+     let previewTags: [ItemTag] = [ /* ... */ ]
+     let previewComments: [ItemComment] = [ /* ... */ ]
+     let previewPlayer: AVPlayer? = sampleVideoItem.isVideo ? AVPlayer(url: URL(string: "https://example.com/dummy.mp4")!) : nil
+
+     NavigationStack {
         DetailViewContent(
             item: sampleVideoItem,
             keyboardActionHandler: previewHandler,
+            player: previewPlayer,
+            onWillBeginFullScreen: { print("Preview: Begin Fullscreen") },
+            onWillEndFullScreen: { print("Preview: End Fullscreen") },
             tags: previewTags,
             comments: previewComments,
             infoLoadingStatus: .loaded
         )
         .environment(\.horizontalSizeClass, .compact)
-        .environmentObject(AppSettings())
     }
 }
-
 #Preview("Regular") {
-    let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1)
+     let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1)
     let previewHandler = KeyboardActionHandler()
-    let previewTags = [ ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")]
-    let previewComments = [
-         ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1),
-         ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7),
-         ItemComment(id: 3, parent: 0, content: "Zweiter Top-Level Kommentar mit etwas längerem Text, um zu sehen, wie er umbricht.", created: Int(Date().timeIntervalSince1970) - 60, up: 10, down: 3, confidence: 0.9, name: "UserC", mark: 3),
-         ItemComment(id: 4, parent: 3, content: "Antwort auf zweiten.", created: Int(Date().timeIntervalSince1970) - 30, up: 1, down: 0, confidence: 0.7, name: "UserA", mark: 1)
-    ]
-    NavigationStack {
+    let previewTags: [ItemTag] = [ /* ... */ ]
+    let previewComments: [ItemComment] = [ /* ... */ ]
+    let previewPlayer: AVPlayer? = sampleImageItem.isVideo ? AVPlayer(url: URL(string: "https://example.com/dummy.mp4")!) : nil
+
+     NavigationStack {
         DetailViewContent(
-            item: sampleImageItem, // Use image item for this preview
+            item: sampleImageItem,
             keyboardActionHandler: previewHandler,
+            player: previewPlayer,
+            onWillBeginFullScreen: { print("Preview: Begin Fullscreen") },
+            onWillEndFullScreen: { print("Preview: End Fullscreen") },
             tags: previewTags,
             comments: previewComments,
             infoLoadingStatus: .loaded
         )
         .environment(\.horizontalSizeClass, .regular)
-        .environmentObject(AppSettings())
     }
     .previewDevice("iPad (10th generation)")
 }
