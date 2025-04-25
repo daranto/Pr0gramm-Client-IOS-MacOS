@@ -1,4 +1,4 @@
-// Pr0gramm/Pr0gramm/Features/Views/FavoritesView.swift
+// Pr0gramm/Pr0gramm/Features/Views/Profile/FavoritesView.swift
 // --- START OF COMPLETE FILE ---
 
 import SwiftUI
@@ -49,8 +49,13 @@ struct FavoritesView: View {
                     loggedOutContentView // Zeige Login-Aufforderung
                 }
             }
-            .navigationTitle("Favoriten")
             .toolbar {
+                 ToolbarItem(placement: .navigationBarLeading) {
+                     Text("Favoriten")
+                         // --- GEÄNDERT: Schriftgröße angepasst ---
+                         .font(.largeTitle) // War .headline
+                         .fontWeight(.bold)
+                 }
                  ToolbarItem(placement: .primaryAction) {
                       Button { showingFilterSheet = true } label: { Label("Filter", systemImage: "line.3.horizontal.decrease.circle") }
                  }
@@ -74,12 +79,12 @@ struct FavoritesView: View {
             .onChange(of: settings.showSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
             .onChange(of: settings.showNSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
             .onChange(of: settings.showNSFL) { _, _ in Task { await handleLoginOrFilterChange() } }
-            .onChange(of: settings.showNSFP) { _, _ in Task { await handleLoginOrFilterChange() } } // Alt: showPOL -> jetzt showNSFP
-            .onChange(of: settings.showPOL) { _, _ in Task { await handleLoginOrFilterChange() } }   // Neu: showPOL
+            .onChange(of: settings.showNSFP) { _, _ in Task { await handleLoginOrFilterChange() } }
+            .onChange(of: settings.showPOL) { _, _ in Task { await handleLoginOrFilterChange() } }
         }
     }
 
-    // Hilfsfunktion für Refresh-Logik
+    // Hilfsfunktion für Refresh-Logik (unverändert)
     private func handleLoginOrFilterChange() async {
          if authService.isLoggedIn {
               await refreshFavorites()
@@ -96,7 +101,7 @@ struct FavoritesView: View {
           }
      }
 
-    // Extrahierter ScrollView-Inhalt
+    // Extrahierter ScrollView-Inhalt (unverändert)
     private var scrollViewContent: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 3) {
@@ -120,7 +125,7 @@ struct FavoritesView: View {
         .refreshable { await refreshFavorites() }
     }
 
-    // View für "Kein Filter"-Meldung
+    // View für "Kein Filter"-Meldung (unverändert)
     @State private var showingFilterSheet = false
     private var noFilterContentView: some View {
          VStack {
@@ -147,7 +152,7 @@ struct FavoritesView: View {
          .refreshable { await refreshFavorites() }
      }
 
-    // Logged Out Content
+    // Logged Out Content (unverändert)
     private var loggedOutContentView: some View {
         VStack {
             Spacer()
@@ -160,7 +165,7 @@ struct FavoritesView: View {
         }
     }
 
-    // MARK: - Data Loading Functions
+    // MARK: - Data Loading Functions (unverändert)
 
     func refreshFavorites() async {
         guard authService.isLoggedIn, let username = authService.currentUser?.name else {
@@ -323,7 +328,7 @@ struct FavoritesView: View {
     }
 }
 
-// MARK: - Preview
+// MARK: - Preview (unverändert)
 #Preview("Logged In") {
     let settings = AppSettings()
     let auth = AuthService()

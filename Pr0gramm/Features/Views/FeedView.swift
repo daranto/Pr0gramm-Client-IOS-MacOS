@@ -5,7 +5,7 @@ import SwiftUI
 import os
 import Kingfisher
 
-// FeedItemThumbnail
+// FeedItemThumbnail (unverändert)
 struct FeedItemThumbnail: View {
     let item: Item
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "FeedItemThumbnail")
@@ -68,8 +68,19 @@ struct FeedView: View {
                     scrollViewContent
                  }
             }
-            .navigationTitle(settings.feedType.displayName)
-            .toolbar { ToolbarItem(placement: .primaryAction) { Button { showingFilterSheet = true } label: { Label("Filter", systemImage: "line.3.horizontal.decrease.circle") } } }
+            .toolbar {
+                 ToolbarItem(placement: .navigationBarLeading) {
+                     Text(settings.feedType.displayName)
+                         // --- GEÄNDERT: Schriftgröße angepasst ---
+                         .font(.largeTitle) // War .headline
+                         .fontWeight(.bold)
+                 }
+                 ToolbarItem(placement: .primaryAction) {
+                     Button { showingFilterSheet = true } label: {
+                         Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                     }
+                 }
+            }
             .sheet(isPresented: $showingFilterSheet) { FilterView().environmentObject(settings) }
             .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
                 Button("OK") { errorMessage = nil }
@@ -85,12 +96,12 @@ struct FeedView: View {
             .onChange(of: settings.showNSFL) { _, _ in Task { await refreshItems() } }
             .onChange(of: settings.showNSFP) { _, _ in Task { await refreshItems() } }
             .onChange(of: settings.showPOL) { _, _ in Task { await refreshItems() } }
-            .task { await refreshItems() } // Initialer Load beim Erscheinen
+            .task { await refreshItems() }
             .onChange(of: popToRootTrigger) { if !navigationPath.isEmpty { navigationPath = NavigationPath() } }
         }
     }
 
-    // Extrahierter ScrollView-Inhalt
+    // Extrahierter ScrollView-Inhalt (unverändert)
     private var scrollViewContent: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 3) {
@@ -115,7 +126,7 @@ struct FeedView: View {
         .refreshable { await refreshItems() }
     }
 
-    // View für "Kein Filter"-Meldung
+    // View für "Kein Filter"-Meldung (unverändert)
     private var noFilterContentView: some View {
          VStack {
              Spacer()
@@ -142,7 +153,7 @@ struct FeedView: View {
      }
 
 
-    // refreshItems Funktion
+    // refreshItems Funktion (unverändert)
     func refreshItems() async {
         guard !isLoading else { return }
 
@@ -173,12 +184,9 @@ struct FeedView: View {
         canLoadMore = true; isLoadingMore = false
         var initialItemsFromCache: [Item]? = nil
 
-        // --- Start der asynchronen Arbeit ---
-        // Defer wird ausgeführt, wenn der aktuelle Scope (die refreshItems Funktion) verlassen wird,
-        // egal ob durch return, throw oder normales Ende.
         defer {
-            Task { @MainActor in // Stelle sicher, dass UI-Updates auf dem Main Actor laufen
-                if self.isLoading { // Nur ändern, wenn wir noch im Ladezustand sein sollten
+            Task { @MainActor in
+                if self.isLoading {
                    self.isLoading = false
                    Self.logger.info("Finishing refresh process (isLoading set to false).")
                 }
@@ -189,7 +197,7 @@ struct FeedView: View {
             if let cachedItems = await settings.loadItemsFromCache(forKey: currentCacheKey), !cachedItems.isEmpty {
                 initialItemsFromCache = cachedItems
                 await MainActor.run {
-                    if self.isLoading { // Check again
+                    if self.isLoading {
                          self.items = cachedItems
                          Self.logger.info("Temporarily displaying \(cachedItems.count) items from cache.")
                     }
@@ -229,11 +237,10 @@ struct FeedView: View {
                 self.canLoadMore = false
             }
         }
-        // Das 'defer' oben kümmert sich um das Zurücksetzen von isLoading
     }
 
 
-    // getIdForLoadMore Funktion
+    // getIdForLoadMore Funktion (unverändert)
     private func getIdForLoadMore() -> Int? {
         guard let lastItem = items.last else {
             Self.logger.warning("Cannot load more: No items to get ID from.")
@@ -254,7 +261,7 @@ struct FeedView: View {
     }
 
 
-    // loadMoreItems Funktion
+    // loadMoreItems Funktion (unverändert)
     func loadMoreItems() async {
         guard settings.hasActiveContentFilter else {
              Self.logger.warning("Skipping loadMoreItems: No active content filter selected.")
@@ -276,11 +283,9 @@ struct FeedView: View {
         await MainActor.run { isLoadingMore = true }
         Self.logger.info("--- Starting loadMoreItems older than \(olderValue) ---")
 
-        // --- Start der asynchronen Arbeit ---
-        // Defer wird ausgeführt, wenn der aktuelle Scope (die loadMoreItems Funktion) verlassen wird.
         defer {
-            Task { @MainActor in // UI-Updates auf Main Actor
-                 if self.isLoadingMore { // Nur ändern, wenn wir noch im Ladezustand sein sollten
+            Task { @MainActor in
+                 if self.isLoadingMore {
                      self.isLoadingMore = false
                      Self.logger.info("--- Finished loadMoreItems older than \(olderValue) (isLoadingMore set to false) ---")
                  }
@@ -325,16 +330,15 @@ struct FeedView: View {
         } catch {
             Self.logger.error("API fetch failed during loadMoreItems: \(error.localizedDescription)")
             await MainActor.run {
-                 guard self.isLoadingMore else { return } // Check if still relevant
+                 guard self.isLoadingMore else { return }
                 if items.isEmpty { errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" }
                 canLoadMore = false
             }
         }
-         // Das 'defer' oben kümmert sich um das Zurücksetzen von isLoadingMore
     }
 }
 
-// View Extension loadingOverlay
+// View Extension loadingOverlay (unverändert)
 extension View {
     func loadingOverlay(isLoading: Bool) -> some View {
         self.overlay {
@@ -350,7 +354,7 @@ extension View {
     }
 }
 
-// Preview
+// Preview (unverändert)
 #Preview {
     MainView()
         .environmentObject(AppSettings())
