@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Features/Views/PagedDetailView.swift
+// --- START OF MODIFIED FILE ---
+
 // PagedDetailView.swift
 
 import SwiftUI
@@ -146,7 +149,7 @@ struct PagedDetailView: View {
     }
 
     // MARK: - Player Management Methoden
-    // (Bleiben wie in der Version OHNE [weak self])
+    // (Bleiben wie zuvor)
      private func setupAndPlayPlayerIfNeeded(for item: Item) async {
         guard item.isVideo else {
             Self.logger.debug("Item \(item.id) is not a video. Skipping player setup.")
@@ -248,7 +251,6 @@ struct PagedDetailView: View {
 
 
     // --- loadInfoIfNeeded (unverändert) ---
-    // ...
      private func loadInfoIfNeeded(for item: Item) async {
         let itemId = item.id
         guard infoLoadingStatus[itemId] == nil || infoLoadingStatus[itemId] == .idle else { return }
@@ -271,7 +273,6 @@ struct PagedDetailView: View {
 
 
     // --- Navigation Helpers (unverändert) ---
-    // ...
      private func selectNext() { if canSelectNext { selectedIndex += 1 } }
     private var canSelectNext: Bool { selectedIndex < items.count - 1 }
     private func selectPrevious() { if canSelectPrevious { selectedIndex -= 1 } }
@@ -279,7 +280,6 @@ struct PagedDetailView: View {
 
 
     // --- currentItemTitle (unverändert) ---
-    // ...
       private var currentItemTitle: String {
         guard selectedIndex >= 0 && selectedIndex < items.count else { return "Detail" }
         let currentItem = items[selectedIndex]
@@ -298,48 +298,19 @@ struct PagedDetailView: View {
 
 } // Ende struct PagedDetailView
 
-// MARK: - Preview (Angepasst: Übergibt leere Closures)
-// ... (Previews wie im vorherigen Schritt, mit leeren Closures für Callbacks)
-#Preview("Compact") {
-     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1)
-     let previewHandler = KeyboardActionHandler()
-     let previewTags: [ItemTag] = [ /* ... */ ]
-     let previewComments: [ItemComment] = [ /* ... */ ]
-     let previewPlayer: AVPlayer? = sampleVideoItem.isVideo ? AVPlayer(url: URL(string: "https://example.com/dummy.mp4")!) : nil
+// MARK: - Preview
+// --- KORRIGIERT: Sample Items haben jetzt repost: nil, variants: nil ---
+#Preview("Preview") {
+    // Erstelle ein paar Beispiel-Items
+    let sampleItems = [
+        Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil), // Image
+        Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil), // Video
+        Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: Int(Date().timeIntervalSince1970) - 50, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil) // Image
+    ]
 
-     NavigationStack {
-        DetailViewContent(
-            item: sampleVideoItem,
-            keyboardActionHandler: previewHandler,
-            player: previewPlayer,
-            onWillBeginFullScreen: { print("Preview: Begin Fullscreen") },
-            onWillEndFullScreen: { print("Preview: End Fullscreen") },
-            tags: previewTags,
-            comments: previewComments,
-            infoLoadingStatus: .loaded
-        )
-        .environment(\.horizontalSizeClass, .compact)
+    return NavigationStack { // NavigationStack für Titel etc.
+        PagedDetailView(items: sampleItems, selectedIndex: 1) // Starte beim Video
     }
+    .environmentObject(AppSettings()) // Notwendige Environment Objects hinzufügen
 }
-#Preview("Regular") {
-     let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1)
-    let previewHandler = KeyboardActionHandler()
-    let previewTags: [ItemTag] = [ /* ... */ ]
-    let previewComments: [ItemComment] = [ /* ... */ ]
-    let previewPlayer: AVPlayer? = sampleImageItem.isVideo ? AVPlayer(url: URL(string: "https://example.com/dummy.mp4")!) : nil
-
-     NavigationStack {
-        DetailViewContent(
-            item: sampleImageItem,
-            keyboardActionHandler: previewHandler,
-            player: previewPlayer,
-            onWillBeginFullScreen: { print("Preview: Begin Fullscreen") },
-            onWillEndFullScreen: { print("Preview: End Fullscreen") },
-            tags: previewTags,
-            comments: previewComments,
-            infoLoadingStatus: .loaded
-        )
-        .environment(\.horizontalSizeClass, .regular)
-    }
-    .previewDevice("iPad (10th generation)")
-}
+// --- END OF MODIFIED FILE ---

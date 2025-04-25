@@ -1,14 +1,10 @@
+// Pr0gramm/Pr0gramm/Shared/Item.swift
+// --- START OF MODIFIED FILE ---
+
 // Item.swift
 import Foundation
 
-// --- ApiResponse HIER ENTFERNT ---
-// struct ApiResponse: Codable {
-//     let items: [Item]
-//     let atEnd: Bool?
-//     // let error: String?
-// }
-
-// Item struct bleibt wie zuletzt (mit created und flags)
+// Item struct erweitert um optionale repost und variants Felder
 struct Item: Codable, Identifiable, Hashable {
     let id: Int
     let promoted: Int? // Kann für zukünftige Logik nützlich sein
@@ -27,8 +23,10 @@ struct Item: Codable, Identifiable, Hashable {
     let flags: Int   // SFW, NSFW etc.
     let user: String
     let mark: Int
+    let repost: Bool? // <-- HINZUGEFÜGT: Optional Bool für Repost-Status
+    let variants: [ItemVariant]? // <-- HINZUGEFÜGT: Optional Array für Video-Varianten
 
-    // --- Computed Properties (NUR EINMAL HIER DEFINIERT) ---
+    // --- Computed Properties (unverändert) ---
     var isVideo: Bool {
         image.lowercased().hasSuffix(".mp4") || image.lowercased().hasSuffix(".webm")
     }
@@ -39,6 +37,7 @@ struct Item: Codable, Identifiable, Hashable {
 
     var imageUrl: URL? {
         if isVideo {
+            // TODO: Später ggf. Logik für 'variants' hinzufügen, um beste Qualität zu wählen
             return URL(string: "https://vid.pr0gramm.com/\(image)")
         } else {
             return URL(string: "https://img.pr0gramm.com/\(image)")
@@ -50,3 +49,24 @@ struct Item: Codable, Identifiable, Hashable {
     }
     // --- Ende Computed Properties ---
 }
+
+// --- NEUE STRUKTUR: ItemVariant ---
+// Repräsentiert eine einzelne Video-Variante aus der API
+struct ItemVariant: Codable, Hashable {
+    let name: String     // z.B. "vp9s", "vp9", "source"
+    let path: String     // Relativer Pfad zur Videodatei
+    let mimeType: String // z.B. "video/mp4"
+    let codec: String    // z.B. "vp9", "h264"
+    let width: Int
+    let height: Int
+    let bitRate: Double? // Kann Double sein
+    let fileSize: Int?   // Kann Int sein
+
+    // Computed Property für die vollständige URL (falls benötigt)
+    var variantUrl: URL? {
+        return URL(string: "https://vid.pr0gramm.com\(path)")
+    }
+}
+// --- ENDE NEUE STRUKTUR ---
+
+// --- END OF MODIFIED FILE ---

@@ -1,39 +1,30 @@
 // Pr0gramm/Pr0gramm/Features/Views/FeedView.swift
+// --- START OF COMPLETE FILE ---
 
 import SwiftUI
 import os
-import Kingfisher // <--- Import Kingfisher
+import Kingfisher
 
-// FeedItemThumbnail (KORRIGIERT)
+// FeedItemThumbnail
 struct FeedItemThumbnail: View {
     let item: Item
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "FeedItemThumbnail")
 
     var body: some View {
-        KFImage(item.thumbnailUrl) // <- Übergib die URL direkt an KFImage
-            .placeholder { // Was angezeigt wird, während geladen wird
-                Rectangle().fill(Material.ultraThin).overlay(ProgressView())
-            }
-            .onFailure { error in // Was passiert, wenn das Laden fehlschlägt
-                Self.logger.error("KFImage failed to load thumbnail for item \(item.id): \(error.localizedDescription)")
-            }
-            // --- KORRIGIERT: cancelOnDisappear hier direkt an KFImage ---
-            .cancelOnDisappear(true) // Wichtig: Bricht den Download ab, wenn die View verschwindet
-            // --------------------------------------------------------
-            .resizable() // Macht das Bild anpassbar
-            .aspectRatio(contentMode: .fill) // Füllt den verfügbaren Platz (wird dann zugeschnitten)
-            // Die äußeren Modifier bleiben gleich, um das quadratische, abgerundete Aussehen zu erhalten
-            // --- KORRIGIERT: Punkt vor fit hinzugefügt ---
+        KFImage(item.thumbnailUrl)
+            .placeholder { Rectangle().fill(Material.ultraThin).overlay(ProgressView()) }
+            .onFailure { error in Self.logger.error("KFImage failed to load thumbnail for item \(item.id): \(error.localizedDescription)") }
+            .cancelOnDisappear(true)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
             .aspectRatio(1.0, contentMode: .fit)
-            // --------------------------------------------
-            .background(Material.ultraThin) // Hintergrund hinzufügen, falls Bild nicht lädt oder transparent ist
+            .background(Material.ultraThin)
             .cornerRadius(5)
-            .clipped() // Schneidet überstehende Teile ab
+            .clipped()
     }
 }
 
 
-// FeedView (Restlicher Code BLEIBT GLEICH wie in der letzten Version mit Cache-Merge)
 struct FeedView: View {
 
     let popToRootTrigger: UUID
@@ -41,9 +32,10 @@ struct FeedView: View {
     @EnvironmentObject var settings: AppSettings
     @State private var items: [Item] = []
     @State private var errorMessage: String?
-    @State private var isLoading = false // Für Refresh
+    @State private var isLoading = false
     @State private var canLoadMore = true
-    @State private var isLoadingMore = false // Für Load More
+    @State private var isLoadingMore = false
+    @State private var showNoFilterMessage = false
 
     @State private var showingFilterSheet = false
     @State private var navigationPath = NavigationPath()
@@ -54,35 +46,31 @@ struct FeedView: View {
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "FeedView")
 
+    private var feedCacheKey: String {
+        return "feed_\(settings.feedType == .new ? "new" : "promoted")"
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            ScrollView {
-                Group {
-                    LazyVGrid(columns: columns, spacing: 3) {
-                        ForEach(items) { item in
-                            NavigationLink(value: item) {
-                                FeedItemThumbnail(item: item) // Verwendet jetzt KFImage korrekt
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        if canLoadMore && !isLoading && !isLoadingMore {
-                             Color.clear.frame(height: 1)
-                                .onAppear {
-                                    Self.logger.info("End trigger element appeared.")
-                                    Task { await loadMoreItems() }
-                                }
-                         }
-                        if isLoadingMore { ProgressView("Lade mehr...").padding() }
-                    }
-                    .padding(.horizontal, 5).padding(.bottom)
-                }
+            Group {
+                if showNoFilterMessage {
+                    noFilterContentView
+                } else if isLoading && items.isEmpty {
+                    ProgressView("Lade...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if items.isEmpty && !isLoading && errorMessage == nil && !showNoFilterMessage {
+                     Text("Keine Medien für aktuelle Filter gefunden.")
+                         .foregroundColor(.secondary)
+                         .multilineTextAlignment(.center)
+                         .padding()
+                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                 } else {
+                    scrollViewContent
+                 }
             }
-             .refreshable { await refreshItems() }
             .navigationTitle(settings.feedType.displayName)
             .toolbar { ToolbarItem(placement: .primaryAction) { Button { showingFilterSheet = true } label: { Label("Filter", systemImage: "line.3.horizontal.decrease.circle") } } }
             .sheet(isPresented: $showingFilterSheet) { FilterView().environmentObject(settings) }
-            .loadingOverlay(isLoading: isLoading && items.isEmpty)
             .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
                 Button("OK") { errorMessage = nil }
             } message: {
@@ -95,128 +83,209 @@ struct FeedView: View {
             .onChange(of: settings.showSFW) { _, _ in Task { await refreshItems() } }
             .onChange(of: settings.showNSFW) { _, _ in Task { await refreshItems() } }
             .onChange(of: settings.showNSFL) { _, _ in Task { await refreshItems() } }
+            .onChange(of: settings.showNSFP) { _, _ in Task { await refreshItems() } }
             .onChange(of: settings.showPOL) { _, _ in Task { await refreshItems() } }
-            .task { if items.isEmpty { await refreshItems() } }
+            .task { await refreshItems() } // Initialer Load beim Erscheinen
             .onChange(of: popToRootTrigger) { if !navigationPath.isEmpty { navigationPath = NavigationPath() } }
         }
     }
 
-    // --- refreshItems Funktion (BLEIBT GLEICH - Merge-Logik ist korrekt) ---
+    // Extrahierter ScrollView-Inhalt
+    private var scrollViewContent: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 3) {
+                ForEach(items) { item in
+                    NavigationLink(value: item) {
+                        FeedItemThumbnail(item: item)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
+                     Color.clear.frame(height: 1)
+                        .onAppear {
+                            Self.logger.info("Feed: End trigger element appeared.")
+                            Task { await loadMoreItems() }
+                        }
+                 }
+                if isLoadingMore { ProgressView("Lade mehr...").padding() }
+            }
+            .padding(.horizontal, 5).padding(.bottom)
+        }
+        .refreshable { await refreshItems() }
+    }
+
+    // View für "Kein Filter"-Meldung
+    private var noFilterContentView: some View {
+         VStack {
+             Spacer()
+             Image(systemName: "line.3.horizontal.decrease.circle")
+                 .font(.largeTitle)
+                 .foregroundColor(.secondary)
+                 .padding(.bottom, 5)
+             Text("Keine Inhalte ausgewählt")
+                 .font(.headline)
+             Text("Bitte passe deine Filter an, um Inhalte zu sehen.")
+                 .font(.subheadline)
+                 .foregroundColor(.secondary)
+                 .multilineTextAlignment(.center)
+                 .padding(.horizontal)
+             Button("Filter anpassen") {
+                 showingFilterSheet = true
+             }
+             .buttonStyle(.bordered)
+             .padding(.top)
+             Spacer()
+         }
+         .frame(maxWidth: .infinity, maxHeight: .infinity)
+         .refreshable { await refreshItems() }
+     }
+
+
+    // refreshItems Funktion
     func refreshItems() async {
         guard !isLoading else { return }
-        Self.logger.info("Starting refresh process for feed: \(settings.feedType.displayName)...")
-        await MainActor.run { isLoading = true; errorMessage = nil }
-        canLoadMore = true; isLoadingMore = false
 
-        // 1. Lade vorhandene Items aus dem Cache (falls vorhanden)
-        var currentItemsFromCache: [Item] = []
-        if let cachedItems = await settings.loadItemsFromCache(for: settings.feedType) {
-            if !cachedItems.isEmpty {
-                currentItemsFromCache = cachedItems
-                await MainActor.run {
-                    self.items = currentItemsFromCache
-                    Self.logger.info("Successfully loaded \(currentItemsFromCache.count) items from data cache for initial display.")
-                    if !navigationPath.isEmpty { navigationPath = NavigationPath() }
+        if !settings.hasActiveContentFilter {
+             Self.logger.warning("No active content filter selected. Clearing view and showing message.")
+             await MainActor.run {
+                 if !self.showNoFilterMessage || !self.items.isEmpty {
+                     self.items = []
+                     self.showNoFilterMessage = true
+                     self.canLoadMore = false
+                     self.isLoadingMore = false
+                     self.errorMessage = nil
+                     self.isLoading = false
+                 }
+             }
+             return
+         }
+
+        await MainActor.run {
+             if self.showNoFilterMessage { self.showNoFilterMessage = false }
+             self.isLoading = true
+             self.errorMessage = nil
+         }
+
+        let currentCacheKey = self.feedCacheKey
+        let currentApiFlags = settings.apiFlags
+        Self.logger.info("Starting refresh process for feed: \(settings.feedType.displayName) (CacheKey: \(currentCacheKey), Flags: \(currentApiFlags))...")
+        canLoadMore = true; isLoadingMore = false
+        var initialItemsFromCache: [Item]? = nil
+
+        // --- Start der asynchronen Arbeit ---
+        // Defer wird ausgeführt, wenn der aktuelle Scope (die refreshItems Funktion) verlassen wird,
+        // egal ob durch return, throw oder normales Ende.
+        defer {
+            Task { @MainActor in // Stelle sicher, dass UI-Updates auf dem Main Actor laufen
+                if self.isLoading { // Nur ändern, wenn wir noch im Ladezustand sein sollten
+                   self.isLoading = false
+                   Self.logger.info("Finishing refresh process (isLoading set to false).")
                 }
-            } else {
-                 Self.logger.info("Data cache exists but is empty for \(settings.feedType.displayName).")
-                 await MainActor.run { self.items = [] }
             }
-        } else {
-             Self.logger.info("No data cache found for \(settings.feedType.displayName).")
-             await MainActor.run { self.items = [] }
         }
 
-        // 2. Hole die *neuesten* Daten (erste Seite) von der API
-        Self.logger.info("Performing API fetch for refresh...")
-        do {
-            let fetchedItemsFromAPI = try await apiService.fetchItems(flags: settings.apiFlags, promoted: settings.apiPromoted)
-            Self.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) fresh items.")
-
-            // 3. Merge API-Daten mit Cache-Daten
-            let mergedItems: [Item]
-            if currentItemsFromCache.isEmpty {
-                mergedItems = fetchedItemsFromAPI
-                Self.logger.info("No data cache existed, using API items directly.")
+        if items.isEmpty {
+            if let cachedItems = await settings.loadItemsFromCache(forKey: currentCacheKey), !cachedItems.isEmpty {
+                initialItemsFromCache = cachedItems
+                await MainActor.run {
+                    if self.isLoading { // Check again
+                         self.items = cachedItems
+                         Self.logger.info("Temporarily displaying \(cachedItems.count) items from cache.")
+                    }
+                }
             } else {
-                let cachedItemIDs = Set(currentItemsFromCache.map { $0.id })
-                let newUniqueItems = fetchedItemsFromAPI.filter { !cachedItemIDs.contains($0.id) }
-                mergedItems = newUniqueItems + currentItemsFromCache
-                Self.logger.info("Merged \(newUniqueItems.count) new unique items with \(currentItemsFromCache.count) cached items. Total: \(mergedItems.count)")
+                 Self.logger.info("No usable data cache found or cache empty for key \(currentCacheKey).")
+            }
+        }
+
+        Self.logger.info("Performing API fetch for refresh with flags: \(currentApiFlags)...")
+        do {
+            let fetchedItemsFromAPI = try await apiService.fetchItems(flags: currentApiFlags, promoted: settings.apiPromoted)
+            Self.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) fresh items received for flags \(currentApiFlags).")
+
+            await MainActor.run {
+                guard self.isLoading else { Self.logger.info("Refresh cancelled before UI update."); return }
+                self.items = fetchedItemsFromAPI
+                self.canLoadMore = !fetchedItemsFromAPI.isEmpty
+                self.showNoFilterMessage = false
+                Self.logger.info("FeedView updated with \(fetchedItemsFromAPI.count) items directly from API.")
+                if !navigationPath.isEmpty && initialItemsFromCache != nil { navigationPath = NavigationPath() }
             }
 
-            // 4. Aktualisiere UI und speichere gemergte Liste im Daten-Cache
-            await MainActor.run {
-                self.items = mergedItems
-                if fetchedItemsFromAPI.isEmpty && currentItemsFromCache.isEmpty {
-                    self.canLoadMore = false
-                }
-                if !fetchedItemsFromAPI.isEmpty && !navigationPath.isEmpty && !currentItemsFromCache.isEmpty {
-                    navigationPath = NavigationPath()
-                }
-            }
-            // Speichere die *gemergte* Liste im Daten-Cache
-            await settings.saveItemsToCache(mergedItems, for: settings.feedType)
-            await settings.updateCurrentCacheSize() // Größe aktualisieren (Daten + Bilder)
+            await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: currentCacheKey)
+            await settings.updateCurrentCombinedCacheSize()
 
         } catch {
             Self.logger.error("API fetch failed during refresh: \(error.localizedDescription)")
             await MainActor.run {
-                if self.items.isEmpty {
+                guard self.isLoading else { Self.logger.info("Refresh cancelled before error handling."); return }
+                if initialItemsFromCache == nil || self.items.isEmpty {
+                    self.items = []
                     self.errorMessage = "Fehler beim Laden: \(error.localizedDescription)"
                 } else {
-                    Self.logger.warning("Showing cached data, but API refresh failed: \(error.localizedDescription)")
+                    Self.logger.warning("Showing potentially stale cached data because API refresh failed: \(error.localizedDescription)")
                 }
+                self.canLoadMore = false
             }
         }
-        Self.logger.info("Finishing refresh process.")
-        await MainActor.run { isLoading = false }
+        // Das 'defer' oben kümmert sich um das Zurücksetzen von isLoading
     }
 
-    // --- getIdForLoadMore (BLEIBT GLEICH) ---
+
+    // getIdForLoadMore Funktion
     private func getIdForLoadMore() -> Int? {
-        let bufferIndex = max(0, items.count - loadMoreIdBuffer - 1)
-        if items.indices.contains(bufferIndex) {
-            let id = items[bufferIndex].id
-            Self.logger.info("Using buffered ID (Buffer=\(loadMoreIdBuffer)) at index \(bufferIndex): \(id)")
-            return id
-        } else if let lastId = items.last?.id {
-            Self.logger.info("Using last ID (fallback): \(lastId)")
-            return lastId
-        } else {
+        guard let lastItem = items.last else {
             Self.logger.warning("Cannot load more: No items to get ID from.")
             return nil
         }
+        if settings.feedType == .promoted {
+             guard let promotedId = lastItem.promoted else {
+                 Self.logger.error("Cannot load more: Promoted feed active but last item (ID: \(lastItem.id)) has no 'promoted' ID.")
+                 Task { await MainActor.run { self.canLoadMore = false } }
+                 return nil
+             }
+             Self.logger.info("Using PROMOTED ID \(promotedId) from last item for 'older' parameter.")
+             return promotedId
+         } else {
+             Self.logger.info("Using ITEM ID \(lastItem.id) from last item for 'older' parameter.")
+             return lastItem.id
+         }
     }
 
-    // --- loadMoreItems Funktion (BLEIBT GLEICH) ---
+
+    // loadMoreItems Funktion
     func loadMoreItems() async {
+        guard settings.hasActiveContentFilter else {
+             Self.logger.warning("Skipping loadMoreItems: No active content filter selected.")
+             await MainActor.run { canLoadMore = false }
+             return
+         }
+
         guard !isLoadingMore && canLoadMore && !isLoading else {
              Self.logger.debug("Skipping loadMoreItems: isLoadingMore=\(isLoadingMore), canLoadMore=\(canLoadMore), isLoading=\(isLoading)")
              return
         }
-
-        guard let lastItem = items.last else {
-            Self.logger.warning("Skipping loadMoreItems: No last item found.")
+        let currentCacheKey = self.feedCacheKey
+        guard let olderValue = getIdForLoadMore() else {
+            Self.logger.warning("Skipping loadMoreItems: Could not determine 'older' value.")
+            await MainActor.run { canLoadMore = false }
             return
         }
 
-        let olderValue: Int
-        if settings.feedType == .promoted {
-            guard let promotedId = lastItem.promoted else {
-                 Self.logger.error("Skipping loadMoreItems: Promoted feed active but last item (ID: \(lastItem.id)) has no 'promoted' ID.")
-                 await MainActor.run { canLoadMore = false }
-                 return
-            }
-            olderValue = promotedId
-            Self.logger.info("Using PROMOTED ID \(olderValue) from last item for 'older' parameter.")
-        } else {
-            olderValue = lastItem.id
-            Self.logger.info("Using ITEM ID \(olderValue) from last item for 'older' parameter.")
-        }
-
-        Self.logger.info("--- Starting loadMoreItems older than \(olderValue) ---")
         await MainActor.run { isLoadingMore = true }
+        Self.logger.info("--- Starting loadMoreItems older than \(olderValue) ---")
+
+        // --- Start der asynchronen Arbeit ---
+        // Defer wird ausgeführt, wenn der aktuelle Scope (die loadMoreItems Funktion) verlassen wird.
+        defer {
+            Task { @MainActor in // UI-Updates auf Main Actor
+                 if self.isLoadingMore { // Nur ändern, wenn wir noch im Ladezustand sein sollten
+                     self.isLoadingMore = false
+                     Self.logger.info("--- Finished loadMoreItems older than \(olderValue) (isLoadingMore set to false) ---")
+                 }
+            }
+        }
 
         do {
             let newItems = try await apiService.fetchItems(
@@ -227,7 +296,8 @@ struct FeedView: View {
             Self.logger.info("Loaded \(newItems.count) more items from API (requesting older than \(olderValue)).")
 
             var appendedItemCount = 0
-            await MainActor.run { // UI Update
+            await MainActor.run {
+                 guard self.isLoadingMore else { Self.logger.info("Load more cancelled before UI update."); return }
                 if newItems.isEmpty {
                     Self.logger.info("Reached end of feed (API returned empty list for older than \(olderValue)).")
                     canLoadMore = false
@@ -237,36 +307,34 @@ struct FeedView: View {
 
                     if uniqueNewItems.isEmpty {
                         Self.logger.warning("All loaded items (older than \(olderValue)) were duplicates.")
-                        canLoadMore = false
                     } else {
                         self.items.append(contentsOf: uniqueNewItems)
                         appendedItemCount = uniqueNewItems.count
                         Self.logger.info("Appended \(uniqueNewItems.count) unique items. Total items: \(self.items.count)")
+                        self.canLoadMore = true
                     }
                 }
             }
 
-            // Speichere die *gesamte* aktuelle Liste im Daten-Cache nach dem Hinzufügen neuer Items
             if appendedItemCount > 0 {
                 let itemsToSave = await MainActor.run { self.items }
-                await settings.saveItemsToCache(itemsToSave, for: settings.feedType)
-                await settings.updateCurrentCacheSize()
+                await settings.saveItemsToCache(itemsToSave, forKey: currentCacheKey)
+                await settings.updateCurrentCombinedCacheSize()
             }
 
         } catch {
             Self.logger.error("API fetch failed during loadMoreItems: \(error.localizedDescription)")
             await MainActor.run {
+                 guard self.isLoadingMore else { return } // Check if still relevant
                 if items.isEmpty { errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" }
                 canLoadMore = false
             }
         }
-
-        await MainActor.run { isLoadingMore = false }
-        Self.logger.info("--- Finished loadMoreItems older than \(olderValue) ---")
+         // Das 'defer' oben kümmert sich um das Zurücksetzen von isLoadingMore
     }
 }
 
-// MARK: - View Extension for Loading Overlay (BLEIBT GLEICH)
+// View Extension loadingOverlay
 extension View {
     func loadingOverlay(isLoading: Bool) -> some View {
         self.overlay {
@@ -282,8 +350,10 @@ extension View {
     }
 }
 
-// MARK: - Preview (BLEIBT GLEICH)
+// Preview
 #Preview {
     MainView()
         .environmentObject(AppSettings())
+        .environmentObject(AuthService())
 }
+// --- END OF COMPLETE FILE ---

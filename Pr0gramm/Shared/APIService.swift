@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Shared/APIService.swift
+// --- START OF MODIFIED FILE ---
+
 // APIService.swift
 
 import Foundation
@@ -19,8 +22,9 @@ struct ItemComment: Codable, Identifiable, Hashable {
 }
 
 // --- Struct für /items/get Response ---
+// --- HINZUGEFÜGT: atStart ---
 struct ApiResponse: Codable {
-    let items: [Item]; let atEnd: Bool? // Item.mark bleibt Int
+    let items: [Item]; let atEnd: Bool?; let atStart: Bool? // Item.mark bleibt Int
 }
 
 // --- Structs für /user/login Response ---
@@ -74,10 +78,41 @@ class APIService {
         let request = URLRequest(url: url)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get")
+            let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (feed)")
             return apiResponse.items
-        } catch { Self.logger.error("Error during /items/get: \(error.localizedDescription)"); throw error }
+        } catch { Self.logger.error("Error during /items/get (feed): \(error.localizedDescription)"); throw error }
     }
+
+    // --- NEUE FUNKTION: fetchFavorites ---
+    func fetchFavorites(username: String, flags: Int, olderThanId: Int? = nil) async throws -> [Item] {
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
+        var queryItems = [
+            URLQueryItem(name: "flags", value: String(flags)),
+            URLQueryItem(name: "user", value: username), // Username des eingeloggten Benutzers
+            URLQueryItem(name: "collection", value: "favoriten"), // Spezifische Kollektion
+            URLQueryItem(name: "self", value: "true") // Wichtig für Benutzerdaten
+        ]
+        if let olderId = olderThanId { queryItems.append(URLQueryItem(name: "older", value: String(olderId))) }
+        urlComponents.queryItems = queryItems; guard let url = urlComponents.url else { throw URLError(.badURL) }
+
+        Self.logger.debug("Fetching favorites for user \(username) with flags \(flags), olderThan: \(olderThanId ?? -1)")
+        let request = URLRequest(url: url)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            // Wichtig: Die Antwortstruktur ist dieselbe wie bei fetchItems
+            let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (favorites)")
+            Self.logger.info("Successfully fetched \(apiResponse.items.count) favorite items for user \(username). atEnd: \(apiResponse.atEnd ?? false)")
+            return apiResponse.items
+        } catch {
+            Self.logger.error("Error during /items/get (favorites) for user \(username): \(error.localizedDescription)")
+            // Prüfe auf 401/403 - deutet auf ausgeloggten Zustand hin
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                Self.logger.warning("Fetching favorites failed: User authentication required (likely not logged in or session expired).")
+            }
+            throw error
+        }
+    }
+    // --- ENDE NEUE FUNKTION ---
 
     func fetchItemInfo(itemId: Int) async throws -> ItemsInfoResponse {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/info"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
@@ -163,3 +198,4 @@ class APIService {
         }
     }
 }
+// --- END OF MODIFIED FILE ---

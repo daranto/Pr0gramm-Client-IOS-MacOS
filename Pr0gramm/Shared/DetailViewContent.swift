@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Shared/DetailViewContent.swift
+// --- START OF MODIFIED FILE ---
+
 // DetailViewContent.swift
 
 import SwiftUI
@@ -190,9 +193,9 @@ struct DetailViewContent: View {
 
 
 // MARK: - Preview
-// ... (Previews bleiben unverändert) ...
+// --- KORRIGIERT: repost: nil, variants: nil hinzugefügt ---
 #Preview("Compact") {
-     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1)
+     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil) // <-- Hinzugefügt
      let previewHandler = KeyboardActionHandler()
      let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "Cool"), ItemTag(id: 2, confidence: 0.7, tag: "Video"), ItemTag(id: 3, confidence: 0.8, tag: "Ein etwas längerer Tag"), ItemTag(id: 4, confidence: 0.6, tag: "Mehr"), ItemTag(id: 5, confidence: 0.5, tag: "Tags"), ItemTag(id: 6, confidence: 0.4, tag: "Test") ]
      let previewComments: [ItemComment] = [ ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1), ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7) ]
@@ -212,8 +215,9 @@ struct DetailViewContent: View {
         .environment(\.horizontalSizeClass, .compact)
     }
 }
+// --- KORRIGIERT: repost: nil, variants: nil hinzugefügt ---
 #Preview("Regular") {
-     let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1)
+     let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil) // <-- Hinzugefügt
     let previewHandler = KeyboardActionHandler()
     let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")]
     let previewComments: [ItemComment] = [ ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1), ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7), ItemComment(id: 3, parent: 0, content: "Zweiter Top-Level Kommentar mit etwas längerem Text, um zu sehen, wie er umbricht.", created: Int(Date().timeIntervalSince1970) - 60, up: 10, down: 3, confidence: 0.9, name: "UserC", mark: 3), ItemComment(id: 4, parent: 3, content: "Antwort auf zweiten.", created: Int(Date().timeIntervalSince1970) - 30, up: 1, down: 0, confidence: 0.7, name: "UserA", mark: 1) ]
@@ -234,3 +238,4 @@ struct DetailViewContent: View {
     }
     .previewDevice("iPad (10th generation)")
 }
+// --- END OF MODIFIED FILE ---

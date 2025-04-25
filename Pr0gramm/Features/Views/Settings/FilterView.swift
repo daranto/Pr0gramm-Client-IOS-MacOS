@@ -1,66 +1,60 @@
-// FilterView.swift
+// Pr0gramm/Pr0gramm/Features/Views/Settings/FilterView.swift
+// --- START OF COMPLETE FILE ---
 
 import SwiftUI
 
 struct FilterView: View {
-    // Zugriff auf die globalen Einstellungen, um sie zu lesen und zu ändern.
     @EnvironmentObject var settings: AppSettings
-    // Environment-Variable, um das Sheet programmatisch zu schließen.
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
-        // NavigationStack gibt uns eine Titelzeile und Platz für einen Done-Button.
         NavigationStack {
-            // Form gruppiert die Einstellungen optisch.
             Form {
-                // --- Section 1: Feed-Typ (Neu/Beliebt) ---
+                // Section 1: Feed-Typ (unverändert)
                 Section {
-                    // Picker zur Auswahl zwischen .new und .promoted.
-                    // $settings.feedType bindet den Picker-Wert direkt an die Einstellung.
                     Picker("Feed Typ", selection: $settings.feedType) {
-                        // Iteriert durch alle Fälle des FeedType Enums.
                         ForEach(FeedType.allCases) { type in
                             Text(type.displayName).tag(type)
                         }
                     }
-                    // Segmented Picker Style ist oft passend für wenige Optionen.
                     .pickerStyle(.segmented)
                 } header: {
-                    Text("Anzeige") // Überschrift für die Section
+                    Text("Anzeige")
                 }
 
-                // --- Section 2: Content Flags ---
+                // Section 2: Content Flags (Angepasst)
                 Section {
-                    // Toggles für die einzelnen Flags.
-                    // $settings.showSFW etc. bindet den Toggle-Status direkt.
                     Toggle("SFW (Safe for Work)", isOn: $settings.showSFW)
                     Toggle("NSFW (Not Safe for Work)", isOn: $settings.showNSFW)
                     Toggle("NSFL (Not Safe for Life)", isOn: $settings.showNSFL)
-                    Toggle("POL (Politik/Religion)", isOn: $settings.showPOL) // Beispielname
+                    // --- UM BENANNT ---
+                    Toggle("NSFP (Not Safe for Public)", isOn: $settings.showNSFP) // Bindet an showNSFP (Flag 8)
+                    // --- NEU ---
+                    Toggle("POL (Politik)", isOn: $settings.showPOL) // Bindet an showPOL (Flag 16)
+                    // ---------------
                 } header: {
                     Text("Inhaltsfilter")
                 } footer: {
-                     // Wichtiger Hinweis für den Benutzer
-                     Text("Achtung: Die Anzeige von NSFW/NSFL Inhalten unterliegt den App Store Richtlinien.")
+                     Text("Achtung: Die Anzeige von NSFW/NSFL/NSFP Inhalten unterliegt den App Store Richtlinien.") // Text angepasst
                 }
-            } // Ende Form
-            .navigationTitle("Filter") // Titel der Filter-Ansicht
+            }
+            .navigationTitle("Filter")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline) // Kleiner Titel auf iOS
+            .navigationBarTitleDisplayMode(.inline)
             #endif
-            // --- Toolbar mit Done-Button ---
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { // Oben rechts
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Fertig") {
-                        dismiss() // Schließt das Sheet
+                        dismiss()
                     }
                 }
             }
-        } // Ende NavigationStack
+        }
     }
 }
 
 #Preview {
     FilterView()
-        .environmentObject(AppSettings()) // Preview braucht Einstellungen
+        .environmentObject(AppSettings())
 }
+// --- END OF COMPLETE FILE ---
