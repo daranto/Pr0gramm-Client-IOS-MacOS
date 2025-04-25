@@ -45,7 +45,6 @@ struct CaptchaResponse: Codable {
 struct ProfileInfoResponse: Codable {
     let user: ApiProfileUser
     let commentCount: Int?; let uploadCount: Int?; let tagCount: Int?
-    // Füge hier weitere Top-Level Felder hinzu, falls benötigt
 }
 
 // Struktur für das 'user'-Objekt innerhalb von ProfileInfoResponse
@@ -83,64 +82,73 @@ class APIService {
         } catch { Self.logger.error("Error during /items/get (feed): \(error.localizedDescription)"); throw error }
     }
 
-    // --- NEUE FUNKTION: fetchItem ---
     func fetchItem(id: Int, flags: Int) async throws -> Item? {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
-        // Wichtig: 'id' und 'flags' Parameter verwenden
         let queryItems = [
             URLQueryItem(name: "id", value: String(id)),
             URLQueryItem(name: "flags", value: String(flags))
         ]
         urlComponents.queryItems = queryItems
         guard let url = urlComponents.url else { throw URLError(.badURL) }
-
         Self.logger.debug("Fetching single item with ID \(id) and flags \(flags)")
         let request = URLRequest(url: url)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (single item)")
-            // Finde das Item mit der passenden ID in der Antwort (sollte nur eines sein)
-            let foundItem = apiResponse.items.first { $0.id == id }
-            if foundItem == nil {
-                Self.logger.warning("API returned items for ID \(id), but none matched the requested ID.")
-            }
+            let foundItem = apiResponse.items.first // API should only return one if ID matches
+            if foundItem == nil && !apiResponse.items.isEmpty { Self.logger.warning("API returned items for ID \(id), but none matched the requested ID.") }
+            else if apiResponse.items.count > 1 { Self.logger.warning("API returned \(apiResponse.items.count) items when fetching single ID \(id).") }
             return foundItem
-        } catch {
-            Self.logger.error("Error during /items/get (single item) for ID \(id): \(error.localizedDescription)")
-            throw error
-        }
+        } catch { Self.logger.error("Error during /items/get (single item) for ID \(id): \(error.localizedDescription)"); throw error }
     }
-    // --- ENDE NEUE FUNKTION ---
-
 
     func fetchFavorites(username: String, flags: Int, olderThanId: Int? = nil) async throws -> [Item] {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
         var queryItems = [
             URLQueryItem(name: "flags", value: String(flags)),
-            URLQueryItem(name: "user", value: username), // Username des eingeloggten Benutzers
-            URLQueryItem(name: "collection", value: "favoriten"), // Spezifische Kollektion
-            URLQueryItem(name: "self", value: "true") // Wichtig für Benutzerdaten
+            URLQueryItem(name: "user", value: username),
+            URLQueryItem(name: "collection", value: "favoriten"),
+            URLQueryItem(name: "self", value: "true")
         ]
         if let olderId = olderThanId { queryItems.append(URLQueryItem(name: "older", value: String(olderId))) }
         urlComponents.queryItems = queryItems; guard let url = urlComponents.url else { throw URLError(.badURL) }
-
         Self.logger.debug("Fetching favorites for user \(username) with flags \(flags), olderThan: \(olderThanId ?? -1)")
         let request = URLRequest(url: url)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            // Wichtig: Die Antwortstruktur ist dieselbe wie bei fetchItems
             let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (favorites)")
             Self.logger.info("Successfully fetched \(apiResponse.items.count) favorite items for user \(username). atEnd: \(apiResponse.atEnd ?? false)")
             return apiResponse.items
+        } catch { Self.logger.error("Error during /items/get (favorites) for user \(username): \(error.localizedDescription)"); if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { Self.logger.warning("Fetching favorites failed: User authentication required.") }; throw error }
+    }
+
+    // --- NEUE FUNKTION: searchItems ---
+    func searchItems(tags: String, flags: Int) async throws -> [Item] {
+        // Search uses /items/get with 'tags' parameter.
+        // 'promoted=0' ensures we search both new/promoted, respecting 'flags'.
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
+        let queryItems = [
+            URLQueryItem(name: "tags", value: tags),
+            URLQueryItem(name: "flags", value: String(flags)),
+            URLQueryItem(name: "promoted", value: "0") // Search all
+        ]
+        urlComponents.queryItems = queryItems
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+
+        Self.logger.info("Searching items with tags '\(tags)' and flags \(flags)")
+        let request = URLRequest(url: url)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (search)")
+            Self.logger.info("Search returned \(apiResponse.items.count) items for tags '\(tags)'. atEnd: \(apiResponse.atEnd ?? false)")
+            // Maybe add logic here later to handle pagination ('atEnd') if needed
+            return apiResponse.items
         } catch {
-            Self.logger.error("Error during /items/get (favorites) for user \(username): \(error.localizedDescription)")
-            // Prüfe auf 401/403 - deutet auf ausgeloggten Zustand hin
-            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
-                Self.logger.warning("Fetching favorites failed: User authentication required (likely not logged in or session expired).")
-            }
+            Self.logger.error("Error during /items/get (search) for tags '\(tags)': \(error.localizedDescription)")
             throw error
         }
     }
+    // --- ENDE NEUE FUNKTION ---
 
     func fetchItemInfo(itemId: Int) async throws -> ItemsInfoResponse {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/info"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }

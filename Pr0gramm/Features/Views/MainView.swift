@@ -27,10 +27,20 @@ struct MainView: View {
                 case .profile: ProfileView()
                 case .settings: SettingsView()
                 }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            tabBarHStack.background { Rectangle().fill(.bar).ignoresSafeArea(edges: .bottom) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity) // Content takes available space
+
+            Divider() // Divider remains above tab bar
+
+            tabBarHStack
+                .background { Rectangle().fill(.bar).ignoresSafeArea(edges: .bottom) } // Background ignores bottom edge relative to the HStack
+
         }
+        // --- MODIFICATION HERE ---
+        // Tell the entire VStack to ignore the keyboard inset at the bottom.
+        // This keeps the VStack's frame fixed, preventing the tabBarHStack from being pushed up.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        // --- END MODIFICATION ---
     }
 
     private var tabBarHStack: some View {
@@ -40,31 +50,69 @@ struct MainView: View {
                  else {
                      Button { handleTap(on: tab) } label: {
                          TabBarButtonLabel(iconName: iconName(for: tab), label: label(for: tab), isSelected: selectedTab == tab)
-                     }.buttonStyle(.plain).frame(minWidth: 40, maxWidth: .infinity)
+                     }
+                     .buttonStyle(.plain)
+                     .frame(minWidth: 40, maxWidth: .infinity)
                  }
             }
-        }.padding(.horizontal).padding(.top, 5).padding(.bottom, 4)
+        }
+        .padding(.horizontal)
+        .padding(.top, 5)
+         // Padding at the bottom might now be less necessary or could be adjusted
+         // depending on whether you want space below the icons *above* the absolute bottom.
+         // Let's keep it for now for spacing above the screen edge.
+        .padding(.bottom, 4)
     }
 
     private func handleTap(on tab: Tab) {
-        if tab == .feed && selectedTab == .feed { print("Feed tab tapped again. Triggering pop to root."); feedPopToRootTrigger = UUID() }
-        else { selectedTab = tab }
+        if tab == .feed && selectedTab == .feed {
+            print("Feed tab tapped again. Triggering pop to root.")
+            feedPopToRootTrigger = UUID()
+        } else {
+            selectedTab = tab
+        }
     }
-    private func iconName(for tab: Tab) -> String { switch tab { case .feed: "square.grid.2x2.fill"; case .favorites: "heart.fill"; case .search: "magnifyingglass"; case .profile: "person.crop.circle"; case .settings: "gearshape.fill" } }
-    private func label(for tab: Tab) -> String { switch tab { case .feed: settings.feedType.displayName; case .favorites: "Favoriten"; case .search: "Suche"; case .profile: "Profil"; case .settings: "Einstellungen" } }
+
+    private func iconName(for tab: Tab) -> String {
+        switch tab {
+            case .feed: "square.grid.2x2.fill"
+            case .favorites: "heart.fill"
+            case .search: "magnifyingglass"
+            case .profile: "person.crop.circle"
+            case .settings: "gearshape.fill"
+        }
+    }
+
+    private func label(for tab: Tab) -> String {
+        switch tab {
+            case .feed: settings.feedType.displayName
+            case .favorites: "Favoriten"
+            case .search: "Suche"
+            case .profile: "Profil"
+            case .settings: "Einstellungen"
+        }
+    }
 }
 
 struct TabBarButtonLabel: View {
     let iconName: String, label: String, isSelected: Bool
-    var body: some View { VStack(spacing: 2) { Image(systemName: iconName).font(.body).symbolVariant(isSelected ? .fill : .none); Text(label).font(.caption2).lineLimit(1) }.padding(.vertical, 3).foregroundStyle(isSelected ? Color.accentColor : .secondary) }
+    var body: some View {
+        VStack(spacing: 2) {
+             Image(systemName: iconName)
+                 .font(.body) // Adjusted for typical tab bar size
+                 .symbolVariant(isSelected ? .fill : .none)
+             Text(label)
+                 .font(.caption2) // Standard caption size
+                 .lineLimit(1)
+        }
+        .padding(.vertical, 3) // Minimal vertical padding
+        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+    }
 }
 
-// --- Preview KORRIGIERT ---
 #Preview {
-    // Erstelle beide Services
     let settings = AppSettings()
-    let authService = AuthService(appSettings: settings) // Übergebe settings
-    // Gib View zurück
+    let authService = AuthService(appSettings: settings)
     MainView()
         .environmentObject(settings)
         .environmentObject(authService)
