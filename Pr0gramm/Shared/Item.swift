@@ -4,7 +4,7 @@
 // Item.swift
 import Foundation
 
-// Item struct erweitert um optionale repost und variants Felder
+// Item struct erweitert um optionale repost, variants und favorited Felder
 struct Item: Codable, Identifiable, Hashable {
     let id: Int
     let promoted: Int? // Kann für zukünftige Logik nützlich sein
@@ -23,8 +23,9 @@ struct Item: Codable, Identifiable, Hashable {
     let flags: Int   // SFW, NSFW etc.
     let user: String
     let mark: Int
-    let repost: Bool? // <-- HINZUGEFÜGT: Optional Bool für Repost-Status
-    let variants: [ItemVariant]? // <-- HINZUGEFÜGT: Optional Array für Video-Varianten
+    let repost: Bool?
+    let variants: [ItemVariant]?
+    var favorited: Bool? // <-- HINZUGEFÜGT: Optional Bool für lokalen Favoritenstatus
 
     // --- Computed Properties (unverändert) ---
     var isVideo: Bool {

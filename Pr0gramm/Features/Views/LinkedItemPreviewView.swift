@@ -107,24 +107,23 @@ struct LinkedItemPreviewView: View {
 #Preview("Loading") {
     // Preview benötigt Wrapper für Environment Objects
     LinkedItemPreviewWrapperView(itemID: 12345)
-        .environmentObject(AppSettings())
-        .environmentObject(AuthService(appSettings: AppSettings()))
+        .environmentObject(AppSettings()) // <-- Korrekt hier erstellt
+        .environmentObject(AuthService(appSettings: AppSettings())) // <-- Korrekt hier erstellt
 }
 
 #Preview("Error") {
-    // Preview benötigt Wrapper für Environment Objects
-     struct ErrorPreviewWrapper: View {
-         @StateObject var settings = AppSettings()
-         @StateObject var auth = AuthService(appSettings: AppSettings())
+    // --- KORREKTUR HIER ---
+    // Erstelle die Services *direkt hier* im Preview-Body
+    let settings = AppSettings()
+    let auth = AuthService(appSettings: settings) // Erstelle Auth mit Settings
 
-         var body: some View {
-             // Modifiziere den Zustand, um einen Fehler zu simulieren
-             // (Direkter State ist hier schwierig, daher nur Grundansicht)
-             LinkedItemPreviewWrapperView(itemID: 999)
-                 .environmentObject(settings)
-                 .environmentObject(auth)
-         }
-     }
-     return ErrorPreviewWrapper()
+    // Setze einen Fehlerzustand (optional, da die View selbst lädt)
+    // auth.loginError = "Simulierter Fehler" // Direktes Setzen ist hier schwer, da die View intern lädt
+
+    // Gib die Wrapper View zurück und injiziere die Services
+    return LinkedItemPreviewWrapperView(itemID: 999)
+        .environmentObject(settings)
+        .environmentObject(auth)
+    // --- ENDE KORREKTUR ---
 }
 // --- END OF COMPLETE FILE ---

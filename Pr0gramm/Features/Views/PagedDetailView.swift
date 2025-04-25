@@ -9,10 +9,10 @@ import AVKit
 
 // --- Wrapper Struct für Sheet Item (unverändert) ---
 struct PreviewLinkTarget: Identifiable {
-    let id: Int // Die Item-ID selbst dient als Identifikator
+    let id: Int
 }
 
-// --- PagedDetailTabViewItem (unverändert) ---
+// --- PagedDetailTabViewItem ---
 struct PagedDetailTabViewItem: View {
     let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
@@ -27,6 +27,8 @@ struct PagedDetailTabViewItem: View {
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
     @Binding var previewLinkTarget: PreviewLinkTarget?
+    let isFavorited: Bool
+    let toggleFavoriteAction: () async -> Void
 
     var body: some View {
         DetailViewContent(
@@ -38,7 +40,9 @@ struct PagedDetailTabViewItem: View {
             tags: tags,
             comments: comments,
             infoLoadingStatus: infoLoadingStatus,
-            previewLinkTarget: $previewLinkTarget
+            previewLinkTarget: $previewLinkTarget,
+            isFavorited: isFavorited,
+            toggleFavoriteAction: toggleFavoriteAction
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -51,7 +55,7 @@ struct PagedDetailTabViewItem: View {
 
 
 struct PagedDetailView: View {
-    let items: [Item]
+    @State var items: [Item]
     @State private var selectedIndex: Int
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var settings: AppSettings
@@ -63,19 +67,22 @@ struct PagedDetailView: View {
     @State private var playerItemID: Int? = nil
     @State private var muteObserver: NSKeyValueObservation? = nil
     @State private var loopObserver: NSObjectProtocol? = nil
-
     @State private var isFullscreen = false
-
     @State private var loadedInfos: [Int: ItemsInfoResponse] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
     private let apiService = APIService()
-
     @State private var previewLinkTarget: PreviewLinkTarget? = nil
+    @State private var isTogglingFavorite = false
 
     init(items: [Item], selectedIndex: Int) {
-        self.items = items
+        self._items = State(initialValue: items)
         self._selectedIndex = State(initialValue: selectedIndex)
         Self.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex)")
+    }
+
+    private var isCurrentItemFavorited: Bool {
+        guard selectedIndex >= 0 && selectedIndex < items.count else { return false }
+        return items[selectedIndex].favorited ?? false
     }
 
     var body: some View {
@@ -109,7 +116,9 @@ struct PagedDetailView: View {
                              self.player?.play()
                          }
                     },
-                    previewLinkTarget: $previewLinkTarget
+                    previewLinkTarget: $previewLinkTarget,
+                    isFavorited: items[index].favorited ?? false,
+                    toggleFavoriteAction: toggleFavorite
                 )
                 .tag(index)
             }
@@ -128,10 +137,12 @@ struct PagedDetailView: View {
                   Task { await setupAndPlayPlayerIfNeeded(for: items[newValue]) }
                   Task { await loadInfoIfNeeded(for: items[newValue]) }
              }
+             isTogglingFavorite = false
         }
         .onAppear {
             Self.logger.info("PagedDetailView appeared. Setting up keyboard actions.")
             isFullscreen = false
+            isTogglingFavorite = false
             keyboardActionHandler.selectNextAction = self.selectNext
             keyboardActionHandler.selectPreviousAction = self.selectPrevious
             if selectedIndex >= 0 && selectedIndex < items.count {
@@ -159,7 +170,7 @@ struct PagedDetailView: View {
     }
 
     // MARK: - Player Management Methoden (unverändert)
-     private func setupAndPlayPlayerIfNeeded(for item: Item) async {
+    private func setupAndPlayPlayerIfNeeded(for item: Item) async {
         guard item.isVideo else {
             Self.logger.debug("Item \(item.id) is not a video. Skipping player setup.")
             if playerItemID != nil { cleanupCurrentPlayer() }
@@ -228,15 +239,12 @@ struct PagedDetailView: View {
              Self.logger.debug("Skipping initial play because isFullscreen is true (should not happen here ideally).")
         }
     }
-
-
     private func cleanupCurrentPlayerIfNeeded(for item: Item) {
         if playerItemID == item.id {
             Self.logger.debug("Cleaning up player for previous item \(item.id) due to index change.")
             cleanupCurrentPlayer()
         }
     }
-
     private func cleanupCurrentPlayer() {
         guard player != nil || muteObserver != nil || loopObserver != nil else { return }
         let currentItemID = self.playerItemID ?? -1
@@ -256,27 +264,16 @@ struct PagedDetailView: View {
 
         Self.logger.debug("Player state cleanup finished for item \(currentItemID).")
     }
-
-
-    // --- loadInfoIfNeeded (RESTRUKTURIERT) ---
-     private func loadInfoIfNeeded(for item: Item) async {
+    private func loadInfoIfNeeded(for item: Item) async {
         let itemId = item.id
         let currentStatus = infoLoadingStatus[itemId]
-
-        // Guard-Bedingung: Weitermachen, WENN NICHT (.loading oder .loaded)
         guard !(currentStatus == .loading || currentStatus == .loaded) else {
-            // Wenn wir hier sind, ist der Status .loading oder .loaded -> Überspringen
             Self.logger.trace("Skipping info load for item \(itemId) - already loaded or loading.")
-            return // Explizites return hier stellt sicher, dass der Guard-Body endet
+            return
         }
-
-        // Wenn wir hier sind, ist der Status nil, .idle oder .error
-        // Logge, wenn wir einen Fehler-Retry machen
         if case .error = currentStatus {
             Self.logger.debug("Retrying info load for item \(itemId) after previous error.")
         }
-
-        // Fortfahren mit dem Laden
         Self.logger.debug("Starting info load for item \(itemId)...")
         await MainActor.run { infoLoadingStatus[itemId] = .loading }
         do {
@@ -293,17 +290,11 @@ struct PagedDetailView: View {
             }
         }
     }
-
-
-    // --- Navigation Helpers (unverändert) ---
-     private func selectNext() { if canSelectNext { selectedIndex += 1 } }
+    private func selectNext() { if canSelectNext { selectedIndex += 1 } }
     private var canSelectNext: Bool { selectedIndex < items.count - 1 }
     private func selectPrevious() { if canSelectPrevious { selectedIndex -= 1 } }
     private var canSelectPrevious: Bool { selectedIndex > 0 }
-
-
-    // --- currentItemTitle (unverändert) ---
-      private var currentItemTitle: String {
+    private var currentItemTitle: String {
         guard selectedIndex >= 0 && selectedIndex < items.count else { return "Detail" }
         let currentItem = items[selectedIndex]
         let status = infoLoadingStatus[currentItem.id] ?? .idle
@@ -318,6 +309,77 @@ struct PagedDetailView: View {
         }
     }
 
+    // MARK: - Favoriten-Logik
+    private func toggleFavorite() async {
+        let localSettings = self.settings
+
+        guard !isTogglingFavorite else {
+            Self.logger.debug("Favorite toggle skipped: Action already in progress.")
+            return
+        }
+        guard selectedIndex >= 0 && selectedIndex < items.count else {
+            Self.logger.error("Favorite toggle failed: Invalid selected index \(selectedIndex).")
+            return
+        }
+        guard authService.isLoggedIn else {
+            Self.logger.warning("Favorite toggle failed: User is not logged in.")
+            return
+        }
+        guard let nonce = authService.userNonce else {
+             Self.logger.error("Favorite toggle failed: User nonce is missing. Please try logging out and back in.")
+             // Optional: Zeige dem Nutzer eine Meldung
+             return
+        }
+        // --- Guard für Collection ID wieder rein! ---
+        guard let collectionId = authService.favoritesCollectionId else {
+            Self.logger.error("Favorite toggle failed: Favorites Collection ID is missing in AuthService.")
+            // Optional: Zeige dem Nutzer eine Fehlermeldung
+            return
+        }
+        // --- ENDE ---
+
+        let currentItemIndex = selectedIndex
+        let itemToToggle = items[currentItemIndex]
+        let itemId = itemToToggle.id
+        let targetFavoriteState = !(itemToToggle.favorited ?? false)
+
+        Self.logger.info("Attempting to set favorite status for item \(itemId) to \(targetFavoriteState). Nonce: \(nonce)") // Log ohne collectionId, da nur bei Remove relevant
+        isTogglingFavorite = true
+
+        items[currentItemIndex].favorited = targetFavoriteState // Optimistic UI
+
+        do {
+            // --- KORRIGIERTE API-AUFRUFE ---
+            if targetFavoriteState {
+                // addToCollection erwartet KEINE collectionId
+                try await apiService.addToCollection(itemId: itemId, nonce: nonce)
+            } else {
+                // removeFromCollection erwartet die collectionId
+                try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
+            }
+            // --- ENDE KORREKTUR ---
+
+            Self.logger.info("Successfully toggled favorite status for item \(itemId) via API.")
+
+            await localSettings.clearFavoritesCache() // Cache invalidieren
+            await localSettings.updateCacheSizes()
+
+        } catch {
+            Self.logger.error("Failed to toggle favorite status for item \(itemId): \(error.localizedDescription)")
+            // Rollback bei Fehler
+            if selectedIndex == currentItemIndex {
+                items[currentItemIndex].favorited = !targetFavoriteState
+            }
+            // Optional: Fehlermeldung anzeigen
+        }
+
+        // Zustand nur zurücksetzen, wenn das Item noch das aktuelle ist
+        if selectedIndex == currentItemIndex {
+             isTogglingFavorite = false
+        } else {
+            Self.logger.info("Favorite toggle finished, but selected index changed during operation. isTogglingFavorite remains false for new item.")
+        }
+    }
 
 } // Ende struct PagedDetailView
 
@@ -350,17 +412,24 @@ struct LinkedItemPreviewWrapperView: View {
 }
 
 
-// MARK: - Preview (unverändert)
+// MARK: - Preview (favoritesCollectionId wieder hinzugefügt für Guard)
 #Preview("Preview") {
-    let sampleItems = [
-        Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil),
-        Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil),
-        Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: Int(Date().timeIntervalSince1970) - 50, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil)
+    var sampleItems = [
+        Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false),
+        Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true),
+        Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: Int(Date().timeIntervalSince1970) - 50, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil, favorited: nil)
     ]
     let settings = AppSettings()
-    let authService = AuthService(appSettings: settings)
+    let authService: AuthService = {
+        let auth = AuthService(appSettings: settings)
+        auth.isLoggedIn = true
+        auth.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1)
+        auth.userNonce = "preview_nonce_12345"
+        auth.favoritesCollectionId = 6749 // Beispiel ID wieder rein für den Guard
+        return auth
+    }()
 
-    return NavigationStack {
+    NavigationStack {
         PagedDetailView(items: sampleItems, selectedIndex: 1)
     }
     .environmentObject(settings)

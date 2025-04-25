@@ -8,8 +8,6 @@ import os
 import UIKit // Import UIKit für UIImage
 
 // MARK: - API Data Structures (Top Level)
-
-// --- Structs für /items/info Response ---
 struct ItemsInfoResponse: Codable {
     let tags: [ItemTag]
     let comments: [ItemComment]
@@ -21,43 +19,48 @@ struct ItemComment: Codable, Identifiable, Hashable {
     let id: Int; let parent: Int?; let content: String; let created: Int
     let up: Int; let down: Int; let confidence: Double; let name: String; let mark: Int // Bleibt Int
 }
-
-// --- Struct für /items/get Response ---
 struct ApiResponse: Codable {
     let items: [Item]; let atEnd: Bool?; let atStart: Bool? // Item.mark bleibt Int
 }
-
-// --- Structs für /user/login Response ---
 struct LoginResponse: Codable {
-    let success: Bool; let error: String?; let ban: BanInfo?
+    let success: Bool; let error: String?; let ban: BanInfo?; let nonce: NonceInfo? // Nonce hier *könnte* veraltet sein
 }
 struct BanInfo: Codable {
     let banned: Bool; let reason: String; let till: Int?; let userId: Int?
 }
-
-// --- Struct für /user/captcha Response ---
+struct NonceInfo: Codable {
+    let nonce: String
+} // Bleibt, falls API es doch mal liefert
 struct CaptchaResponse: Codable {
     let token: String
     let captcha: String // Base64 encoded image string
 }
-
-// --- Struct für die /profile/info Antwort ---
 struct ProfileInfoResponse: Codable {
     let user: ApiProfileUser
     let commentCount: Int?; let uploadCount: Int?; let tagCount: Int?
 }
-
-// Struktur für das 'user'-Objekt innerhalb von ProfileInfoResponse
 struct ApiProfileUser: Codable, Hashable {
     let id: Int; let name: String; let registered: Int; let score: Int
     let mark: Int // <-- Bleibt Int von der API
     let up: Int?; let down: Int?; let banned: Int?; let bannedUntil: Int?
 }
-
-// UserInfo-Struktur - Zielformat für AuthService & Views
 struct UserInfo: Codable, Hashable {
     let id: Int; let name: String; let registered: Int; let score: Int
     let mark: Int // <-- Bleibt Int
+}
+struct CollectionsResponse: Codable {
+    let collections: [ApiCollection]
+}
+struct ApiCollection: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let keyword: String?
+    let isPublic: Int
+    let isDefault: Int
+    let itemCount: Int
+}
+struct UserSyncResponse: Codable {
+    let likeNonce: String? // Name laut Referenz-Repo
 }
 
 
@@ -95,7 +98,7 @@ class APIService {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (single item)")
-            let foundItem = apiResponse.items.first // API should only return one if ID matches
+            let foundItem = apiResponse.items.first
             if foundItem == nil && !apiResponse.items.isEmpty { Self.logger.warning("API returned items for ID \(id), but none matched the requested ID.") }
             else if apiResponse.items.count > 1 { Self.logger.warning("API returned \(apiResponse.items.count) items when fetching single ID \(id).") }
             return foundItem
@@ -118,14 +121,16 @@ class APIService {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (favorites)")
             Self.logger.info("Successfully fetched \(apiResponse.items.count) favorite items for user \(username). atEnd: \(apiResponse.atEnd ?? false)")
-            return apiResponse.items
+            let favoritedItems = apiResponse.items.map { item -> Item in
+                var mutableItem = item
+                mutableItem.favorited = true
+                return mutableItem
+            }
+            return favoritedItems
         } catch { Self.logger.error("Error during /items/get (favorites) for user \(username): \(error.localizedDescription)"); if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { Self.logger.warning("Fetching favorites failed: User authentication required.") }; throw error }
     }
 
-    // --- NEUE FUNKTION: searchItems ---
     func searchItems(tags: String, flags: Int) async throws -> [Item] {
-        // Search uses /items/get with 'tags' parameter.
-        // 'promoted=0' ensures we search both new/promoted, respecting 'flags'.
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
         let queryItems = [
             URLQueryItem(name: "tags", value: tags),
@@ -134,21 +139,15 @@ class APIService {
         ]
         urlComponents.queryItems = queryItems
         guard let url = urlComponents.url else { throw URLError(.badURL) }
-
         Self.logger.info("Searching items with tags '\(tags)' and flags \(flags)")
         let request = URLRequest(url: url)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (search)")
             Self.logger.info("Search returned \(apiResponse.items.count) items for tags '\(tags)'. atEnd: \(apiResponse.atEnd ?? false)")
-            // Maybe add logic here later to handle pagination ('atEnd') if needed
             return apiResponse.items
-        } catch {
-            Self.logger.error("Error during /items/get (search) for tags '\(tags)': \(error.localizedDescription)")
-            throw error
-        }
+        } catch { Self.logger.error("Error during /items/get (search) for tags '\(tags)': \(error.localizedDescription)"); throw error }
     }
-    // --- ENDE NEUE FUNKTION ---
 
     func fetchItemInfo(itemId: Int) async throws -> ItemsInfoResponse {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/info"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
@@ -189,7 +188,7 @@ class APIService {
     }
 
     func fetchCaptcha() async throws -> CaptchaResponse {
-        let endpoint = "/user/captcha"; let url = baseURL.appendingPathComponent(endpoint); let request = URLRequest(url: url); Self.logger.info("Fetching new captcha...")
+        let endpoint = "/user/captcha"; let url = baseURL.appendingPathComponent(endpoint); var request = URLRequest(url: url); Self.logger.info("Fetching new captcha...")
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let captchaResponse: CaptchaResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint)
@@ -215,6 +214,108 @@ class APIService {
         }
     }
 
+    func getUserCollections() async throws -> CollectionsResponse {
+        let endpoint = "/collections/get"
+        Self.logger.info("Fetching user collections...")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            return try handleApiResponse(data: data, response: response, endpoint: endpoint)
+        } catch {
+            Self.logger.error("Failed to fetch user collections: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    func syncUser(offset: Int = 0) async throws -> UserSyncResponse {
+        let endpoint = "/user/sync"
+        Self.logger.info("Performing user sync with offset \(offset)...")
+
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        urlComponents.queryItems = [
+            URLQueryItem(name: "offset", value: String(offset))
+        ]
+        guard let url = urlComponents.url else {
+             throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            return try handleApiResponse(data: data, response: response, endpoint: endpoint + " (offset: \(offset))")
+        } catch {
+            Self.logger.error("Failed to sync user (offset \(offset)): \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    // --- Favoriten-Endpunkte (Add OHNE, Remove MIT collectionId) ---
+    func addToCollection(itemId: Int, nonce: String) async throws { // OHNE collectionId
+        let endpoint = "/collections/add"
+        Self.logger.info("Attempting to add item \(itemId) to default collection (Favorites).")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "itemId", value: String(itemId)),
+            URLQueryItem(name: "_nonce", value: nonce)
+        ]
+        request.httpBody = components.query?.data(using: .utf8)
+
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            try handleApiResponseVoid(response: response, endpoint: endpoint + " (item: \(itemId))")
+            Self.logger.info("Successfully sent add to collection request for item \(itemId).")
+        } catch {
+            Self.logger.error("Failed to add item \(itemId) to collection: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    func removeFromCollection(itemId: Int, collectionId: Int, nonce: String) async throws { // MIT collectionId
+        let endpoint = "/collections/remove"
+        Self.logger.info("Attempting to remove item \(itemId) from collection \(collectionId).")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "itemId", value: String(itemId)),
+            URLQueryItem(name: "collectionId", value: String(collectionId)), // Wieder hinzugefügt
+            URLQueryItem(name: "_nonce", value: nonce)
+        ]
+        request.httpBody = components.query?.data(using: .utf8)
+
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            try handleApiResponseVoid(response: response, endpoint: endpoint + " (item: \(itemId), collection: \(collectionId))")
+            Self.logger.info("Successfully sent remove from collection request for item \(itemId).")
+        } catch {
+            Self.logger.error("Failed to remove item \(itemId) from collection \(collectionId): \(error.localizedDescription)")
+            throw error
+        }
+    }
+    // --- ENDE ---
+
+
     // MARK: - Helper Methods
     private func handleApiResponse<T: Decodable>(data: Data, response: URLResponse, endpoint: String) throws -> T {
         guard let httpResponse = response as? HTTPURLResponse else { Self.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }
@@ -232,6 +333,45 @@ class APIService {
              if let jsonString = String(data: data, encoding: .utf8) { Self.logger.error("Problematic JSON string (\(endpoint)): \(jsonString)") }
             throw error
         }
+    }
+
+    private func handleApiResponseVoid(response: URLResponse, endpoint: String) throws {
+         guard let httpResponse = response as? HTTPURLResponse else {
+             Self.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse.");
+             throw URLError(.cannotParseResponse)
+         }
+         guard (200..<300).contains(httpResponse.statusCode) else {
+             Self.logger.error("API Error (\(endpoint)): Invalid HTTP status code: \(httpResponse.statusCode).")
+             if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                 throw URLError(.userAuthenticationRequired, userInfo: [NSLocalizedDescriptionKey: "Authentication failed for \(endpoint)"])
+             }
+             throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(httpResponse.statusCode) for \(endpoint)."])
+         }
+    }
+
+    private func logRequestDetails(_ request: URLRequest, for endpoint: String) {
+        Self.logger.debug("--- Request Details for \(endpoint) ---")
+        if let url = request.url {
+            Self.logger.debug("URL: \(url.absoluteString)")
+        } else {
+            Self.logger.debug("URL: MISSING")
+        }
+        Self.logger.debug("Method: \(request.httpMethod ?? "MISSING")")
+        Self.logger.debug("Headers:")
+        request.allHTTPHeaderFields?.forEach { key, value in
+            Self.logger.debug("- \(key): \(value)")
+        }
+        if request.allHTTPHeaderFields == nil || request.allHTTPHeaderFields?.isEmpty == true {
+             Self.logger.debug("- (No Headers)")
+        }
+
+        Self.logger.debug("Body:")
+        if let bodyData = request.httpBody, let bodyString = String(data: bodyData, encoding: .utf8) {
+            Self.logger.debug("\(bodyString)")
+        } else {
+            Self.logger.debug("(No Body or Could not decode body)")
+        }
+        Self.logger.debug("--- End Request Details ---")
     }
 }
 // --- END OF COMPLETE FILE ---

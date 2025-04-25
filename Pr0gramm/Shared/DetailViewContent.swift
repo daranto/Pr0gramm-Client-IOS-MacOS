@@ -9,7 +9,7 @@ import Combine
 import os
 
 // DetailImageView (unverändert)
-struct DetailImageView: View { /* ... */
+struct DetailImageView: View {
     let item: Item
     let logger: Logger
     let cleanupAction: () -> Void
@@ -39,11 +39,19 @@ struct DetailViewContent: View {
     let infoLoadingStatus: InfoLoadingStatus
     @Binding var previewLinkTarget: PreviewLinkTarget? // For comment link previews
 
-    // Inject NavigationService
+    // --- NEU: Favoriten-Status und Aktion ---
+    let isFavorited: Bool
+    let toggleFavoriteAction: () async -> Void
+    // --- ENDE NEU ---
+
+    // Inject Services
     @EnvironmentObject var navigationService: NavigationService
+    @EnvironmentObject var authService: AuthService // Für Login-Check
 
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
+    // --- NEU: State für Favoriten-Button-Deaktivierung ---
+    @State private var isProcessingFavorite = false
 
     // MARK: - Computed View Properties
 
@@ -68,20 +76,47 @@ struct DetailViewContent: View {
         }
     }
 
-    // Make Tags into Buttons
+    // --- NEU: Favoriten Button ---
+    @ViewBuilder private var favoriteButton: some View {
+        Button {
+            Task {
+                isProcessingFavorite = true // Deaktivieren
+                await toggleFavoriteAction()
+                // Kurze Verzögerung, um Flackern bei schnellen Fehlern zu vermeiden
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                isProcessingFavorite = false // Wieder aktivieren
+            }
+        } label: {
+            Image(systemName: isFavorited ? "heart.fill" : "heart")
+                .imageScale(.large) // Etwas größer machen
+                .foregroundColor(isFavorited ? .pink : .secondary)
+                .frame(width: 44, height: 44) // Größere Tappable Area
+                .contentShape(Rectangle()) // Tappable Area definieren
+        }
+        .buttonStyle(.plain)
+        .disabled(isProcessingFavorite || !authService.isLoggedIn) // Deaktivieren während Verarbeitung oder wenn nicht eingeloggt
+    }
+    // --- ENDE NEU ---
+
+
     @ViewBuilder
     private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
              HStack(alignment: .top, spacing: 15) {
-                 voteCounterView
-                 Group {
+                 // --- HStack für Votes UND Favoriten ---
+                 HStack(alignment: .center, spacing: 15) { // Zentriert und mit Abstand
+                     voteCounterView
+                     if authService.isLoggedIn { // Zeige Button nur wenn eingeloggt
+                         favoriteButton
+                     }
+                 }
+                 // ---------------------------------------
+                 Group { // Tags bleiben wie sie sind
                      if infoLoadingStatus == .loaded {
                          if !tags.isEmpty {
                              FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
                                  ForEach(tags) { tag in
-                                     // Wrap Text in a Button
                                      Button {
-                                         // Action: Request search via NavigationService
                                          navigationService.requestSearch(tag: tag.tag)
                                      } label: {
                                          Text(tag.tag)
@@ -89,12 +124,12 @@ struct DetailViewContent: View {
                                              .padding(.horizontal, 8)
                                              .padding(.vertical, 4)
                                              .background(Color.gray.opacity(0.2))
-                                             .foregroundColor(.primary) // Use primary for better contrast
+                                             .foregroundColor(.primary)
                                              .clipShape(Capsule())
                                              .lineLimit(1)
-                                             .contentShape(Capsule()) // Ensure whole capsule is tappable
+                                             .contentShape(Capsule())
                                      }
-                                     .buttonStyle(.plain) // Remove default button styling
+                                     .buttonStyle(.plain)
                                  }
                              }
                          } else {
@@ -112,7 +147,7 @@ struct DetailViewContent: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder private var commentsContent: some View { // Pass binding down
+    @ViewBuilder private var commentsContent: some View { // Unverändert
         CommentsSection(
             comments: comments,
             status: infoLoadingStatus,
@@ -144,28 +179,46 @@ struct DetailViewContent: View {
     }
 }
 
-// Previews (Inject NavigationService)
-#Preview("Compact") {
+// Previews (angepasst, um Favoriten zu demonstrieren)
+#Preview("Compact Favorited") {
      // ... setup sample data ...
-     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil); let previewHandler = KeyboardActionHandler(); let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Cool"), ItemTag(id: 2, confidence: 0.7, tag: "Video"), ItemTag(id: 3, confidence: 0.8, tag: "Längerer Tag")]; let previewComments: [ItemComment] = [ItemComment(id: 1, parent: 0, content: "Kommentar", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1)]; let previewPlayer: AVPlayer? = nil
+     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true); // Favorited = true
+     let previewHandler = KeyboardActionHandler(); let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Cool"), ItemTag(id: 2, confidence: 0.7, tag: "Video"), ItemTag(id: 3, confidence: 0.8, tag: "Längerer Tag")]; let previewComments: [ItemComment] = [ItemComment(id: 1, parent: 0, content: "Kommentar", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1)]; let previewPlayer: AVPlayer? = nil
      @State var previewLinkTarget: PreviewLinkTarget? = nil
-     let navService = NavigationService() // Need instance for preview
+     let navService = NavigationService()
+     let settings = AppSettings()
+     let authService = {
+         let auth = AuthService(appSettings: settings)
+         auth.isLoggedIn = true // Wichtig für Preview
+         return auth
+     }()
 
      return NavigationStack {
-        DetailViewContent(item: sampleVideoItem, keyboardActionHandler: previewHandler, player: previewPlayer, onWillBeginFullScreen: {}, onWillEndFullScreen: {}, tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded, previewLinkTarget: $previewLinkTarget)
-        .environmentObject(navService) // Inject for preview
+        DetailViewContent(item: sampleVideoItem, keyboardActionHandler: previewHandler, player: previewPlayer, onWillBeginFullScreen: {}, onWillEndFullScreen: {}, tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded, previewLinkTarget: $previewLinkTarget, isFavorited: true, toggleFavoriteAction: {}) // Pass state + dummy action
+        .environmentObject(navService)
+        .environmentObject(settings) // Inject settings
+        .environmentObject(authService) // Inject auth
         .environment(\.horizontalSizeClass, .compact)
     }
 }
-#Preview("Regular") {
+#Preview("Regular Not Favorited") {
     // ... setup sample data ...
-    let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil); let previewHandler = KeyboardActionHandler(); let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")]; let previewComments: [ItemComment] = [ItemComment(id: 1, parent: 0, content: "Kommentar https://pr0gramm.com/top/123", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1)]; let previewPlayer: AVPlayer? = nil
+    let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false); // Favorited = false
+    let previewHandler = KeyboardActionHandler(); let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")]; let previewComments: [ItemComment] = [ItemComment(id: 1, parent: 0, content: "Kommentar https://pr0gramm.com/top/123", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1)]; let previewPlayer: AVPlayer? = nil
      @State var previewLinkTarget: PreviewLinkTarget? = nil
-     let navService = NavigationService() // Need instance for preview
+     let navService = NavigationService()
+     let settings = AppSettings()
+     let authService = {
+         let auth = AuthService(appSettings: settings)
+         auth.isLoggedIn = true // Wichtig für Preview
+         return auth
+     }()
 
      return NavigationStack {
-        DetailViewContent(item: sampleImageItem, keyboardActionHandler: previewHandler, player: previewPlayer, onWillBeginFullScreen: {}, onWillEndFullScreen: {}, tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded, previewLinkTarget: $previewLinkTarget)
-        .environmentObject(navService) // Inject for preview
+        DetailViewContent(item: sampleImageItem, keyboardActionHandler: previewHandler, player: previewPlayer, onWillBeginFullScreen: {}, onWillEndFullScreen: {}, tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded, previewLinkTarget: $previewLinkTarget, isFavorited: false, toggleFavoriteAction: {}) // Pass state + dummy action
+        .environmentObject(navService)
+        .environmentObject(settings) // Inject settings
+        .environmentObject(authService) // Inject auth
         .environment(\.horizontalSizeClass, .regular)
     }
     .previewDevice("iPad (10th generation)")

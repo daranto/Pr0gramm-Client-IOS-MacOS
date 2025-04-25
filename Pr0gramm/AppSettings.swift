@@ -26,7 +26,7 @@ enum FeedType: Int, CaseIterable, Identifiable {
 class AppSettings: ObservableObject {
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AppSettings")
-    private let cacheService = CacheService()
+    private let cacheService = CacheService() // <-- CacheService wird hier instanziiert
 
     // UserDefaults Keys
     private static let isVideoMutedPreferenceKey = "isVideoMutedPreference_v1"
@@ -102,16 +102,16 @@ class AppSettings: ObservableObject {
         Task { await updateCacheSizes() }
     }
 
-    // MARK: - Cache Management Methods (Implementierungen jetzt enthalten)
+    // MARK: - Cache Management Methods
     func clearAllAppCache() async {
         Self.logger.warning("Clearing ALL Data Cache and Kingfisher Image Cache requested.")
         await cacheService.clearAllDataCache()
         let logger = Self.logger
         KingfisherManager.shared.cache.clearDiskCache {
             logger.info("Kingfisher disk cache clearing finished.")
-            Task { await self.updateCacheSizes() }
+            Task { await self.updateCacheSizes() } // sizes aktualisieren
         }
-        await self.updateDataCacheSize()
+        // await self.updateDataCacheSize() // Bereits durch clearDiskCache callback getriggert
     }
 
     func updateCacheSizes() async {
@@ -156,19 +156,25 @@ class AppSettings: ObservableObject {
         Self.logger.info("Set Kingfisher (image) disk cache size limit to \(limitBytes) bytes (\(self.maxImageCacheSizeMB) MB).")
     }
 
-    // MARK: - Cache Access Methods (Daten-Cache - Implementierungen jetzt enthalten)
+    // MARK: - Cache Access Methods (Daten-Cache)
     func saveItemsToCache(_ items: [Item], forKey cacheKey: String) async {
         guard !cacheKey.isEmpty else { return }
         await cacheService.saveItems(items, forKey: cacheKey)
         await updateDataCacheSize()
     }
 
-    // --- Korrigierte Implementierung mit return ---
     func loadItemsFromCache(forKey cacheKey: String) async -> [Item]? {
          guard !cacheKey.isEmpty else { return nil }
-         // Delegation an den CacheService
          return await cacheService.loadItems(forKey: cacheKey)
     }
-    // --- Ende der Korrektur ---
+
+    // --- NEU: Methode zum Leeren des Favoriten-Caches ---
+    func clearFavoritesCache() async {
+        Self.logger.info("Clearing favorites data cache requested via AppSettings.")
+        await cacheService.clearFavoritesCache() // Delegation an CacheService
+        // Cache-Größe direkt danach aktualisieren
+        await updateDataCacheSize()
+    }
+    // --- ENDE NEU ---
 }
 // --- END OF COMPLETE FILE ---
