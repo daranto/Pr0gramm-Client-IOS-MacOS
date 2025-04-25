@@ -1,14 +1,11 @@
 // Pr0gramm/Pr0gramm/Features/Views/Settings/SettingsView.swift
-// --- START OF MODIFIED FILE ---
-
-// Pr0gramm/Pr0gramm/Features/Views/Settings/SettingsView.swift
+// --- START OF COMPLETE FILE ---
 
 import SwiftUI
 import os
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
-    // --- Umbenannt: State-Variable für Klarheit ---
     @State private var showingClearAllCacheAlert = false
 
     let cacheSizeOptions = [50, 100, 250, 500, 1000]
@@ -17,53 +14,61 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                // --- Unverändert ---
                 Section("Video") {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
                 }
 
-                // --- Cache Bereich (Überarbeitet) ---
-                Section("Cache") { // Einfacherer Titel
+                // --- Cache Bereich (Korrigierte Section-Initialisierung) ---
+                // Explizit header und footer verwenden
+                Section {
+                    // Der Inhalt der Section bleibt gleich
                     HStack {
-                        Text("Aktuelle Größe")
+                        Text("Bild-Cache Größe")
                         Spacer()
-                        Text(String(format: "%.1f MB", settings.currentCacheSizeMB))
+                        Text(String(format: "%.1f MB", settings.currentImageDataCacheSizeMB))
                             .foregroundColor(.secondary)
                     }
-
-                    Picker("Maximale Größe (Bilder)", selection: $settings.maxCacheSizeMB) {
+                    HStack {
+                        Text("Daten-Cache Größe")
+                        Spacer()
+                        Text(String(format: "%.1f MB", settings.currentDataCacheSizeMB))
+                            .foregroundColor(.secondary)
+                    }
+                    Picker("Max. Bild-Cache Größe", selection: $settings.maxImageCacheSizeMB) {
                         ForEach(cacheSizeOptions, id: \.self) { size in
                             Text("\(size) MB").tag(size)
                         }
                     }
-                    .onChange(of: settings.maxCacheSizeMB) { _, _ in
+                    .onChange(of: settings.maxImageCacheSizeMB) { _, _ in
                         Self.logger.info("Max image cache size setting changed.")
                     }
-
-                    // --- Nur noch EIN Button ---
                     Button("Gesamten App-Cache leeren", role: .destructive) {
-                        showingClearAllCacheAlert = true // Löst den einzigen Alert aus
+                        showingClearAllCacheAlert = true
                     }
-                    // --- Zweiter Button entfernt ---
+                } header: {
+                    // Den Titel hier als Header definieren
+                    Text("Cache")
+                } footer: {
+                    // Der Footer bleibt gleich
+                    Text("Der Bild-Cache wird automatisch auf die gewählte Maximalgröße begrenzt. Der Daten-Cache (Feeds etc.) hat ein festes Limit von 50 MB und löscht die ältesten Einträge bei Überschreitung.")
                 }
                 // --- Ende Cache Bereich ---
             }
             .navigationTitle("Einstellungen")
-            // --- Angepasster Alert ---
-            .alert("Gesamten App-Cache leeren?", isPresented: $showingClearAllCacheAlert) { // Verwendet umbenannte Variable
+            .alert("Gesamten App-Cache leeren?", isPresented: $showingClearAllCacheAlert) {
                 Button("Abbrechen", role: .cancel) { }
                 Button("Leeren", role: .destructive) {
                     Task {
-                        // --- Ruft jetzt die Funktion zum Löschen *aller* Caches auf ---
                         await settings.clearAllAppCache()
                     }
                 }
             } message: {
-                // --- Angepasste Nachricht ---
                 Text("Möchtest du wirklich alle zwischengespeicherten Daten (Feeds, Favoriten, Bilder etc.) löschen? Dies kann nicht rückgängig gemacht werden.")
             }
             .onAppear {
                 Task {
-                    await settings.updateCurrentCombinedCacheSize()
+                    await settings.updateCacheSizes()
                 }
             }
         }
@@ -71,4 +76,4 @@ struct SettingsView: View {
 }
 
 #Preview { SettingsView().environmentObject(AppSettings()) }
-// --- END OF MODIFIED FILE ---
+// --- END OF COMPLETE FILE ---
