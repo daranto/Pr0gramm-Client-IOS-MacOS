@@ -14,9 +14,22 @@
 		005113402DB5899600C48DF1 /* Pr0gramm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pr0gramm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		00B276892DBBCFD200380D68 /* Exceptions for "Pr0gramm" folder in "Pr0gramm" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 0051133F2DB5899600C48DF1 /* Pr0gramm */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		005113422DB5899600C48DF1 /* Pr0gramm */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				00B276892DBBCFD200380D68 /* Exceptions for "Pr0gramm" folder in "Pr0gramm" target */,
+			);
 			path = Pr0gramm;
 			sourceTree = "<group>";
 		};
@@ -260,7 +273,9 @@
 				DEVELOPMENT_TEAM = 5Q3BPTF4NY;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Pr0gramm/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = pr0gramm;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -303,7 +318,9 @@
 				DEVELOPMENT_TEAM = 5Q3BPTF4NY;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Pr0gramm/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = pr0gramm;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
