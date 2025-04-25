@@ -5,12 +5,12 @@ import SwiftUI
 
 struct FilterView: View {
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var authService: AuthService
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
-                // Section 1: Feed-Typ (unverändert)
                 Section {
                     Picker("Feed Typ", selection: $settings.feedType) {
                         ForEach(FeedType.allCases) { type in
@@ -22,39 +22,44 @@ struct FilterView: View {
                     Text("Anzeige")
                 }
 
-                // Section 2: Content Flags (Angepasst)
-                Section {
-                    Toggle("SFW (Safe for Work)", isOn: $settings.showSFW)
-                    Toggle("NSFW (Not Safe for Work)", isOn: $settings.showNSFW)
-                    Toggle("NSFL (Not Safe for Life)", isOn: $settings.showNSFL)
-                    // --- UM BENANNT ---
-                    Toggle("NSFP (Not Safe for Public)", isOn: $settings.showNSFP) // Bindet an showNSFP (Flag 8)
-                    // --- NEU ---
-                    Toggle("POL (Politik)", isOn: $settings.showPOL) // Bindet an showPOL (Flag 16)
-                    // ---------------
-                } header: {
-                    Text("Inhaltsfilter")
-                } footer: {
-                     Text("Achtung: Die Anzeige von NSFW/NSFL/NSFP Inhalten unterliegt den App Store Richtlinien.") // Text angepasst
+                if authService.isLoggedIn {
+                    Section {
+                        Toggle("SFW (Safe for Work)", isOn: $settings.showSFW)
+                        Toggle("NSFW (Not Safe for Work)", isOn: $settings.showNSFW)
+                        Toggle("NSFL (Not Safe for Life)", isOn: $settings.showNSFL)
+                        Toggle("NSFP (Not Safe for Public)", isOn: $settings.showNSFP)
+                        Toggle("POL (Politik)", isOn: $settings.showPOL)
+                    } header: { Text("Inhaltsfilter") }
+                      footer: { Text("Achtung: Die Anzeige von NSFW/NSFL/NSFP Inhalten unterliegt den App Store Richtlinien.") }
                 }
             }
             .navigationTitle("Filter")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Fertig") {
-                        dismiss()
-                    }
-                }
-            }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } } }
         }
     }
 }
 
-#Preview {
+// --- Previews KORRIGIERT ---
+#Preview("Logged Out") {
+    // Struktur: View {}.environmentObject(...)
     FilterView()
-        .environmentObject(AppSettings())
+        .environmentObject(AppSettings()) // Erstelle Settings direkt hier
+        .environmentObject(AuthService(appSettings: AppSettings())) // Erstelle Auth direkt hier
+}
+
+#Preview("Logged In") {
+    // Struktur: View {}.environmentObject(...)
+    FilterView()
+        .environmentObject(AppSettings()) // Erstelle Settings direkt hier
+        .environmentObject({ // Erstelle und konfiguriere Auth Service im Closure
+            let settings = AppSettings() // Braucht eigene Instanz für Auth Init
+            let auth = AuthService(appSettings: settings)
+            auth.isLoggedIn = true
+            auth.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1)
+            return auth // Gib den konfigurierten Service zurück
+        }()) // Führe das Closure aus, um den Auth Service zu erstellen
 }
 // --- END OF COMPLETE FILE ---

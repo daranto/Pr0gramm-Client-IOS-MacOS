@@ -1,4 +1,5 @@
-// LoginView.swift
+// Pr0gramm/Pr0gramm/Features/Views/Authentication/LoginView.swift
+// --- START OF COMPLETE FILE ---
 
 import SwiftUI
 
@@ -30,7 +31,6 @@ struct LoginView: View {
                 }
 
                 // Captcha Section
-                // needsCaptcha wird jetzt durch onAppear gesetzt
                 if authService.needsCaptcha {
                     Section("Captcha") {
                         if let captchaUiImage = authService.captchaImage {
@@ -39,10 +39,8 @@ struct LoginView: View {
                                 .scaledToFit()
                                 .frame(maxWidth: .infinity, maxHeight: 100, alignment: .center)
                                 .padding(.vertical, 5)
-                                // Optional: Tap to refresh captcha?
-                                // .onTapGesture { Task { await authService.fetchInitialCaptcha() } }
                         } else {
-                            HStack { // Ladeanzeige
+                            HStack {
                                 Spacer()
                                 ProgressView()
                                 Text("Lade Captcha...")
@@ -60,7 +58,6 @@ struct LoginView: View {
                 }
 
                 Section {
-                    // Fehlermeldung (wird jetzt auch gesetzt, wenn Captcha-Laden fehlschlägt)
                     if let error = authService.loginError {
                         Text(error)
                             .foregroundColor(.red)
@@ -71,17 +68,15 @@ struct LoginView: View {
                         HStack { Spacer(); if authService.isLoading { ProgressView().progressViewStyle(.circular).tint(.white) } else { Text("Login") }; Spacer() }.padding(.vertical, 8)
                     }
                     .buttonStyle(.borderedProminent)
-                    // Login-Button ist deaktiviert, wenn Captcha benötigt wird, aber die Antwort fehlt
                     .disabled(authService.isLoading || username.isEmpty || password.isEmpty || (authService.needsCaptcha && captchaAnswer.isEmpty))
                 }
-                .listRowBackground(Color.clear) // Keine Trennlinien/Hintergrund für Button-Section
+                .listRowBackground(Color.clear)
             }
             .navigationTitle("Anmelden")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Abbrechen") { dismiss() } } }
-            // Captcha beim Erscheinen holen
             .onAppear {
                 Task {
                     await authService.fetchInitialCaptcha()
@@ -90,34 +85,32 @@ struct LoginView: View {
         }
     }
 
-    /// Logik für den Login-Button ausgelagert
     private func performLogin() async {
-         // Übergebe die aktuelle Captcha-Antwort, wenn needsCaptcha true ist
          await authService.login(
              username: username,
              password: password,
-             captchaAnswer: authService.needsCaptcha ? captchaAnswer : nil // Wichtig!
+             captchaAnswer: authService.needsCaptcha ? captchaAnswer : nil
          )
-         // Schließe das Sheet nur, wenn der Login erfolgreich war
          if authService.isLoggedIn {
              dismiss()
-         } else {
-             // Optional: Captcha-Feld leeren nach fehlgeschlagenem Versuch?
-             // captchaAnswer = ""
          }
      }
 }
 
-// Previews bleiben wie zuvor, verwenden jetzt den aktualisierten AuthService
+// --- Preview KORRIGIERT ---
 #Preview {
-    let previewAuthService = AuthService()
-    // Zum Testen der Captcha Section in der Preview:
-    // Task { await previewAuthService.fetchInitialCaptcha() } // würde echtes Captcha holen
-    // ODER manuell setzen:
+    // Erstelle beide Services für die Preview
+    let settings = AppSettings()
+    let previewAuthService = AuthService(appSettings: settings) // Übergebe settings
+
+    // Optional: Setze Testzustände für Captcha/Fehler
     // previewAuthService.needsCaptcha = true
-    // previewAuthService.captchaImage = UIImage(systemName: "lock.shield") // Dummy-Bild
+    // previewAuthService.captchaImage = UIImage(systemName: "lock.shield")
     // previewAuthService.loginError = "Testfehler oder Captcha laden fehlgeschlagen."
 
-    return LoginView()
+    // Gib die View zurück (kein explizites 'return')
+    LoginView()
         .environmentObject(previewAuthService)
+        .environmentObject(settings) // Stelle auch settings bereit
 }
+// --- END OF COMPLETE FILE ---

@@ -1,4 +1,5 @@
-// AuthService.swift
+// Pr0gramm/Pr0gramm/Features/Authentication/AuthService.swift
+// --- START OF COMPLETE FILE ---
 
 import Foundation
 import Combine
@@ -11,13 +12,14 @@ class AuthService: ObservableObject {
     // MARK: - Dependencies
     private let apiService = APIService()
     private let keychainService = KeychainService()
+    private let appSettings: AppSettings // <-- HINZUGEFÜGT: Referenz zu AppSettings
+
     private let sessionCookieKey = "pr0grammSessionCookie_v1"
     private let sessionUsernameKey = "pr0grammUsername_v1" // Key für Username
     private let sessionCookieName = "me" // !! WICHTIG: Prüfen !!
 
     // MARK: - Published Properties
     @Published var isLoggedIn: Bool = false
-    // Wieder UserInfo verwenden
     @Published var currentUser: UserInfo? = nil
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var loginError: String? = nil
@@ -27,9 +29,13 @@ class AuthService: ObservableObject {
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AuthService")
 
-    init() {
+    // --- GEÄNDERT: Initializer nimmt AppSettings entgegen ---
+    init(appSettings: AppSettings) {
+        self.appSettings = appSettings
         Self.logger.info("AuthService initialized.")
     }
+    // --- ENDE ÄNDERUNG ---
+
 
     // MARK: - Public Methods
 
@@ -77,7 +83,7 @@ class AuthService: ObservableObject {
                     self.isLoggedIn = false // Login gilt als fehlgeschlagen, wenn Profil nicht ladbar
                     self.loginError = "Login erfolgreich, aber Profildaten konnten nicht geladen werden."
                     Self.logger.error("loadProfileInfo failed after successful API login.")
-                    await performLogoutCleanup() // Alles bereinigen
+                    await performLogoutCleanup() // Alles bereinigen (inkl. Filter Reset)
                 }
             } else { // success: false
                  if response.ban?.banned == true {
@@ -87,17 +93,19 @@ class AuthService: ObservableObject {
                      self.loginError = response.error ?? "Falsche Anmeldedaten oder Captcha."
                      Self.logger.warning("Login failed (API Error): \(self.loginError!) - User: \(username)")
                      if self.needsCaptcha { Self.logger.info("Fetching new captcha after failed login attempt."); await _fetchCaptcha() }
+                     else { await performLogoutCleanup() } // Cleanup auch bei normalen Loginfehlern, falls kein Captcha nötig
                  }
             }
         } catch let error as URLError where error.code == .badServerResponse && error.localizedDescription.contains("status 400") {
              Self.logger.warning("Login failed with 400 Bad Request. Assuming incorrect credentials or captcha.")
              self.loginError = "Falsche Anmeldedaten oder Captcha."
-             self.needsCaptcha = true
+             self.needsCaptcha = true // Annehmen, dass Captcha jetzt benötigt wird
              await _fetchCaptcha()
+             // KEIN performLogoutCleanup hier, da der User ja noch eingeloggt sein *könnte*
         } catch {
             Self.logger.error("Login failed for \(username) with error: \(error.localizedDescription)")
             self.loginError = "Fehler beim Login: \(error.localizedDescription)"
-            await performLogoutCleanup()
+            await performLogoutCleanup() // Bei generischen Fehlern aufräumen
         }
         isLoading = false
         Self.logger.debug("Login attempt finished for \(username). isLoading: \(self.isLoading)")
@@ -122,10 +130,12 @@ class AuthService: ObservableObject {
              sessionValidAndProfileLoaded = await loadProfileInfo(username: username, setLoadingState: false)
              if !sessionValidAndProfileLoaded {
                  Self.logger.warning("Cookie/Username loaded, but profile fetch failed. Session might be invalid.")
+                 await performLogoutCleanup() // Cleanup wenn Profil trotz Cookie nicht geht
              }
         } else {
              Self.logger.info("No session cookie or username found in keychain.")
              self.currentUser = nil; sessionValidAndProfileLoaded = false
+             await performLogoutCleanup() // Cleanup wenn nichts im Keychain ist
         }
 
         // Schritt 3: Setze Status
@@ -135,10 +145,7 @@ class AuthService: ObservableObject {
             Self.logger.info("Initial check: User \(self.currentUser!.name) is logged in.") // ! ok
         } else {
             Self.logger.info("Initial check: User is not logged in (or session/profile load failed).")
-            // Bereinigen, nur wenn wirklich nichts aus Keychain geladen werden konnte ODER Profil-Check fehlschlug
-             clearCookies()
-             _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey)
-             _ = keychainService.deleteUsername(forKey: sessionUsernameKey)
+            // Das Cleanup wurde bereits oben bei Bedarf aufgerufen
         }
         isLoading = false
     }
@@ -156,7 +163,6 @@ class AuthService: ObservableObject {
             let profileInfoResponse = try await apiService.getProfileInfo(username: username)
 
             // Erstelle das UserInfo-Objekt aus profileInfoResponse.user
-            // 'admin' wurde aus UserInfo entfernt
             self.currentUser = UserInfo(
                 id: profileInfoResponse.user.id,
                 name: profileInfoResponse.user.name,
@@ -189,13 +195,39 @@ class AuthService: ObservableObject {
         } catch { Self.logger.error("Failed to fetch captcha: \(error.localizedDescription)"); self.loginError = "Captcha konnte nicht geladen werden." }
     }
 
+    // --- GEÄNDERT: performLogoutCleanup setzt Filter zurück ---
     private func performLogoutCleanup() async {
-        Self.logger.debug("Performing local logout cleanup."); self.isLoggedIn = false; self.currentUser = nil; self.needsCaptcha = false; self.captchaToken = nil; self.captchaImage = nil
+        Self.logger.debug("Performing local logout cleanup.");
+        // Reset Auth State
+        self.isLoggedIn = false;
+        self.currentUser = nil;
+        self.needsCaptcha = false; // Captcha wird bei Bedarf neu geholt
+        self.captchaToken = nil;
+        self.captchaImage = nil;
+
+        // Clear Network Cookies
         clearCookies()
-        // Lösche Cookie UND Username aus Keychain
+
+        // Clear Keychain Data
         _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey)
         _ = keychainService.deleteUsername(forKey: sessionUsernameKey)
+
+        // Reset Content Filters in AppSettings
+        self.appSettings.showSFW = true
+        self.appSettings.showNSFW = false
+        self.appSettings.showNSFL = false
+        self.appSettings.showNSFP = false
+        self.appSettings.showPOL = false
+        Self.logger.info("Reset content filters to SFW-only.")
+
+        // Optional: Clear Data Cache? Decide if this is desired on logout.
+        // await appSettings.clearFeedCache()
+        // await appSettings.clearFavoritesCache()
+        // await appSettings.updateCacheSizes()
+        // Self.logger.info("Cleared feed and favorites data cache on logout.")
     }
+    // --- ENDE ÄNDERUNG ---
+
 
     private func clearCookies() {
         Self.logger.debug("Clearing cookies for pr0gramm.com domain.")
@@ -224,3 +256,4 @@ class AuthService: ObservableObject {
         return true
     }
 }
+// --- END OF COMPLETE FILE ---
