@@ -12,35 +12,38 @@ enum Tab: Int, CaseIterable, Identifiable {
 }
 
 struct MainView: View {
-    @State private var selectedTab: Tab = .feed
+    // Observe NavigationService for tab changes
+    @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
     @State private var feedPopToRootTrigger = UUID()
 
+    // Selected tab is now derived from NavigationService
+    private var selectedTab: Tab {
+        navigationService.selectedTab
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Group {
+                // Content view depends on the selectedTab from NavigationService
                 switch selectedTab {
                 case .feed: FeedView(popToRootTrigger: feedPopToRootTrigger)
                 case .favorites: FavoritesView()
-                case .search: SearchView()
+                case .search: SearchView() // SearchView will react to pendingSearchTag
                 case .profile: ProfileView()
                 case .settings: SettingsView()
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity) // Content takes available space
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider() // Divider remains above tab bar
+            Divider()
 
             tabBarHStack
-                .background { Rectangle().fill(.bar).ignoresSafeArea(edges: .bottom) } // Background ignores bottom edge relative to the HStack
+                .background { Rectangle().fill(.bar).ignoresSafeArea(edges: .bottom) }
 
         }
-        // --- MODIFICATION HERE ---
-        // Tell the entire VStack to ignore the keyboard inset at the bottom.
-        // This keeps the VStack's frame fixed, preventing the tabBarHStack from being pushed up.
-        .ignoresSafeArea(.keyboard, edges: .bottom)
-        // --- END MODIFICATION ---
+        .ignoresSafeArea(.keyboard, edges: .bottom) // Keep ignoring keyboard
     }
 
     private var tabBarHStack: some View {
@@ -58,63 +61,58 @@ struct MainView: View {
         }
         .padding(.horizontal)
         .padding(.top, 5)
-         // Padding at the bottom might now be less necessary or could be adjusted
-         // depending on whether you want space below the icons *above* the absolute bottom.
-         // Let's keep it for now for spacing above the screen edge.
         .padding(.bottom, 4)
     }
 
+    // Tapping a tab updates the NavigationService
     private func handleTap(on tab: Tab) {
         if tab == .feed && selectedTab == .feed {
             print("Feed tab tapped again. Triggering pop to root.")
             feedPopToRootTrigger = UUID()
         } else {
-            selectedTab = tab
+            // Update the central navigation service
+            navigationService.selectedTab = tab
+            // Clear any pending search tag if user manually navigates *away* from search
+            // or taps search again without a pending tag.
+            if navigationService.pendingSearchTag != nil && tab != .search {
+                 print("Clearing pending search tag due to manual tab navigation.")
+                 navigationService.pendingSearchTag = nil
+            }
         }
     }
 
     private func iconName(for tab: Tab) -> String {
         switch tab {
-            case .feed: "square.grid.2x2.fill"
-            case .favorites: "heart.fill"
-            case .search: "magnifyingglass"
-            case .profile: "person.crop.circle"
-            case .settings: "gearshape.fill"
+            case .feed: "square.grid.2x2.fill"; case .favorites: "heart.fill"; case .search: "magnifyingglass"; case .profile: "person.crop.circle"; case .settings: "gearshape.fill"
         }
     }
 
     private func label(for tab: Tab) -> String {
         switch tab {
-            case .feed: settings.feedType.displayName
-            case .favorites: "Favoriten"
-            case .search: "Suche"
-            case .profile: "Profil"
-            case .settings: "Einstellungen"
+            case .feed: settings.feedType.displayName; case .favorites: "Favoriten"; case .search: "Suche"; case .profile: "Profil"; case .settings: "Einstellungen"
         }
     }
 }
 
+// TabBarButtonLabel (unverändert)
 struct TabBarButtonLabel: View {
     let iconName: String, label: String, isSelected: Bool
     var body: some View {
         VStack(spacing: 2) {
-             Image(systemName: iconName)
-                 .font(.body) // Adjusted for typical tab bar size
-                 .symbolVariant(isSelected ? .fill : .none)
-             Text(label)
-                 .font(.caption2) // Standard caption size
-                 .lineLimit(1)
-        }
-        .padding(.vertical, 3) // Minimal vertical padding
-        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+             Image(systemName: iconName).font(.body).symbolVariant(isSelected ? .fill : .none)
+             Text(label).font(.caption2).lineLimit(1)
+        }.padding(.vertical, 3).foregroundStyle(isSelected ? Color.accentColor : .secondary)
     }
 }
 
+// Preview (aktualisiert)
 #Preview {
     let settings = AppSettings()
     let authService = AuthService(appSettings: settings)
-    MainView()
+    let navigationService = NavigationService()
+    return MainView()
         .environmentObject(settings)
         .environmentObject(authService)
+        .environmentObject(navigationService)
 }
 // --- END OF COMPLETE FILE ---

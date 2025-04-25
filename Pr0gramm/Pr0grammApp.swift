@@ -1,30 +1,28 @@
-// Pr0grammApp.swift
+// Pr0gramm/Pr0gramm/Pr0grammApp.swift
 // --- START OF COMPLETE FILE ---
 
 import SwiftUI
 
 @main
 struct Pr0grammApp: App {
-    // --- GEÄNDERT: Explizite Initialisierung im init() ---
     @StateObject private var appSettings: AppSettings
     @StateObject private var authService: AuthService
+    @StateObject private var navigationService = NavigationService() // <-- Initialize NavigationService
 
     init() {
-        // Erstelle zuerst die AppSettings Instanz
         let settings = AppSettings()
-        // Initialisiere die StateObjects mit den Instanzen
         _appSettings = StateObject(wrappedValue: settings)
-        _authService = StateObject(wrappedValue: AuthService(appSettings: settings)) // Übergebe settings
+        _authService = StateObject(wrappedValue: AuthService(appSettings: settings))
     }
-    // --- ENDE ÄNDERUNG ---
 
 
     var body: some Scene {
         WindowGroup {
             MainView()
-                .environmentObject(appSettings) // Bleibt gleich
-                .environmentObject(authService) // Bleibt gleich
-                .task { // Korrekter Ort für den Initialisierungsaufruf
+                .environmentObject(appSettings)
+                .environmentObject(authService)
+                .environmentObject(navigationService) // <-- Inject NavigationService
+                .task {
                     await authService.checkInitialLoginStatus()
                 }
         }
