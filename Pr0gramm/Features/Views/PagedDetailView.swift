@@ -1,5 +1,5 @@
 // Pr0gramm/Pr0gramm/Features/Views/PagedDetailView.swift
-// --- START OF MODIFIED FILE ---
+// --- START OF COMPLETE FILE ---
 
 // PagedDetailView.swift
 
@@ -7,7 +7,12 @@ import SwiftUI
 import os
 import AVKit
 
-// --- PagedDetailTabViewItem (Übergibt Callbacks) ---
+// --- Wrapper Struct für Sheet Item (unverändert) ---
+struct PreviewLinkTarget: Identifiable {
+    let id: Int // Die Item-ID selbst dient als Identifikator
+}
+
+// --- PagedDetailTabViewItem (unverändert) ---
 struct PagedDetailTabViewItem: View {
     let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
@@ -21,17 +26,19 @@ struct PagedDetailTabViewItem: View {
     let currentIndex: Int
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
+    @Binding var previewLinkTarget: PreviewLinkTarget?
 
     var body: some View {
         DetailViewContent(
             item: item,
             keyboardActionHandler: keyboardActionHandler,
             player: player,
-            onWillBeginFullScreen: onWillBeginFullScreen, // Weitergeben
-            onWillEndFullScreen: onWillEndFullScreen,   // Weitergeben
+            onWillBeginFullScreen: onWillBeginFullScreen,
+            onWillEndFullScreen: onWillEndFullScreen,
             tags: tags,
             comments: comments,
-            infoLoadingStatus: infoLoadingStatus
+            infoLoadingStatus: infoLoadingStatus,
+            previewLinkTarget: $previewLinkTarget
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -48,6 +55,7 @@ struct PagedDetailView: View {
     @State private var selectedIndex: Int
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var authService: AuthService
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
     @StateObject private var keyboardActionHandler = KeyboardActionHandler()
@@ -56,12 +64,13 @@ struct PagedDetailView: View {
     @State private var muteObserver: NSKeyValueObservation? = nil
     @State private var loopObserver: NSObjectProtocol? = nil
 
-    // --- isFullscreen State WIEDER DA ---
     @State private var isFullscreen = false
 
     @State private var loadedInfos: [Int: ItemsInfoResponse] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
     private let apiService = APIService()
+
+    @State private var previewLinkTarget: PreviewLinkTarget? = nil
 
     init(items: [Item], selectedIndex: Int) {
         self.items = items
@@ -88,7 +97,6 @@ struct PagedDetailView: View {
                     preloadInfoAction: loadInfoIfNeeded,
                     allItems: items,
                     currentIndex: index,
-                    // Callbacks setzen den State
                     onWillBeginFullScreen: {
                         Self.logger.debug("Callback: willBeginFullScreen")
                         self.isFullscreen = true
@@ -96,13 +104,12 @@ struct PagedDetailView: View {
                     onWillEndFullScreen: {
                          Self.logger.debug("Callback: willEndFullScreen")
                          self.isFullscreen = false
-                         // Wichtig: Nach Beenden des Fullscreens sicherstellen, dass der Player spielt,
-                         // falls er noch für das aktuelle Item existiert.
                          if self.playerItemID == currentItem.id && self.player?.timeControlStatus != .playing {
                              Self.logger.debug("Ensuring player resumes after fullscreen end.")
                              self.player?.play()
                          }
-                    }
+                    },
+                    previewLinkTarget: $previewLinkTarget
                 )
                 .tag(index)
             }
@@ -124,7 +131,7 @@ struct PagedDetailView: View {
         }
         .onAppear {
             Self.logger.info("PagedDetailView appeared. Setting up keyboard actions.")
-            isFullscreen = false // Beim Erscheinen ist es nie Fullscreen
+            isFullscreen = false
             keyboardActionHandler.selectNextAction = self.selectNext
             keyboardActionHandler.selectPreviousAction = self.selectPrevious
             if selectedIndex >= 0 && selectedIndex < items.count {
@@ -132,24 +139,26 @@ struct PagedDetailView: View {
                  Task { await loadInfoIfNeeded(for: items[selectedIndex]) }
             }
         }
-        // --- .onDisappear mit isFullscreen Check ---
         .onDisappear {
              Self.logger.info("PagedDetailView disappearing. isFullscreen: \(self.isFullscreen)")
              keyboardActionHandler.selectNextAction = nil
              keyboardActionHandler.selectPreviousAction = nil
-             if !isFullscreen { // Nur cleanen, wenn NICHT fullscreen
+             if !isFullscreen {
                  Self.logger.info("Cleaning up player because view is disappearing (not fullscreen).")
                  cleanupCurrentPlayer()
              } else {
                  Self.logger.info("Skipping player cleanup because view is entering/is in fullscreen.")
-                 // Wichtig: Player hier NICHT pausieren, da er im Fullscreen weiterlaufen soll
              }
         }
         .background(KeyCommandView(handler: keyboardActionHandler))
+        .sheet(item: $previewLinkTarget) { targetWrapper in
+             LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
+                 .environmentObject(settings)
+                 .environmentObject(authService)
+        }
     }
 
-    // MARK: - Player Management Methoden
-    // (Bleiben wie zuvor)
+    // MARK: - Player Management Methoden (unverändert)
      private func setupAndPlayPlayerIfNeeded(for item: Item) async {
         guard item.isVideo else {
             Self.logger.debug("Item \(item.id) is not a video. Skipping player setup.")
@@ -212,7 +221,6 @@ struct PagedDetailView: View {
          }
         Self.logger.debug("Added loop observer for item \(item.id).")
 
-        // Nur starten, wenn wir NICHT gerade im Fullscreen sind (sollte beim initialen Setup immer der Fall sein)
         if !isFullscreen {
             newPlayer.play()
             Self.logger.debug("Player started (Autoplay) for item \(item.id)")
@@ -242,7 +250,7 @@ struct PagedDetailView: View {
             self.loopObserver = nil
         }
 
-        player?.pause() // Immer pausieren vor dem Zerstören
+        player?.pause()
         player = nil
         playerItemID = nil
 
@@ -250,10 +258,25 @@ struct PagedDetailView: View {
     }
 
 
-    // --- loadInfoIfNeeded (unverändert) ---
+    // --- loadInfoIfNeeded (RESTRUKTURIERT) ---
      private func loadInfoIfNeeded(for item: Item) async {
         let itemId = item.id
-        guard infoLoadingStatus[itemId] == nil || infoLoadingStatus[itemId] == .idle else { return }
+        let currentStatus = infoLoadingStatus[itemId]
+
+        // Guard-Bedingung: Weitermachen, WENN NICHT (.loading oder .loaded)
+        guard !(currentStatus == .loading || currentStatus == .loaded) else {
+            // Wenn wir hier sind, ist der Status .loading oder .loaded -> Überspringen
+            Self.logger.trace("Skipping info load for item \(itemId) - already loaded or loading.")
+            return // Explizites return hier stellt sicher, dass der Guard-Body endet
+        }
+
+        // Wenn wir hier sind, ist der Status nil, .idle oder .error
+        // Logge, wenn wir einen Fehler-Retry machen
+        if case .error = currentStatus {
+            Self.logger.debug("Retrying info load for item \(itemId) after previous error.")
+        }
+
+        // Fortfahren mit dem Laden
         Self.logger.debug("Starting info load for item \(itemId)...")
         await MainActor.run { infoLoadingStatus[itemId] = .loading }
         do {
@@ -298,19 +321,49 @@ struct PagedDetailView: View {
 
 } // Ende struct PagedDetailView
 
-// MARK: - Preview
-// --- KORRIGIERT: Sample Items haben jetzt repost: nil, variants: nil ---
-#Preview("Preview") {
-    // Erstelle ein paar Beispiel-Items
-    let sampleItems = [
-        Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil), // Image
-        Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil), // Video
-        Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: Int(Date().timeIntervalSince1970) - 50, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil) // Image
-    ]
 
-    return NavigationStack { // NavigationStack für Titel etc.
-        PagedDetailView(items: sampleItems, selectedIndex: 1) // Starte beim Video
+// MARK: - Wrapper View für das Sheet (unverändert)
+struct LinkedItemPreviewWrapperView: View {
+    let itemID: Int
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var authService: AuthService
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        NavigationStack {
+            LinkedItemPreviewView(itemID: itemID)
+                .environmentObject(settings)
+                .environmentObject(authService)
+                .navigationTitle("Vorschau")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Fertig") {
+                            dismiss()
+                        }
+                    }
+                }
+        }
     }
-    .environmentObject(AppSettings()) // Notwendige Environment Objects hinzufügen
 }
-// --- END OF MODIFIED FILE ---
+
+
+// MARK: - Preview (unverändert)
+#Preview("Preview") {
+    let sampleItems = [
+        Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil),
+        Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil),
+        Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: Int(Date().timeIntervalSince1970) - 50, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil)
+    ]
+    let settings = AppSettings()
+    let authService = AuthService(appSettings: settings)
+
+    return NavigationStack {
+        PagedDetailView(items: sampleItems, selectedIndex: 1)
+    }
+    .environmentObject(settings)
+    .environmentObject(authService)
+}
+// --- END OF COMPLETE FILE ---

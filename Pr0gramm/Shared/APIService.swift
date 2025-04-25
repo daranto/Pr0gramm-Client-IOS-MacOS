@@ -1,10 +1,11 @@
 // Pr0gramm/Pr0gramm/Shared/APIService.swift
-// --- START OF MODIFIED FILE ---
+// --- START OF COMPLETE FILE ---
 
 // APIService.swift
 
 import Foundation
 import os
+import UIKit // Import UIKit für UIImage
 
 // MARK: - API Data Structures (Top Level)
 
@@ -22,7 +23,6 @@ struct ItemComment: Codable, Identifiable, Hashable {
 }
 
 // --- Struct für /items/get Response ---
-// --- HINZUGEFÜGT: atStart ---
 struct ApiResponse: Codable {
     let items: [Item]; let atEnd: Bool?; let atStart: Bool? // Item.mark bleibt Int
 }
@@ -83,7 +83,36 @@ class APIService {
         } catch { Self.logger.error("Error during /items/get (feed): \(error.localizedDescription)"); throw error }
     }
 
-    // --- NEUE FUNKTION: fetchFavorites ---
+    // --- NEUE FUNKTION: fetchItem ---
+    func fetchItem(id: Int, flags: Int) async throws -> Item? {
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
+        // Wichtig: 'id' und 'flags' Parameter verwenden
+        let queryItems = [
+            URLQueryItem(name: "id", value: String(id)),
+            URLQueryItem(name: "flags", value: String(flags))
+        ]
+        urlComponents.queryItems = queryItems
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+
+        Self.logger.debug("Fetching single item with ID \(id) and flags \(flags)")
+        let request = URLRequest(url: url)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (single item)")
+            // Finde das Item mit der passenden ID in der Antwort (sollte nur eines sein)
+            let foundItem = apiResponse.items.first { $0.id == id }
+            if foundItem == nil {
+                Self.logger.warning("API returned items for ID \(id), but none matched the requested ID.")
+            }
+            return foundItem
+        } catch {
+            Self.logger.error("Error during /items/get (single item) for ID \(id): \(error.localizedDescription)")
+            throw error
+        }
+    }
+    // --- ENDE NEUE FUNKTION ---
+
+
     func fetchFavorites(username: String, flags: Int, olderThanId: Int? = nil) async throws -> [Item] {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
         var queryItems = [
@@ -112,7 +141,6 @@ class APIService {
             throw error
         }
     }
-    // --- ENDE NEUE FUNKTION ---
 
     func fetchItemInfo(itemId: Int) async throws -> ItemsInfoResponse {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/info"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
@@ -198,4 +226,4 @@ class APIService {
         }
     }
 }
-// --- END OF MODIFIED FILE ---
+// --- END OF COMPLETE FILE ---

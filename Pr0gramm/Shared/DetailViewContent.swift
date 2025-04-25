@@ -1,5 +1,5 @@
 // Pr0gramm/Pr0gramm/Shared/DetailViewContent.swift
-// --- START OF MODIFIED FILE ---
+// --- START OF COMPLETE FILE ---
 
 // DetailViewContent.swift
 
@@ -8,7 +8,7 @@ import AVKit
 import Combine
 import os
 
-// --- DetailImageView (Stellt sicher, dass scaledToFit intern ist) ---
+// --- DetailImageView (unverändert) ---
 struct DetailImageView: View {
     let item: Item
     let logger: Logger
@@ -19,7 +19,7 @@ struct DetailImageView: View {
             case .success(let image):
                 image
                     .resizable()
-                    .scaledToFit() // Bild passt sich an seinen Rahmen an
+                    .scaledToFit()
             case .failure(let error):
                 let _ = logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)")
                 Rectangle().fill(.secondary.opacity(0.2)).overlay(Image(systemName: "exclamationmark.triangle"))
@@ -31,11 +31,13 @@ struct DetailImageView: View {
     }
 }
 
-// --- FlowLayout (Annahme: Existiert) ---
-// struct FlowLayout: Layout { /* ... */ }
-
-// --- CommentsSection (Annahme: Existiert) ---
-// struct CommentsSection: View { /* ... */ }
+// --- InfoLoadingStatus (unverändert) ---
+enum InfoLoadingStatus: Equatable {
+    case idle
+    case loading
+    case loaded
+    case error(String)
+}
 
 
 struct DetailViewContent: View {
@@ -47,13 +49,13 @@ struct DetailViewContent: View {
     let tags: [ItemTag]
     let comments: [ItemComment]
     let infoLoadingStatus: InfoLoadingStatus
+    @Binding var previewLinkTarget: PreviewLinkTarget? // <-- GEÄNDERT: Typ ist jetzt Wrapper
 
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
 
-    // MARK: - Computed View Properties
+    // MARK: - Computed View Properties (unverändert)
 
-    // mediaContentInternal: Reine View
     @ViewBuilder
     private var mediaContentInternal: some View {
         Group {
@@ -70,7 +72,6 @@ struct DetailViewContent: View {
         }
     }
 
-    // --- Vote View ---
     @ViewBuilder
     private var voteCounterView: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -85,7 +86,6 @@ struct DetailViewContent: View {
         }
     }
 
-    // --- infoAndTagsContent ---
     @ViewBuilder
     private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -104,104 +104,83 @@ struct DetailViewContent: View {
                          }
                     } else if infoLoadingStatus == .loading {
                         ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                    } else if case .error(let msg) = infoLoadingStatus {
-                        Text("Fehler Tags: \(msg)").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                    } else if case .error = infoLoadingStatus { // Nur auf .error prüfen, Nachricht in CommentsSection
+                        Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                     }
                  }
                  .layoutPriority(1)
              }
         }
-        // Padding wird jetzt je nach Kontext (links oder rechts) gesetzt
-        // .padding(.vertical, 10)
-        // .padding(.horizontal)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var commentsContent: some View {
-        CommentsSection(comments: comments, status: infoLoadingStatus)
-            // Padding wird jetzt je nach Kontext gesetzt
-            // .padding(.top, 10)
+        CommentsSection(
+            comments: comments,
+            status: infoLoadingStatus,
+            previewLinkTarget: $previewLinkTarget // <-- Binding weitergeben (Typ ist jetzt Wrapper)
+        )
     }
 
-    // MARK: - Body (Regular Layout angepasst)
+    // MARK: - Body (unverändert)
      var body: some View {
         Group {
             if horizontalSizeClass == .regular {
-                // --- REGULAR LAYOUT (macOS / iPad) ---
                 HStack(alignment: .top, spacing: 0) {
-                    // Linke Spalte: Media Content
-                    // GeometryReader für korrekte Rahmengröße auf Mac
                     GeometryReader { geometry in
-                        // ScrollView nicht mehr nötig, da nur ein Element
                         mediaContentInternal
-                             // --- Modifier für Regular (funktionierend) ---
-                             .scaledToFit() // Skaliert Inhalt
-                             .frame(width: geometry.size.width, height: geometry.size.height) // Nutzt GR Größe
+                             .scaledToFit()
+                             .frame(width: geometry.size.width, height: geometry.size.height)
                              .clipped()
-                             // -------------------------
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Linke Spalte flexibel
-
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     Divider()
-
-                    // Rechte Spalte: Infos + Kommentare
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 15) { // spacing anpassen nach Bedarf
-                            // Infos/Tags zuerst
-                            infoAndTagsContent
-                                .padding([.horizontal, .top]) // Oben + Seiten
-
-                            // Kommentare darunter
-                            commentsContent
-                                 .padding([.horizontal, .bottom]) // Unten + Seiten
+                        VStack(alignment: .leading, spacing: 15) {
+                            infoAndTagsContent.padding([.horizontal, .top])
+                            commentsContent.padding([.horizontal, .bottom])
                         }
                     }
-                    // --- Flexiblere Breite für rechte Spalte ---
                     .frame(minWidth: 300, idealWidth: 450, maxWidth: 600)
                     .background(Color(.secondarySystemBackground))
                 }
             } else {
-                // --- COMPACT LAYOUT (iOS - unverändert) ---
                 ScrollView {
                     VStack(spacing: 0) {
-                         mediaContentInternal
-                             .scaledToFit() // Nur .scaledToFit
-                         infoAndTagsContent
-                             .padding(.horizontal) // Padding für Infos/Tags
-                             .padding(.vertical, 10)
-                         commentsContent
-                             .padding(.horizontal) // Padding für Kommentare
-                             .padding(.bottom, 10)
+                         mediaContentInternal.scaledToFit()
+                         infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
+                         commentsContent.padding(.horizontal).padding(.bottom, 10)
                      }
                 }
             }
-        } // Ende Haupt-Group
-        .frame(maxWidth: .infinity, maxHeight: .infinity) // Äußerster Rahmen bleibt flexibel
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
         .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
     }
 
-    // --- guessAspectRatio ---
     private func guessAspectRatio() -> CGFloat? {
         if item.width > 0 && item.height > 0 {
             return CGFloat(item.width) / CGFloat(item.height)
         }
-        return 16.0 / 9.0 // Fallback
+        return 16.0 / 9.0
     }
 } // Ende struct DetailViewContent
 
 
-// MARK: - Preview
-// --- KORRIGIERT: repost: nil, variants: nil hinzugefügt ---
+// MARK: - Preview (State Typ geändert)
 #Preview("Compact") {
-     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil) // <-- Hinzugefügt
+     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil)
      let previewHandler = KeyboardActionHandler()
      let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "Cool"), ItemTag(id: 2, confidence: 0.7, tag: "Video"), ItemTag(id: 3, confidence: 0.8, tag: "Ein etwas längerer Tag"), ItemTag(id: 4, confidence: 0.6, tag: "Mehr"), ItemTag(id: 5, confidence: 0.5, tag: "Tags"), ItemTag(id: 6, confidence: 0.4, tag: "Test") ]
      let previewComments: [ItemComment] = [ ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1), ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7) ]
      let previewPlayer: AVPlayer? = sampleVideoItem.isVideo ? AVPlayer(url: URL(string: "https://example.com/dummy.mp4")!) : nil
 
-     NavigationStack {
+     // --- GEÄNDERT: STATE Typ für Preview ---
+     @State var previewLinkTarget: PreviewLinkTarget? = nil
+
+     return NavigationStack {
         DetailViewContent(
             item: sampleVideoItem,
             keyboardActionHandler: previewHandler,
@@ -210,20 +189,23 @@ struct DetailViewContent: View {
             onWillEndFullScreen: { print("Preview: End Fullscreen") },
             tags: previewTags,
             comments: previewComments,
-            infoLoadingStatus: .loaded
+            infoLoadingStatus: .loaded,
+            previewLinkTarget: $previewLinkTarget // <-- Binding übergeben (Typ ist jetzt Wrapper)
         )
         .environment(\.horizontalSizeClass, .compact)
     }
 }
-// --- KORRIGIERT: repost: nil, variants: nil hinzugefügt ---
 #Preview("Regular") {
-     let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil) // <-- Hinzugefügt
+     let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil)
     let previewHandler = KeyboardActionHandler()
     let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")]
-    let previewComments: [ItemComment] = [ ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1), ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7), ItemComment(id: 3, parent: 0, content: "Zweiter Top-Level Kommentar mit etwas längerem Text, um zu sehen, wie er umbricht.", created: Int(Date().timeIntervalSince1970) - 60, up: 10, down: 3, confidence: 0.9, name: "UserC", mark: 3), ItemComment(id: 4, parent: 3, content: "Antwort auf zweiten.", created: Int(Date().timeIntervalSince1970) - 30, up: 1, down: 0, confidence: 0.7, name: "UserA", mark: 1) ]
+    let previewComments: [ItemComment] = [ ItemComment(id: 1, parent: 0, content: "Erster Kommentar! https://pr0gramm.com/top/12345", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1), ItemComment(id: 2, parent: 1, content: "Antwort.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7), ItemComment(id: 3, parent: 0, content: "Zweiter Top-Level Kommentar mit etwas längerem Text, um zu sehen, wie er umbricht.", created: Int(Date().timeIntervalSince1970) - 60, up: 10, down: 3, confidence: 0.9, name: "UserC", mark: 3), ItemComment(id: 4, parent: 3, content: "Antwort auf zweiten.", created: Int(Date().timeIntervalSince1970) - 30, up: 1, down: 0, confidence: 0.7, name: "UserA", mark: 1) ]
     let previewPlayer: AVPlayer? = sampleImageItem.isVideo ? AVPlayer(url: URL(string: "https://example.com/dummy.mp4")!) : nil
 
-     NavigationStack {
+     // --- GEÄNDERT: STATE Typ für Preview ---
+     @State var previewLinkTarget: PreviewLinkTarget? = nil
+
+     return NavigationStack {
         DetailViewContent(
             item: sampleImageItem,
             keyboardActionHandler: previewHandler,
@@ -232,10 +214,11 @@ struct DetailViewContent: View {
             onWillEndFullScreen: { print("Preview: End Fullscreen") },
             tags: previewTags,
             comments: previewComments,
-            infoLoadingStatus: .loaded
+            infoLoadingStatus: .loaded,
+            previewLinkTarget: $previewLinkTarget // <-- Binding übergeben (Typ ist jetzt Wrapper)
         )
         .environment(\.horizontalSizeClass, .regular)
     }
     .previewDevice("iPad (10th generation)")
 }
-// --- END OF MODIFIED FILE ---
+// --- END OF COMPLETE FILE ---
