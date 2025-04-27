@@ -23,7 +23,7 @@ struct PagedDetailTabViewItem: View {
     let player: AVPlayer?
 
     let tags: [ItemTag]
-    let comments: [ItemComment] // <-- Receives already sorted comments
+    let comments: [DisplayComment] // <-- ACCEPTS DisplayComment NOW
     let infoLoadingStatus: InfoLoadingStatus
     /// Action to load info for the *currently visible* item.
     let loadInfoAction: (Item) async -> Void
@@ -48,7 +48,7 @@ struct PagedDetailTabViewItem: View {
             onWillBeginFullScreen: onWillBeginFullScreen,
             onWillEndFullScreen: onWillEndFullScreen,
             tags: tags,
-            comments: comments, // <-- Pass the sorted comments down
+            comments: comments, // <-- Pass DisplayComment list down
             infoLoadingStatus: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget,
             isFavorited: isFavorited,
@@ -210,21 +210,20 @@ struct PagedDetailView: View {
 
     // MARK: - Helper Function for TabView Page Content
     /// Creates the view content for a single page in the TabView.
-    @ViewBuilder // Keep @ViewBuilder here as it handles the if/else returning different View types
+    @ViewBuilder
     private func tabViewPage(for index: Int) -> some View {
-        // Use `if let` to get prepared data or return EmptyView if preparation fails (e.g., invalid index)
+        // Use `if let` to get prepared data or return EmptyView if preparation fails
         if let pageData = preparePageData(for: index) {
-            // Create the PagedDetailTabViewItem using the prepared data
             PagedDetailTabViewItem(
                 item: pageData.currentItem,
                 keyboardActionHandler: keyboardActionHandler,
                 player: pageData.currentItem.id == playerManager.playerItemID ? playerManager.player : nil,
                 tags: pageData.tags,
-                comments: pageData.comments,
+                comments: pageData.comments, // <-- Pass DisplayComment list
                 infoLoadingStatus: pageData.status,
                 loadInfoAction: loadInfoIfNeeded,
                 preloadInfoAction: loadInfoIfNeeded,
-                allItems: items, // Pass the original items array
+                allItems: items,
                 currentIndex: index,
                 onWillBeginFullScreen: {
                     Self.logger.debug("[View] Callback: willBeginFullScreen")
@@ -235,19 +234,17 @@ struct PagedDetailView: View {
                      self.isFullscreen = false
                 },
                 previewLinkTarget: $previewLinkTarget,
-                isFavorited: items[index].favorited ?? false, // Get favorite status from original items array
+                isFavorited: items[index].favorited ?? false,
                 toggleFavoriteAction: toggleFavorite
             )
-            .tag(index) // Apply the tag modifier
+            .tag(index)
         } else {
-            // Handle invalid index or failed preparation
             EmptyView()
         }
     }
 
-    /// **NEW:** Helper function to prepare data for a single page, separating logic from ViewBuilder.
-    /// This function does NOT use @ViewBuilder.
-    private func preparePageData(for index: Int) -> (currentItem: Item, status: InfoLoadingStatus, comments: [ItemComment], tags: [ItemTag])? {
+    /// **MODIFIED:** Helper function to prepare hierarchical data for a single page.
+    private func preparePageData(for index: Int) -> (currentItem: Item, status: InfoLoadingStatus, comments: [DisplayComment], tags: [ItemTag])? {
         guard index >= 0 && index < items.count else {
             Self.logger.error("preparePageData failed: Invalid index \(index)")
             return nil // Return nil if index is invalid
@@ -256,33 +253,50 @@ struct PagedDetailView: View {
         // --- Data Preparation ---
         let currentItem = items[index]
         let statusForItem = infoLoadingStatus[currentItem.id] ?? .idle
-        let baseComments = loadedInfos[currentItem.id]?.comments ?? []
+        let baseComments = loadedInfos[currentItem.id]?.comments ?? [] // Flat list from API
         let baseTags = loadedInfos[currentItem.id]?.tags ?? []
 
-        // Perform comment sorting logic
-        let sortedComments: [ItemComment]
-        switch settings.commentSortOrder {
-        case .date:
-            sortedComments = baseComments // Assume API returns chronological
-        case .score:
-            sortedComments = baseComments.sorted { ($0.up - $0.down) > ($1.up - $1.down) } // Highest score first
-        }
+        // --- Build Comment Hierarchy ---
+        let commentsById = Dictionary(grouping: baseComments, by: { $0.id }).compactMapValues { $0.first }
+        var childrenByParentId: [Int: [ItemComment]] = Dictionary(grouping: baseComments, by: { $0.parent ?? 0 }) // Group by parent ID
 
-        // Perform tag sorting logic
-        let tagsForItem = baseTags.sorted { $0.confidence > $1.confidence }
+        // Remove top-level comments (parent=0) from children dictionary
+        childrenByParentId.removeValue(forKey: 0)
 
-        // --- Logging (as side effect) ---
-        if statusForItem == .loaded {
-            switch settings.commentSortOrder {
-            case .date:
-                Self.logger.trace("Using API order (date) for comments of item \(currentItem.id)")
-            case .score:
-                Self.logger.trace("Sorting comments by score (Benis) descending for item \(currentItem.id)")
+        // Recursive function to build the DisplayComment hierarchy
+        func buildHierarchy(for comments: [ItemComment]) -> [DisplayComment] {
+            comments.map { comment in
+                // Find children for this comment, sort them by creation date (ascending)
+                let children = childrenByParentId[comment.id]?.sorted { $0.created < $1.created } ?? []
+                // Recursively build the hierarchy for the children
+                let displayChildren = buildHierarchy(for: children)
+                // Create the DisplayComment node
+                return DisplayComment(id: comment.id, comment: comment, children: displayChildren)
             }
         }
 
-        // Return the prepared data as a tuple
-        return (currentItem: currentItem, status: statusForItem, comments: sortedComments, tags: tagsForItem)
+        // Filter top-level comments (parent is 0 or nil)
+        let topLevelComments = baseComments.filter { $0.parent == nil || $0.parent == 0 }
+
+        // Sort *only* the top-level comments based on the setting
+        let sortedTopLevelComments: [ItemComment]
+        switch settings.commentSortOrder {
+        case .date:
+            sortedTopLevelComments = topLevelComments.sorted { $0.created < $1.created } // Oldest first
+            if statusForItem == .loaded && !topLevelComments.isEmpty { Self.logger.trace("Sorting top-level comments by date (ascending) for item \(currentItem.id)") }
+        case .score:
+            sortedTopLevelComments = topLevelComments.sorted { ($0.up - $0.down) > ($1.up - $1.down) } // Highest score first
+            if statusForItem == .loaded && !topLevelComments.isEmpty { Self.logger.trace("Sorting top-level comments by score (descending) for item \(currentItem.id)") }
+        }
+
+        // Build the final hierarchical structure starting from sorted top-level comments
+        let displayComments = buildHierarchy(for: sortedTopLevelComments)
+
+        // --- Tag Sorting ---
+        let tagsForItem = baseTags.sorted { $0.confidence > $1.confidence }
+
+        // Return the prepared data
+        return (currentItem: currentItem, status: statusForItem, comments: displayComments, tags: tagsForItem)
     }
 
 

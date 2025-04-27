@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Shared/DetailViewContent.swift
+// --- START OF COMPLETE FILE ---
+
 import SwiftUI
 import AVKit
 import Combine
@@ -48,8 +51,8 @@ struct DetailViewContent: View {
     let onWillEndFullScreen: () -> Void
     /// Tags associated with the item.
     let tags: [ItemTag]
-    /// Comments associated with the item.
-    let comments: [ItemComment]
+    /// Comments associated with the item, structured hierarchically.
+    let comments: [DisplayComment] // <-- ACCEPTS DisplayComment NOW
     /// Loading status for tags and comments.
     let infoLoadingStatus: InfoLoadingStatus
     /// Binding to trigger the preview sheet for linked items in comments.
@@ -204,9 +207,9 @@ struct DetailViewContent: View {
     /// Displays the comments section.
     @ViewBuilder private var commentsContent: some View {
         CommentsSection(
-            comments: comments,
+            comments: comments, // Pass down the hierarchical DisplayComment list
             status: infoLoadingStatus,
-            previewLinkTarget: $previewLinkTarget // Pass down the binding
+            previewLinkTarget: $previewLinkTarget
         )
     }
 
@@ -271,65 +274,77 @@ struct DetailViewContent: View {
 
 #Preview("Compact Favorited") {
      // Sample data setup
-     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true); // Marked as favorited
-     let previewHandler = KeyboardActionHandler(); let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Cool"), ItemTag(id: 2, confidence: 0.7, tag: "Video"), ItemTag(id: 3, confidence: 0.8, tag: "Längerer Tag")]; let previewComments: [ItemComment] = [ItemComment(id: 1, parent: 0, content: "Kommentar", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1)]; let previewPlayer: AVPlayer? = nil
+     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true);
+     let previewHandler = KeyboardActionHandler();
+     let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Cool"), ItemTag(id: 2, confidence: 0.7, tag: "Video"), ItemTag(id: 3, confidence: 0.8, tag: "Längerer Tag")];
+     let previewComments: [DisplayComment] = [ // Use DisplayComment for preview
+        DisplayComment(id: 1, comment: ItemComment(id: 1, parent: 0, content: "Kommentar", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), children: [])
+     ]
+     let previewPlayer: AVPlayer? = nil
      @State var previewLinkTarget: PreviewLinkTarget? = nil
      let navService = NavigationService()
      let settings = AppSettings()
-     let authService = { // Setup logged-in auth service for preview
+     let authService = {
          let auth = AuthService(appSettings: settings)
          auth.isLoggedIn = true
-         auth.favoritesCollectionId = 1234 // Need a dummy ID for preview
+         auth.favoritesCollectionId = 1234
          return auth
      }()
 
-     return NavigationStack { // Required for toolbar/navigation features
+     // REMOVED explicit return
+     NavigationStack {
         DetailViewContent(
             item: sampleVideoItem,
             keyboardActionHandler: previewHandler,
             player: previewPlayer,
             onWillBeginFullScreen: {}, onWillEndFullScreen: {},
-            tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded,
+            tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded, // Pass DisplayComment
             previewLinkTarget: $previewLinkTarget,
-            isFavorited: true, // Match item data
-            toggleFavoriteAction: {} // Dummy action for preview
+            isFavorited: true,
+            toggleFavoriteAction: {}
         )
         .environmentObject(navService)
         .environmentObject(settings)
         .environmentObject(authService)
-        .environment(\.horizontalSizeClass, .compact) // Force compact layout
+        .environment(\.horizontalSizeClass, .compact)
     }
 }
 
 #Preview("Regular Not Favorited") {
     // Sample data setup
-    let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false); // Not favorited
-    let previewHandler = KeyboardActionHandler(); let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")]; let previewComments: [ItemComment] = [ItemComment(id: 1, parent: 0, content: "Kommentar https://pr0gramm.com/top/123", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1)]; let previewPlayer: AVPlayer? = nil
+    let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false);
+    let previewHandler = KeyboardActionHandler(); let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")];
+    let previewComments: [DisplayComment] = [ // Use DisplayComment for preview
+        DisplayComment(id: 1, comment: ItemComment(id: 1, parent: 0, content: "Kommentar https://pr0gramm.com/top/123", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), children: [])
+    ];
+    let previewPlayer: AVPlayer? = nil
      @State var previewLinkTarget: PreviewLinkTarget? = nil
      let navService = NavigationService()
      let settings = AppSettings()
-     let authService = { // Setup logged-in auth service for preview
+     let authService = {
          let auth = AuthService(appSettings: settings)
          auth.isLoggedIn = true
-         auth.favoritesCollectionId = 1234 // Need a dummy ID for preview
+         auth.favoritesCollectionId = 1234
          return auth
      }()
 
-     return NavigationStack {
+     // REMOVED explicit return
+     NavigationStack {
         DetailViewContent(
             item: sampleImageItem,
             keyboardActionHandler: previewHandler,
             player: previewPlayer,
             onWillBeginFullScreen: {}, onWillEndFullScreen: {},
-            tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded,
+            tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded, // Pass DisplayComment
             previewLinkTarget: $previewLinkTarget,
-            isFavorited: false, // Match item data
-            toggleFavoriteAction: {} // Dummy action
+            isFavorited: false,
+            toggleFavoriteAction: {}
         )
         .environmentObject(navService)
         .environmentObject(settings)
         .environmentObject(authService)
-        .environment(\.horizontalSizeClass, .regular) // Force regular layout
+        .environment(\.horizontalSizeClass, .regular)
     }
-    .previewDevice("iPad (10th generation)") // Simulate iPad for regular layout
+    .previewDevice("iPad (10th generation)")
 }
+// --- END OF COMPLETE FILE ---
