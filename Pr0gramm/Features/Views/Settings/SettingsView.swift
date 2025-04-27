@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Features/Views/Settings/SettingsView.swift
+// --- START OF COMPLETE FILE ---
+
 import SwiftUI
 import os
 
@@ -17,6 +20,15 @@ struct SettingsView: View {
                 // Section for Video Settings
                 Section("Video") {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
+                }
+
+                // Section for Comment Settings <-- NEUE SEKTION
+                Section("Kommentare") {
+                    Picker("Sortierung", selection: $settings.commentSortOrder) {
+                        ForEach(CommentSortOrder.allCases) { order in
+                            Text(order.displayName).tag(order)
+                        }
+                    }
                 }
 
                 // Section for Cache Settings
@@ -90,3 +102,4 @@ struct SettingsView: View {
     // Provide AppSettings for the preview environment
     SettingsView().environmentObject(AppSettings())
 }
+// --- END OF COMPLETE FILE ---

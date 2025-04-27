@@ -23,7 +23,7 @@ struct PagedDetailTabViewItem: View {
     let player: AVPlayer?
 
     let tags: [ItemTag]
-    let comments: [ItemComment]
+    let comments: [ItemComment] // <-- Receives already sorted comments
     let infoLoadingStatus: InfoLoadingStatus
     /// Action to load info for the *currently visible* item.
     let loadInfoAction: (Item) async -> Void
@@ -48,7 +48,7 @@ struct PagedDetailTabViewItem: View {
             onWillBeginFullScreen: onWillBeginFullScreen,
             onWillEndFullScreen: onWillEndFullScreen,
             tags: tags,
-            comments: comments,
+            comments: comments, // <-- Pass the sorted comments down
             infoLoadingStatus: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget,
             isFavorited: isFavorited,
@@ -76,7 +76,7 @@ struct PagedDetailView: View {
     /// The index of the currently visible item.
     @State private var selectedIndex: Int
     @Environment(\.dismiss) var dismiss
-    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var settings: AppSettings // <-- Benötigt für Sortiereinstellung
     @EnvironmentObject var authService: AuthService
     @Environment(\.scenePhase) var scenePhase // Keep ScenePhase environment value
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
@@ -132,38 +132,7 @@ struct PagedDetailView: View {
     private var tabViewContent: some View {
         TabView(selection: $selectedIndex) {
             ForEach(items.indices, id: \.self) { index in
-                let currentItem = items[index]
-                // Retrieve cached info and status for the item
-                let statusForItem = infoLoadingStatus[currentItem.id] ?? .idle
-                let tagsForItem = loadedInfos[currentItem.id]?.tags.sorted { $0.confidence > $1.confidence } ?? []
-                let commentsForItem = loadedInfos[currentItem.id]?.comments ?? []
-
-                PagedDetailTabViewItem(
-                    item: currentItem,
-                    keyboardActionHandler: keyboardActionHandler,
-                    // Provide the player from the manager *only if* the item ID matches the manager's current item ID
-                    player: currentItem.id == playerManager.playerItemID ? playerManager.player : nil,
-                    tags: tagsForItem,
-                    comments: commentsForItem,
-                    infoLoadingStatus: statusForItem,
-                    loadInfoAction: loadInfoIfNeeded, // Pass info loading action
-                    preloadInfoAction: loadInfoIfNeeded, // Pass preloading action
-                    allItems: items,
-                    currentIndex: index,
-                    onWillBeginFullScreen: { // Fullscreen callbacks
-                        Self.logger.debug("[View] Callback: willBeginFullScreen")
-                        self.isFullscreen = true
-                    },
-                    onWillEndFullScreen: {
-                         Self.logger.debug("[View] Callback: willEndFullScreen")
-                         self.isFullscreen = false
-                         // Player restart after fullscreen is handled by AVPlayerViewController itself or manager if needed
-                    },
-                    previewLinkTarget: $previewLinkTarget,
-                    isFavorited: items[index].favorited ?? false, // Pass favorite status
-                    toggleFavoriteAction: toggleFavorite // Pass toggle action
-                )
-                .tag(index) // Associate the view with its index for TabView selection
+                 tabViewPage(for: index) // <-- Aufruf der Helper-Funktion
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never)) // Use page-style swiping without index dots
@@ -231,7 +200,91 @@ struct PagedDetailView: View {
             //     Self.logger.debug("App became inactive/background. Paused player.")
             // }
         }
+         // Wichtig: Beobachte die Sortiereinstellung. Wenn sie sich ändert,
+         // wird die `body` neu ausgewertet und die Sortierung angewendet.
+         .onChange(of: settings.commentSortOrder) { _, newOrder in
+             Self.logger.info("Comment sort order changed in settings, PagedDetailView body will re-evaluate.")
+             // Keine explizite Aktion nötig, da die body-Neuberechnung die Sortierung anwendet.
+         }
     }
+
+    // MARK: - Helper Function for TabView Page Content
+    /// Creates the view content for a single page in the TabView.
+    @ViewBuilder // Keep @ViewBuilder here as it handles the if/else returning different View types
+    private func tabViewPage(for index: Int) -> some View {
+        // Use `if let` to get prepared data or return EmptyView if preparation fails (e.g., invalid index)
+        if let pageData = preparePageData(for: index) {
+            // Create the PagedDetailTabViewItem using the prepared data
+            PagedDetailTabViewItem(
+                item: pageData.currentItem,
+                keyboardActionHandler: keyboardActionHandler,
+                player: pageData.currentItem.id == playerManager.playerItemID ? playerManager.player : nil,
+                tags: pageData.tags,
+                comments: pageData.comments,
+                infoLoadingStatus: pageData.status,
+                loadInfoAction: loadInfoIfNeeded,
+                preloadInfoAction: loadInfoIfNeeded,
+                allItems: items, // Pass the original items array
+                currentIndex: index,
+                onWillBeginFullScreen: {
+                    Self.logger.debug("[View] Callback: willBeginFullScreen")
+                    self.isFullscreen = true
+                },
+                onWillEndFullScreen: {
+                     Self.logger.debug("[View] Callback: willEndFullScreen")
+                     self.isFullscreen = false
+                },
+                previewLinkTarget: $previewLinkTarget,
+                isFavorited: items[index].favorited ?? false, // Get favorite status from original items array
+                toggleFavoriteAction: toggleFavorite
+            )
+            .tag(index) // Apply the tag modifier
+        } else {
+            // Handle invalid index or failed preparation
+            EmptyView()
+        }
+    }
+
+    /// **NEW:** Helper function to prepare data for a single page, separating logic from ViewBuilder.
+    /// This function does NOT use @ViewBuilder.
+    private func preparePageData(for index: Int) -> (currentItem: Item, status: InfoLoadingStatus, comments: [ItemComment], tags: [ItemTag])? {
+        guard index >= 0 && index < items.count else {
+            Self.logger.error("preparePageData failed: Invalid index \(index)")
+            return nil // Return nil if index is invalid
+        }
+
+        // --- Data Preparation ---
+        let currentItem = items[index]
+        let statusForItem = infoLoadingStatus[currentItem.id] ?? .idle
+        let baseComments = loadedInfos[currentItem.id]?.comments ?? []
+        let baseTags = loadedInfos[currentItem.id]?.tags ?? []
+
+        // Perform comment sorting logic
+        let sortedComments: [ItemComment]
+        switch settings.commentSortOrder {
+        case .date:
+            sortedComments = baseComments // Assume API returns chronological
+        case .score:
+            sortedComments = baseComments.sorted { ($0.up - $0.down) > ($1.up - $1.down) } // Highest score first
+        }
+
+        // Perform tag sorting logic
+        let tagsForItem = baseTags.sorted { $0.confidence > $1.confidence }
+
+        // --- Logging (as side effect) ---
+        if statusForItem == .loaded {
+            switch settings.commentSortOrder {
+            case .date:
+                Self.logger.trace("Using API order (date) for comments of item \(currentItem.id)")
+            case .score:
+                Self.logger.trace("Sorting comments by score (Benis) descending for item \(currentItem.id)")
+            }
+        }
+
+        // Return the prepared data as a tuple
+        return (currentItem: currentItem, status: statusForItem, comments: sortedComments, tags: tagsForItem)
+    }
+
 
     // Info Loading Methods
     private func loadInfoIfNeeded(for item: Item) async {

@@ -21,6 +21,22 @@ enum FeedType: Int, CaseIterable, Identifiable {
     }
 }
 
+/// Defines the available sorting orders for comments.
+enum CommentSortOrder: Int, CaseIterable, Identifiable {
+    case date = 0
+    case score = 1
+
+    var id: Int { self.rawValue }
+
+    var displayName: String {
+        switch self {
+        case .date: return "Datum / Zeit"
+        case .score: return "Benis (Score)"
+        }
+    }
+}
+
+
 /// Manages application-wide settings, persists them to UserDefaults, and provides access to cache services.
 @MainActor
 class AppSettings: ObservableObject {
@@ -37,6 +53,7 @@ class AppSettings: ObservableObject {
     private static let showNSFPKey = "showNSFPPreference_v1"
     private static let showPOLKey = "showPOLPreference_v1"
     private static let maxImageCacheSizeMBKey = "maxImageCacheSizeMB_v1"
+    private static let commentSortOrderKey = "commentSortOrder_v1" // <-- Key für neue Einstellung
 
     // MARK: - Published User Settings (Persisted)
     /// Whether videos should start muted. Persisted in UserDefaults.
@@ -60,6 +77,14 @@ class AppSettings: ObservableObject {
             updateKingfisherCacheLimit()
         }
     }
+    /// The preferred sorting order for comments. Persisted in UserDefaults.
+    @Published var commentSortOrder: CommentSortOrder { // <-- Neue Einstellung
+        didSet {
+            UserDefaults.standard.set(commentSortOrder.rawValue, forKey: Self.commentSortOrderKey)
+            Self.logger.info("Comment sort order changed to: \(self.commentSortOrder.displayName)")
+        }
+    }
+
 
     // MARK: - Published Session State (Not Persisted)
     /// Stores the user's desired mute state *for the current app session*.
@@ -111,19 +136,22 @@ class AppSettings: ObservableObject {
         self.showNSFP = UserDefaults.standard.bool(forKey: Self.showNSFPKey)
         self.showPOL = UserDefaults.standard.bool(forKey: Self.showPOLKey)
         self.maxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) == nil ? 100 : UserDefaults.standard.integer(forKey: Self.maxImageCacheSizeMBKey)
-        // transientSessionMuteState starts as nil intentionally
+        // Load new comment sort setting or default to .date
+        self.commentSortOrder = CommentSortOrder(rawValue: UserDefaults.standard.integer(forKey: Self.commentSortOrderKey)) ?? .date
 
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
         Self.logger.info("- feedType: \(self.feedType.displayName)")
         Self.logger.info("- Content Flags: SFW(\(self.showSFW)) NSFW(\(self.showNSFW)) NSFL(\(self.showNSFL)) NSFP(\(self.showNSFP)) POL(\(self.showPOL)) -> API Flags: \(self.apiFlags)")
         Self.logger.info("- maxImageCacheSizeMB: \(self.maxImageCacheSizeMB)")
+        Self.logger.info("- commentSortOrder: \(self.commentSortOrder.displayName)") // <-- Log initial value
 
         // Ensure defaults are written if they were missing
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
         if UserDefaults.standard.object(forKey: Self.showSFWKey) == nil { UserDefaults.standard.set(self.showSFW, forKey: Self.showSFWKey) }
         if UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) == nil { UserDefaults.standard.set(self.maxImageCacheSizeMB, forKey: Self.maxImageCacheSizeMBKey) }
+        if UserDefaults.standard.object(forKey: Self.commentSortOrderKey) == nil { UserDefaults.standard.set(self.commentSortOrder.rawValue, forKey: Self.commentSortOrderKey) } // <-- Write default if missing
 
         updateKingfisherCacheLimit()
         Task { await updateCacheSizes() } // Fetch initial cache sizes
