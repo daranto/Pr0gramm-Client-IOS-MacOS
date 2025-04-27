@@ -22,8 +22,10 @@ struct PagedDetailTabViewItem: View {
     /// via `PagedDetailView`. Will be `nil` if this item is not the currently active video.
     let player: AVPlayer?
 
-    let tags: [ItemTag]
-    let comments: [DisplayComment] // <-- ACCEPTS DisplayComment NOW
+    let displayedTags: [ItemTag] // <-- Renamed from 'tags'
+    let totalTagCount: Int // <-- New: Total number of tags available
+    let showingAllTags: Bool // <-- New: Flag if all tags are currently displayed
+    let comments: [DisplayComment]
     let infoLoadingStatus: InfoLoadingStatus
     /// Action to load info for the *currently visible* item.
     let loadInfoAction: (Item) async -> Void
@@ -38,21 +40,24 @@ struct PagedDetailTabViewItem: View {
     @Binding var previewLinkTarget: PreviewLinkTarget?
     let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
+    let showAllTagsAction: () -> Void // <-- New: Action to show all tags
 
     var body: some View {
         DetailViewContent(
             item: item,
             keyboardActionHandler: keyboardActionHandler,
-            // Pass the player instance received from the parent
             player: player,
             onWillBeginFullScreen: onWillBeginFullScreen,
             onWillEndFullScreen: onWillEndFullScreen,
-            tags: tags,
-            comments: comments, // <-- Pass DisplayComment list down
+            displayedTags: displayedTags, // <-- Pass displayed tags
+            totalTagCount: totalTagCount, // <-- Pass total count
+            showingAllTags: showingAllTags, // <-- Pass flag
+            comments: comments,
             infoLoadingStatus: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget,
             isFavorited: isFavorited,
-            toggleFavoriteAction: toggleFavoriteAction
+            toggleFavoriteAction: toggleFavoriteAction,
+            showAllTagsAction: showAllTagsAction // <-- Pass action
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity) // Ensure it fills the tab page
         .onAppear {
@@ -76,9 +81,9 @@ struct PagedDetailView: View {
     /// The index of the currently visible item.
     @State private var selectedIndex: Int
     @Environment(\.dismiss) var dismiss
-    @EnvironmentObject var settings: AppSettings // <-- Benötigt für Sortiereinstellung
+    @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
-    @Environment(\.scenePhase) var scenePhase // Keep ScenePhase environment value
+    @Environment(\.scenePhase) var scenePhase
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
     // MARK: State for View Logic
@@ -92,6 +97,8 @@ struct PagedDetailView: View {
     @State private var loadedInfos: [Int: ItemsInfoResponse] = [:]
     /// Tracks the loading status for details of each item ID.
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
+    /// **NEW**: Stores the IDs of items for which the user wants to see all tags.
+    @State private var showAllTagsForItem: Set<Int> = []
     /// API service instance.
     private let apiService = APIService()
     /// State variable to trigger the presentation of the linked item preview sheet.
@@ -145,12 +152,13 @@ struct PagedDetailView: View {
              Self.logger.info("Selected index changed from \(oldValue) to \(newValue)")
              if newValue >= 0 && newValue < items.count {
                   // Tell the VideoPlayerManager to set up the player for the *new* item.
-                  // The manager handles cleaning up the old player internally if necessary.
                   playerManager.setupPlayerIfNeeded(for: items[newValue], isFullscreen: isFullscreen)
                   // Load info for the new item if needed
                   Task { await loadInfoIfNeeded(for: items[newValue]) }
              }
              isTogglingFavorite = false // Reset favorite toggle state on page change
+             // Note: showAllTagsForItem is NOT reset here, allowing the user's preference
+             // for showing all tags to persist as they swipe back and forth.
         }
         .onAppear {
             // When the PagedDetailView first appears
@@ -174,37 +182,26 @@ struct PagedDetailView: View {
             // Remove keyboard actions
             keyboardActionHandler.selectNextAction = nil
             keyboardActionHandler.selectPreviousAction = nil
-
-            // Crucial: Tell the VideoPlayerManager to clean up the player instance.
-            // This stops playback and releases resources reliably.
+            // Clean up player
             Self.logger.info("Cleaning up player via manager because PagedDetailView is disappearing.")
             playerManager.cleanupPlayer()
+            // **NEW**: Reset the state for showing all tags when the view disappears entirely
+            showAllTagsForItem = []
+            Self.logger.debug("Reset showAllTagsForItem state on disappear.")
         }
         .onChange(of: scenePhase) { oldPhase, newPhase in
             Self.logger.debug("Scene phase changed from \(String(describing: oldPhase)) to \(String(describing: newPhase))")
             if newPhase == .active {
-                // Reset the transient session state when app becomes active.
-                // The next player setup will then read the persisted setting.
                 Self.logger.info("App became active. Resetting transientSessionMuteState to nil.")
                 settings.transientSessionMuteState = nil
-
-                // Also apply the persisted state to the *currently running* player immediately.
                 if let player = playerManager.player, player.isMuted != settings.isVideoMuted {
                      Self.logger.debug("Applying persisted mute state (\(settings.isVideoMuted)) to current player (\(playerManager.playerItemID ?? -1)) on app activation.")
                      player.isMuted = settings.isVideoMuted
                 }
             }
-            // Optional: Pause player when app goes to background?
-            // else if newPhase == .background || newPhase == .inactive {
-            //     playerManager.player?.pause()
-            //     Self.logger.debug("App became inactive/background. Paused player.")
-            // }
         }
-         // Wichtig: Beobachte die Sortiereinstellung. Wenn sie sich ändert,
-         // wird die `body` neu ausgewertet und die Sortierung angewendet.
          .onChange(of: settings.commentSortOrder) { _, newOrder in
              Self.logger.info("Comment sort order changed in settings, PagedDetailView body will re-evaluate.")
-             // Keine explizite Aktion nötig, da die body-Neuberechnung die Sortierung anwendet.
          }
     }
 
@@ -218,8 +215,10 @@ struct PagedDetailView: View {
                 item: pageData.currentItem,
                 keyboardActionHandler: keyboardActionHandler,
                 player: pageData.currentItem.id == playerManager.playerItemID ? playerManager.player : nil,
-                tags: pageData.tags,
-                comments: pageData.comments, // <-- Pass DisplayComment list
+                displayedTags: pageData.displayedTags, // <-- Pass limited/all tags
+                totalTagCount: pageData.totalTagCount, // <-- Pass total count
+                showingAllTags: pageData.showingAllTags, // <-- Pass flag
+                comments: pageData.comments,
                 infoLoadingStatus: pageData.status,
                 loadInfoAction: loadInfoIfNeeded,
                 preloadInfoAction: loadInfoIfNeeded,
@@ -235,7 +234,13 @@ struct PagedDetailView: View {
                 },
                 previewLinkTarget: $previewLinkTarget,
                 isFavorited: items[index].favorited ?? false,
-                toggleFavoriteAction: toggleFavorite
+                toggleFavoriteAction: toggleFavorite,
+                showAllTagsAction: { // <-- Implement action closure
+                    let itemId = items[index].id
+                    Self.logger.info("Show all tags action triggered for item \(itemId)")
+                    // Add the item ID to the set, triggering a view update
+                    showAllTagsForItem.insert(itemId)
+                }
             )
             .tag(index)
         } else {
@@ -244,7 +249,15 @@ struct PagedDetailView: View {
     }
 
     /// **MODIFIED:** Helper function to prepare hierarchical data for a single page.
-    private func preparePageData(for index: Int) -> (currentItem: Item, status: InfoLoadingStatus, comments: [DisplayComment], tags: [ItemTag])? {
+    /// Now limits tags to top 4 unless requested otherwise.
+    private func preparePageData(for index: Int) -> (
+        currentItem: Item,
+        status: InfoLoadingStatus,
+        comments: [DisplayComment],
+        displayedTags: [ItemTag], // <-- Tags to actually display
+        totalTagCount: Int,       // <-- Total number of tags available
+        showingAllTags: Bool      // <-- Flag if all are being displayed
+    )? {
         guard index >= 0 && index < items.count else {
             Self.logger.error("preparePageData failed: Invalid index \(index)")
             return nil // Return nil if index is invalid
@@ -252,51 +265,56 @@ struct PagedDetailView: View {
 
         // --- Data Preparation ---
         let currentItem = items[index]
-        let statusForItem = infoLoadingStatus[currentItem.id] ?? .idle
-        let baseComments = loadedInfos[currentItem.id]?.comments ?? [] // Flat list from API
-        let baseTags = loadedInfos[currentItem.id]?.tags ?? []
+        let itemId = currentItem.id
+        let statusForItem = infoLoadingStatus[itemId] ?? .idle
+        let baseComments = loadedInfos[itemId]?.comments ?? []
+        let baseTags = loadedInfos[itemId]?.tags ?? []
 
         // --- Build Comment Hierarchy ---
+        // (Comment logic remains unchanged)
         let commentsById = Dictionary(grouping: baseComments, by: { $0.id }).compactMapValues { $0.first }
-        var childrenByParentId: [Int: [ItemComment]] = Dictionary(grouping: baseComments, by: { $0.parent ?? 0 }) // Group by parent ID
-
-        // Remove top-level comments (parent=0) from children dictionary
+        var childrenByParentId: [Int: [ItemComment]] = Dictionary(grouping: baseComments, by: { $0.parent ?? 0 })
         childrenByParentId.removeValue(forKey: 0)
 
-        // Recursive function to build the DisplayComment hierarchy
         func buildHierarchy(for comments: [ItemComment]) -> [DisplayComment] {
             comments.map { comment in
-                // Find children for this comment, sort them by creation date (ascending)
                 let children = childrenByParentId[comment.id]?.sorted { $0.created < $1.created } ?? []
-                // Recursively build the hierarchy for the children
                 let displayChildren = buildHierarchy(for: children)
-                // Create the DisplayComment node
                 return DisplayComment(id: comment.id, comment: comment, children: displayChildren)
             }
         }
-
-        // Filter top-level comments (parent is 0 or nil)
         let topLevelComments = baseComments.filter { $0.parent == nil || $0.parent == 0 }
-
-        // Sort *only* the top-level comments based on the setting
         let sortedTopLevelComments: [ItemComment]
         switch settings.commentSortOrder {
-        case .date:
-            sortedTopLevelComments = topLevelComments.sorted { $0.created < $1.created } // Oldest first
-            if statusForItem == .loaded && !topLevelComments.isEmpty { Self.logger.trace("Sorting top-level comments by date (ascending) for item \(currentItem.id)") }
-        case .score:
-            sortedTopLevelComments = topLevelComments.sorted { ($0.up - $0.down) > ($1.up - $1.down) } // Highest score first
-            if statusForItem == .loaded && !topLevelComments.isEmpty { Self.logger.trace("Sorting top-level comments by score (descending) for item \(currentItem.id)") }
+        case .date: sortedTopLevelComments = topLevelComments.sorted { $0.created < $1.created }
+        case .score: sortedTopLevelComments = topLevelComments.sorted { ($0.up - $0.down) > ($1.up - $1.down) }
         }
-
-        // Build the final hierarchical structure starting from sorted top-level comments
         let displayComments = buildHierarchy(for: sortedTopLevelComments)
 
-        // --- Tag Sorting ---
-        let tagsForItem = baseTags.sorted { $0.confidence > $1.confidence }
+        // --- **NEW**: Tag Limiting Logic ---
+        let sortedTags = baseTags.sorted { $0.confidence > $1.confidence } // Sort all tags
+        let totalTagCount = sortedTags.count
+        let shouldShowAll = showAllTagsForItem.contains(itemId) // Check state set
 
-        // Return the prepared data
-        return (currentItem: currentItem, status: statusForItem, comments: displayComments, tags: tagsForItem)
+        let tagsToDisplay: [ItemTag]
+        if shouldShowAll {
+            tagsToDisplay = sortedTags // Show all if requested
+            if statusForItem == .loaded { Self.logger.trace("Showing ALL \(totalTagCount) tags for item \(itemId) (user requested).") }
+        } else {
+            tagsToDisplay = Array(sortedTags.prefix(4)) // Show top 4 otherwise
+            if statusForItem == .loaded { Self.logger.trace("Showing TOP \(tagsToDisplay.count) of \(totalTagCount) tags for item \(itemId) (default).") }
+        }
+        // --------------------------------
+
+        // Return the prepared data including new tag info
+        return (
+            currentItem: currentItem,
+            status: statusForItem,
+            comments: displayComments,
+            displayedTags: tagsToDisplay, // Return the potentially limited list
+            totalTagCount: totalTagCount,   // Return the total count
+            showingAllTags: shouldShowAll   // Return the flag
+        )
     }
 
 
@@ -304,13 +322,8 @@ struct PagedDetailView: View {
     private func loadInfoIfNeeded(for item: Item) async {
         let itemId = item.id
         let currentStatus = infoLoadingStatus[itemId]
-        guard !(currentStatus == .loading || currentStatus == .loaded) else {
-            // Self.logger.trace("Skipping info load for item \(itemId) - already loaded or loading.") // Too verbose maybe
-            return
-        }
-        if case .error = currentStatus {
-            Self.logger.debug("Retrying info load for item \(itemId) after previous error.")
-        }
+        guard !(currentStatus == .loading || currentStatus == .loaded) else { return }
+        if case .error = currentStatus { Self.logger.debug("Retrying info load for item \(itemId) after previous error.") }
         Self.logger.debug("Starting info load for item \(itemId)...")
         await MainActor.run { infoLoadingStatus[itemId] = .loading }
         do {
@@ -318,13 +331,10 @@ struct PagedDetailView: View {
             await MainActor.run {
                 loadedInfos[itemId] = infoResponse
                 infoLoadingStatus[itemId] = .loaded
-                // Self.logger.debug("Successfully loaded info for item \(itemId). Tags: \(infoResponse.tags.count), Comments: \(infoResponse.comments.count)") // Can be verbose
             }
         } catch {
             Self.logger.error("Failed to load info for item \(itemId): \(error.localizedDescription)")
-            await MainActor.run {
-                infoLoadingStatus[itemId] = .error(error.localizedDescription)
-            }
+            await MainActor.run { infoLoadingStatus[itemId] = .error(error.localizedDescription) }
         }
     }
 
@@ -348,15 +358,14 @@ struct PagedDetailView: View {
         }
     }
 
-    // Favoriting Logic
+    // Favoriting Logic (Unchanged)
     private func toggleFavorite() async {
-        let localSettings = self.settings // Capture settings
-
-        guard !isTogglingFavorite else { Self.logger.debug("Favorite toggle skipped: Action already in progress."); return }
-        guard selectedIndex >= 0 && selectedIndex < items.count else { Self.logger.error("Favorite toggle failed: Invalid selected index \(selectedIndex)."); return }
-        guard authService.isLoggedIn else { Self.logger.warning("Favorite toggle failed: User is not logged in."); return }
-        guard let nonce = authService.userNonce else { Self.logger.error("Favorite toggle failed: User nonce is missing."); return }
-        guard let collectionId = authService.favoritesCollectionId else { Self.logger.error("Favorite toggle failed: Favorites Collection ID is missing."); return }
+        let localSettings = self.settings
+        guard !isTogglingFavorite else { return }
+        guard selectedIndex >= 0 && selectedIndex < items.count else { return }
+        guard authService.isLoggedIn else { return }
+        guard let nonce = authService.userNonce else { return }
+        guard let collectionId = authService.favoritesCollectionId else { return }
 
         let currentItemIndex = selectedIndex
         let itemToToggle = items[currentItemIndex]
@@ -368,34 +377,21 @@ struct PagedDetailView: View {
         items[currentItemIndex].favorited = targetFavoriteState // Optimistic UI
 
         do {
-            if targetFavoriteState {
-                try await apiService.addToCollection(itemId: itemId, nonce: nonce)
-            } else {
-                try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
-            }
+            if targetFavoriteState { try await apiService.addToCollection(itemId: itemId, nonce: nonce) }
+            else { try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce) }
             Self.logger.info("Successfully toggled favorite status for item \(itemId) via API.")
             await localSettings.clearFavoritesCache()
             await localSettings.updateCacheSizes()
-
         } catch {
             Self.logger.error("Failed to toggle favorite status for item \(itemId): \(error.localizedDescription)")
-            // Rollback UI only if we are still on the same item
-            if selectedIndex == currentItemIndex {
-                items[currentItemIndex].favorited = !targetFavoriteState
-            }
+            if selectedIndex == currentItemIndex { items[currentItemIndex].favorited = !targetFavoriteState }
         }
-
-        // Reset flag only if we are still on the same item
-        if selectedIndex == currentItemIndex {
-             isTogglingFavorite = false
-        } else {
-            Self.logger.info("Favorite toggle finished, but selected index changed during operation. isTogglingFavorite remains false for new item.")
-            // The new item will have its own isTogglingFavorite state (which starts as false)
-        }
+        if selectedIndex == currentItemIndex { isTogglingFavorite = false }
+        else { Self.logger.info("Favorite toggle finished, but index changed. isTogglingFavorite remains false for new item.") }
     }
 }
 
-// Wrapper View for Sheet Preview
+// Wrapper View for Sheet Preview (Unchanged)
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
     @EnvironmentObject var settings: AppSettings
@@ -412,17 +408,13 @@ struct LinkedItemPreviewWrapperView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Fertig") {
-                            dismiss()
-                        }
-                    }
+                    ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } }
                 }
         }
     }
 }
 
-// Preview Provider
+// Preview Provider (Unchanged)
 #Preview("Preview") {
     var sampleItems = [
         Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false),
