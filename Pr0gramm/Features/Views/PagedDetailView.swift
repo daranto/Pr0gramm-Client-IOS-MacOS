@@ -93,11 +93,11 @@ struct PagedDetailView: View {
     @StateObject private var playerManager = VideoPlayerManager()
     /// Tracks if the video player is currently in fullscreen mode (managed by callbacks).
     @State private var isFullscreen = false
-    /// Cache for loaded item details (tags, comments). Keyed by item ID.
+    /// Cache for loaded item details (tags, comments). Tags are now stored pre-sorted.
     @State private var loadedInfos: [Int: ItemsInfoResponse] = [:]
     /// Tracks the loading status for details of each item ID.
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
-    /// **NEW**: Stores the IDs of items for which the user wants to see all tags.
+    /// Stores the IDs of items for which the user wants to see all tags.
     @State private var showAllTagsForItem: Set<Int> = []
     /// API service instance.
     private let apiService = APIService()
@@ -157,8 +157,6 @@ struct PagedDetailView: View {
                   Task { await loadInfoIfNeeded(for: items[newValue]) }
              }
              isTogglingFavorite = false // Reset favorite toggle state on page change
-             // Note: showAllTagsForItem is NOT reset here, allowing the user's preference
-             // for showing all tags to persist as they swipe back and forth.
         }
         .onAppear {
             // When the PagedDetailView first appears
@@ -185,7 +183,7 @@ struct PagedDetailView: View {
             // Clean up player
             Self.logger.info("Cleaning up player via manager because PagedDetailView is disappearing.")
             playerManager.cleanupPlayer()
-            // **NEW**: Reset the state for showing all tags when the view disappears entirely
+            // Reset the state for showing all tags
             showAllTagsForItem = []
             Self.logger.debug("Reset showAllTagsForItem state on disappear.")
         }
@@ -248,8 +246,8 @@ struct PagedDetailView: View {
         }
     }
 
-    /// **MODIFIED:** Helper function to prepare hierarchical data for a single page.
-    /// Now limits tags to top 4 unless requested otherwise.
+    /// Helper function to prepare hierarchical data for a single page.
+    /// Works with pre-sorted tags from `loadedInfos`.
     private func preparePageData(for index: Int) -> (
         currentItem: Item,
         status: InfoLoadingStatus,
@@ -268,7 +266,7 @@ struct PagedDetailView: View {
         let itemId = currentItem.id
         let statusForItem = infoLoadingStatus[itemId] ?? .idle
         let baseComments = loadedInfos[itemId]?.comments ?? []
-        let baseTags = loadedInfos[itemId]?.tags ?? []
+        let sortedTags = loadedInfos[itemId]?.tags ?? [] // <-- Get pre-sorted tags
 
         // --- Build Comment Hierarchy ---
         // (Comment logic remains unchanged)
@@ -291,18 +289,17 @@ struct PagedDetailView: View {
         }
         let displayComments = buildHierarchy(for: sortedTopLevelComments)
 
-        // --- **NEW**: Tag Limiting Logic ---
-        let sortedTags = baseTags.sorted { $0.confidence > $1.confidence } // Sort all tags
+        // --- Tag Limiting Logic (operates on pre-sorted tags) ---
         let totalTagCount = sortedTags.count
-        let shouldShowAll = showAllTagsForItem.contains(itemId) // Check state set
+        let shouldShowAll = showAllTagsForItem.contains(itemId)
 
         let tagsToDisplay: [ItemTag]
         if shouldShowAll {
             tagsToDisplay = sortedTags // Show all if requested
-            if statusForItem == .loaded { Self.logger.trace("Showing ALL \(totalTagCount) tags for item \(itemId) (user requested).") }
+            if statusForItem == .loaded { Self.logger.trace("Showing ALL \(totalTagCount) pre-sorted tags for item \(itemId) (user requested).") }
         } else {
             tagsToDisplay = Array(sortedTags.prefix(4)) // Show top 4 otherwise
-            if statusForItem == .loaded { Self.logger.trace("Showing TOP \(tagsToDisplay.count) of \(totalTagCount) tags for item \(itemId) (default).") }
+            if statusForItem == .loaded { Self.logger.trace("Showing TOP \(tagsToDisplay.count) of \(totalTagCount) pre-sorted tags for item \(itemId) (default).") }
         }
         // --------------------------------
 
@@ -311,14 +308,14 @@ struct PagedDetailView: View {
             currentItem: currentItem,
             status: statusForItem,
             comments: displayComments,
-            displayedTags: tagsToDisplay, // Return the potentially limited list
-            totalTagCount: totalTagCount,   // Return the total count
-            showingAllTags: shouldShowAll   // Return the flag
+            displayedTags: tagsToDisplay,
+            totalTagCount: totalTagCount,
+            showingAllTags: shouldShowAll
         )
     }
 
 
-    // Info Loading Methods
+    // **REVISED:** Info Loading Method - Sorts tags upon successful fetch and stores sorted result
     private func loadInfoIfNeeded(for item: Item) async {
         let itemId = item.id
         let currentStatus = infoLoadingStatus[itemId]
@@ -327,9 +324,17 @@ struct PagedDetailView: View {
         Self.logger.debug("Starting info load for item \(itemId)...")
         await MainActor.run { infoLoadingStatus[itemId] = .loading }
         do {
-            let infoResponse = try await apiService.fetchItemInfo(itemId: itemId)
+            let fetchedInfoResponse = try await apiService.fetchItemInfo(itemId: itemId)
+
+            // **CORRECTED**: Create a new sorted array using sorted()
+            let sortedTags = fetchedInfoResponse.tags.sorted { $0.confidence > $1.confidence }
+            Self.logger.trace("Sorted \(sortedTags.count) tags for item \(itemId) after fetching.")
+
+            // Create a new response object with the sorted tags and original comments
+            let updatedInfoResponse = ItemsInfoResponse(tags: sortedTags, comments: fetchedInfoResponse.comments)
+
             await MainActor.run {
-                loadedInfos[itemId] = infoResponse
+                loadedInfos[itemId] = updatedInfoResponse // Store the new response with sorted tags
                 infoLoadingStatus[itemId] = .loaded
             }
         } catch {
@@ -349,7 +354,8 @@ struct PagedDetailView: View {
         let status = infoLoadingStatus[currentItem.id] ?? .idle
         switch status {
         case .loaded:
-            let topTag = loadedInfos[currentItem.id]?.tags.max(by: { $0.confidence < $1.confidence })?.tag
+            // Get top tag from the pre-sorted list
+            let topTag = loadedInfos[currentItem.id]?.tags.first?.tag // .first is now highest confidence
             if let tag = topTag, !tag.isEmpty { return tag }
             else { return "Post \(currentItem.id)" }
         case .loading: return "Lade Infos..."
