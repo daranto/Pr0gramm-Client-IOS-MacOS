@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/AppSettings.swift
+// --- START OF COMPLETE FILE ---
+
 import Foundation
 import Combine
 import os
@@ -35,7 +38,7 @@ class AppSettings: ObservableObject {
     private static let showPOLKey = "showPOLPreference_v1"
     private static let maxImageCacheSizeMBKey = "maxImageCacheSizeMB_v1"
 
-    // MARK: - Published User Settings
+    // MARK: - Published User Settings (Persisted)
     /// Whether videos should start muted. Persisted in UserDefaults.
     @Published var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
     /// The currently selected feed type (New or Promoted). Persisted in UserDefaults.
@@ -57,6 +60,12 @@ class AppSettings: ObservableObject {
             updateKingfisherCacheLimit()
         }
     }
+
+    // MARK: - Published Session State (Not Persisted)
+    /// Stores the user's desired mute state *for the current app session*.
+    /// Updated by player interaction. Reset to nil when app becomes active.
+    /// If nil, `isVideoMuted` (persisted setting) is used.
+    @Published var transientSessionMuteState: Bool? = nil
 
     // MARK: - Published Cache Information
     /// The current size (in MB) of the Kingfisher image disk cache. Updated periodically.
@@ -102,6 +111,7 @@ class AppSettings: ObservableObject {
         self.showNSFP = UserDefaults.standard.bool(forKey: Self.showNSFPKey)
         self.showPOL = UserDefaults.standard.bool(forKey: Self.showPOLKey)
         self.maxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) == nil ? 100 : UserDefaults.standard.integer(forKey: Self.maxImageCacheSizeMBKey)
+        // transientSessionMuteState starts as nil intentionally
 
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
@@ -205,3 +215,4 @@ class AppSettings: ObservableObject {
         await updateDataCacheSize() // Update size after clearing
     }
 }
+// --- END OF COMPLETE FILE ---

@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Features/Views/PagedDetailView.swift
+// --- START OF COMPLETE FILE ---
+
 // PagedDetailView.swift
 import SwiftUI
 import os
@@ -75,6 +78,7 @@ struct PagedDetailView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
+    @Environment(\.scenePhase) var scenePhase // Keep ScenePhase environment value
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
     // MARK: State for View Logic
@@ -110,6 +114,22 @@ struct PagedDetailView: View {
 
     // MARK: - Body
     var body: some View {
+        // Group to apply background and sheet modifiers
+        Group {
+            tabViewContent // Use the extracted computed property
+        }
+        .background(KeyCommandView(handler: keyboardActionHandler)) // Add keyboard handling overlay
+        .sheet(item: $previewLinkTarget) { targetWrapper in // Present sheet for linked item previews
+             // Wrap the preview view in a navigation stack and provide environment objects
+             LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
+                 .environmentObject(settings)
+                 .environmentObject(authService)
+        }
+    }
+
+    // MARK: - Extracted TabView Content
+    /// The main TabView containing the pages. Extracted to help compiler diagnostics.
+    private var tabViewContent: some View {
         TabView(selection: $selectedIndex) {
             ForEach(items.indices, id: \.self) { index in
                 let currentItem = items[index]
@@ -173,7 +193,7 @@ struct PagedDetailView: View {
             keyboardActionHandler.selectPreviousAction = self.selectPrevious
 
             // Configure the player manager with settings and set up the initial player
-            playerManager.configure(settings: settings)
+            playerManager.configure(settings: settings) // Configure links settings
             if selectedIndex >= 0 && selectedIndex < items.count {
                  playerManager.setupPlayerIfNeeded(for: items[selectedIndex], isFullscreen: isFullscreen)
                  Task { await loadInfoIfNeeded(for: items[selectedIndex]) } // Load info for initial item
@@ -191,21 +211,34 @@ struct PagedDetailView: View {
             Self.logger.info("Cleaning up player via manager because PagedDetailView is disappearing.")
             playerManager.cleanupPlayer()
         }
-        .background(KeyCommandView(handler: keyboardActionHandler)) // Add keyboard handling overlay
-        .sheet(item: $previewLinkTarget) { targetWrapper in // Present sheet for linked item previews
-             // Wrap the preview view in a navigation stack and provide environment objects
-             LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
-                 .environmentObject(settings)
-                 .environmentObject(authService)
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            Self.logger.debug("Scene phase changed from \(String(describing: oldPhase)) to \(String(describing: newPhase))")
+            if newPhase == .active {
+                // Reset the transient session state when app becomes active.
+                // The next player setup will then read the persisted setting.
+                Self.logger.info("App became active. Resetting transientSessionMuteState to nil.")
+                settings.transientSessionMuteState = nil
+
+                // Also apply the persisted state to the *currently running* player immediately.
+                if let player = playerManager.player, player.isMuted != settings.isVideoMuted {
+                     Self.logger.debug("Applying persisted mute state (\(settings.isVideoMuted)) to current player (\(playerManager.playerItemID ?? -1)) on app activation.")
+                     player.isMuted = settings.isVideoMuted
+                }
+            }
+            // Optional: Pause player when app goes to background?
+            // else if newPhase == .background || newPhase == .inactive {
+            //     playerManager.player?.pause()
+            //     Self.logger.debug("App became inactive/background. Paused player.")
+            // }
         }
     }
 
-    // Info Loading Methods (Remain in PagedDetailView)
+    // Info Loading Methods
     private func loadInfoIfNeeded(for item: Item) async {
         let itemId = item.id
         let currentStatus = infoLoadingStatus[itemId]
         guard !(currentStatus == .loading || currentStatus == .loaded) else {
-            Self.logger.trace("Skipping info load for item \(itemId) - already loaded or loading.")
+            // Self.logger.trace("Skipping info load for item \(itemId) - already loaded or loading.") // Too verbose maybe
             return
         }
         if case .error = currentStatus {
@@ -218,7 +251,7 @@ struct PagedDetailView: View {
             await MainActor.run {
                 loadedInfos[itemId] = infoResponse
                 infoLoadingStatus[itemId] = .loaded
-                Self.logger.debug("Successfully loaded info for item \(itemId). Tags: \(infoResponse.tags.count), Comments: \(infoResponse.comments.count)")
+                // Self.logger.debug("Successfully loaded info for item \(itemId). Tags: \(infoResponse.tags.count), Comments: \(infoResponse.comments.count)") // Can be verbose
             }
         } catch {
             Self.logger.error("Failed to load info for item \(itemId): \(error.localizedDescription)")
@@ -228,7 +261,7 @@ struct PagedDetailView: View {
         }
     }
 
-    // Navigation Methods (Remain in PagedDetailView)
+    // Navigation Methods
     private func selectNext() { if canSelectNext { selectedIndex += 1 } }
     private var canSelectNext: Bool { selectedIndex < items.count - 1 }
     private func selectPrevious() { if canSelectPrevious { selectedIndex -= 1 } }
@@ -248,10 +281,9 @@ struct PagedDetailView: View {
         }
     }
 
-    // Favoriting Logic (Remains in PagedDetailView)
+    // Favoriting Logic
     private func toggleFavorite() async {
-        // Capture local reference to settings to avoid potential issues in async context
-        let localSettings = self.settings
+        let localSettings = self.settings // Capture settings
 
         guard !isTogglingFavorite else { Self.logger.debug("Favorite toggle skipped: Action already in progress."); return }
         guard selectedIndex >= 0 && selectedIndex < items.count else { Self.logger.error("Favorite toggle failed: Invalid selected index \(selectedIndex)."); return }
@@ -275,25 +307,28 @@ struct PagedDetailView: View {
                 try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
             }
             Self.logger.info("Successfully toggled favorite status for item \(itemId) via API.")
-            await localSettings.clearFavoritesCache() // Use captured settings
-            await localSettings.updateCacheSizes()    // Use captured settings
+            await localSettings.clearFavoritesCache()
+            await localSettings.updateCacheSizes()
 
         } catch {
             Self.logger.error("Failed to toggle favorite status for item \(itemId): \(error.localizedDescription)")
-            if selectedIndex == currentItemIndex { // Rollback only if still on the same item
+            // Rollback UI only if we are still on the same item
+            if selectedIndex == currentItemIndex {
                 items[currentItemIndex].favorited = !targetFavoriteState
             }
         }
 
-        if selectedIndex == currentItemIndex { // Reset flag only if still on the same item
+        // Reset flag only if we are still on the same item
+        if selectedIndex == currentItemIndex {
              isTogglingFavorite = false
         } else {
             Self.logger.info("Favorite toggle finished, but selected index changed during operation. isTogglingFavorite remains false for new item.")
+            // The new item will have its own isTogglingFavorite state (which starts as false)
         }
     }
 }
 
-// Wrapper View for Sheet Preview (remains unchanged)
+// Wrapper View for Sheet Preview
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
     @EnvironmentObject var settings: AppSettings
@@ -320,8 +355,7 @@ struct LinkedItemPreviewWrapperView: View {
     }
 }
 
-
-// Preview Provider (remains unchanged)
+// Preview Provider
 #Preview("Preview") {
     var sampleItems = [
         Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false),
@@ -334,13 +368,14 @@ struct LinkedItemPreviewWrapperView: View {
         auth.isLoggedIn = true
         auth.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1)
         auth.userNonce = "preview_nonce_12345"
-        auth.favoritesCollectionId = 6749 // Beispiel ID wieder rein für den Guard
+        auth.favoritesCollectionId = 6749
         return auth
     }()
 
-    NavigationStack {
+    return NavigationStack {
         PagedDetailView(items: sampleItems, selectedIndex: 1)
     }
     .environmentObject(settings)
     .environmentObject(authService)
 }
+// --- END OF COMPLETE FILE ---
