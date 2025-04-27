@@ -52,7 +52,7 @@ struct DetailViewContent: View {
     /// Tags associated with the item.
     let tags: [ItemTag]
     /// Comments associated with the item, structured hierarchically.
-    let comments: [DisplayComment] // <-- ACCEPTS DisplayComment NOW
+    let comments: [DisplayComment] // Accepts DisplayComment
     /// Loading status for tags and comments.
     let infoLoadingStatus: InfoLoadingStatus
     /// Binding to trigger the preview sheet for linked items in comments.
@@ -99,28 +99,38 @@ struct DetailViewContent: View {
         }
     }
 
-    /// Displays the upvote and downvote counts.
+    /// Displays the calculated "Benis" score prominently,
+    /// with smaller upvote and downvote counts below.
     @ViewBuilder private var voteCounterView: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .symbolRenderingMode(.palette) // Allows separate colors for icon parts
-                    .foregroundStyle(.white, .green)
-                    .imageScale(.medium)
-                Text("\(item.up)")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: true, vertical: false) // Prevent text wrapping
-            }
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.down.circle.fill")
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, .red)
-                    .imageScale(.medium)
-                Text("\(item.down)")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: true, vertical: false)
+        let benis = item.up - item.down
+        VStack(alignment: .leading, spacing: 2) { // Align Benis and counts to the left
+            // Prominent Benis score
+            Text("\(benis)")
+                .font(.largeTitle) // <-- CHANGED to .largeTitle
+                .fontWeight(.medium)
+                .foregroundColor(.primary)
+                .lineLimit(1) // Ensure Benis doesn't wrap
+
+            // Smaller Up/Down counts below
+            HStack(spacing: 8) { // Increase spacing between up/down slightly
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .green)
+                        .imageScale(.small)
+                    Text("\(item.up)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .red)
+                        .imageScale(.small)
+                    Text("\(item.down)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
         }
     }
@@ -151,63 +161,68 @@ struct DetailViewContent: View {
     /// Displays the vote counts, favorite button (if logged in), and tags using a FlowLayout.
     @ViewBuilder
     private var infoAndTagsContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-             HStack(alignment: .top, spacing: 15) { // Align items to the top
-                 // Combine Votes and Favorite button horizontally
-                 HStack(alignment: .center, spacing: 15) {
+        // Use a single HStack for the entire row, align items to the top
+        HStack(alignment: .top, spacing: 15) {
+             // Combine Votes and Favorite button vertically first, then place next to tags
+             VStack(alignment: .leading, spacing: 8) {
+                 HStack(alignment: .firstTextBaseline, spacing: 15) {
                      voteCounterView
-                     if authService.isLoggedIn { // Only show favorite button when logged in
+                     if authService.isLoggedIn {
                          favoriteButton
+                             .padding(.top, 5) // Adjusted padding slightly for larger title
                      }
+                     Spacer()
                  }
+             }
+             .fixedSize(horizontal: true, vertical: false)
 
-                 // Tags Section
-                 Group {
-                     switch infoLoadingStatus {
-                     case .loaded:
-                         if !tags.isEmpty {
-                             // Use FlowLayout for responsive tag wrapping
-                             FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
-                                 ForEach(tags) { tag in
-                                     Button {
-                                         // Request navigation to search for this tag
-                                         navigationService.requestSearch(tag: tag.tag)
-                                     } label: {
-                                         Text(tag.tag)
-                                             .font(.caption)
-                                             .padding(.horizontal, 8)
-                                             .padding(.vertical, 4)
-                                             .background(Color.gray.opacity(0.2))
-                                             .foregroundColor(.primary)
-                                             .clipShape(Capsule())
-                                             .lineLimit(1) // Prevent multi-line tags
-                                             .contentShape(Capsule()) // Define hit area
-                                     }
-                                     .buttonStyle(.plain) // Remove default button styling
+             // Tags Section (allow it to expand)
+             Group {
+                 switch infoLoadingStatus {
+                 case .loaded:
+                     if !tags.isEmpty {
+                         FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+                             ForEach(tags) { tag in
+                                 Button {
+                                     navigationService.requestSearch(tag: tag.tag)
+                                 } label: {
+                                     Text(tag.tag)
+                                         .font(.caption)
+                                         .padding(.horizontal, 8)
+                                         .padding(.vertical, 4)
+                                         .background(Color.gray.opacity(0.2))
+                                         .foregroundColor(.primary)
+                                         .clipShape(Capsule())
+                                         .lineLimit(1)
+                                         .contentShape(Capsule())
                                  }
+                                 .buttonStyle(.plain)
                              }
-                         } else {
-                              Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                          }
-                    case .loading:
-                        ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                    case .error:
-                        Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                     case .idle:
-                         Text(" ").font(.caption) // Placeholder to maintain layout consistency
-                             .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                     } else {
+                          if infoLoadingStatus == .loaded { Spacer() }
+                          else {
+                              Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                          }
                      }
+                case .loading:
+                    ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                case .error:
+                    Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                 case .idle:
+                     Text(" ").font(.caption)
+                         .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                  }
-                 .layoutPriority(1) // Allow tags section to expand horizontally
              }
         }
-        .frame(maxWidth: .infinity, alignment: .leading) // Take full available width
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
+
 
     /// Displays the comments section.
     @ViewBuilder private var commentsContent: some View {
         CommentsSection(
-            comments: comments, // Pass down the hierarchical DisplayComment list
+            comments: comments,
             status: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget
         )
@@ -274,7 +289,7 @@ struct DetailViewContent: View {
 
 #Preview("Compact Favorited") {
      // Sample data setup
-     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true);
+     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true); // Adjusted votes
      let previewHandler = KeyboardActionHandler();
      let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Cool"), ItemTag(id: 2, confidence: 0.7, tag: "Video"), ItemTag(id: 3, confidence: 0.8, tag: "Längerer Tag")];
      let previewComments: [DisplayComment] = [ // Use DisplayComment for preview
@@ -291,7 +306,6 @@ struct DetailViewContent: View {
          return auth
      }()
 
-     // REMOVED explicit return
      NavigationStack {
         DetailViewContent(
             item: sampleVideoItem,
@@ -307,6 +321,8 @@ struct DetailViewContent: View {
         .environmentObject(settings)
         .environmentObject(authService)
         .environment(\.horizontalSizeClass, .compact)
+        .padding() // Add padding for better preview visibility
+        .background(Color.gray.opacity(0.2)) // Background for context
     }
 }
 
@@ -328,7 +344,6 @@ struct DetailViewContent: View {
          return auth
      }()
 
-     // REMOVED explicit return
      NavigationStack {
         DetailViewContent(
             item: sampleImageItem,
