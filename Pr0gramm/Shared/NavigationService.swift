@@ -1,25 +1,25 @@
-// Pr0gramm/Shared/NavigationService.swift
-// --- START OF COMPLETE FILE ---
-
 import SwiftUI
 import Combine
 
-@MainActor // Ensure updates happen on the main thread
+/// Manages the currently selected main tab and handles navigation requests between different parts of the app.
+@MainActor // Ensure all updates to published properties happen on the main thread
 class NavigationService: ObservableObject {
 
-    // Published property for the currently selected main tab
-    @Published var selectedTab: Tab = .feed // Default to feed
+    /// The currently active main tab (e.g., Feed, Search). Views observe this to switch content.
+    @Published var selectedTab: Tab = .feed // Default to the feed tab on launch
 
-    // Published property to hold a tag requested for search from another view
+    /// Holds a tag string requested for search, typically set when a tag is tapped in the detail view.
+    /// The `SearchView` observes this property to automatically initiate a search when the tag is set and the Search tab becomes active.
     @Published var pendingSearchTag: String? = nil
 
-    // Function to request navigation to search with a specific tag
+    /// Call this method to switch to the Search tab and initiate a search for the given tag.
+    /// - Parameter tag: The tag string to search for.
     func requestSearch(tag: String) {
         print("NavigationService: Requesting search for tag '\(tag)' and switching to Search tab.")
-        // Set the tag *before* switching the tab to ensure SearchView sees it when it appears
+        // Set the tag *before* switching the tab. This ensures SearchView
+        // sees the tag when its `onAppear` or `onChange` is triggered.
         self.pendingSearchTag = tag
-        // Switch the tab
+        // Switch the active tab to Search.
         self.selectedTab = .search
     }
 }
-// --- END OF COMPLETE FILE ---

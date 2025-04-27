@@ -1,13 +1,11 @@
-// Pr0gramm/Pr0gramm/Shared/CommentsSection.swift
-// --- START OF COMPLETE FILE ---
-
-// CommentsSection.swift
 import SwiftUI
 
+/// A view that displays a list of comments for an item, handling loading and error states.
 struct CommentsSection: View {
     let comments: [ItemComment]
     let status: InfoLoadingStatus
-    @Binding var previewLinkTarget: PreviewLinkTarget? // <-- GEÄNDERT: Typ ist jetzt Wrapper
+    /// Binding to trigger the presentation of a linked item preview sheet.
+    @Binding var previewLinkTarget: PreviewLinkTarget?
 
     var body: some View {
         VStack(alignment: .leading) {
@@ -18,12 +16,13 @@ struct CommentsSection: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding()
             case .error(let message):
+                // Display error message with details logged to console
                 Text("Fehler beim Laden der Kommentare")
                     .foregroundColor(.red)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding()
                     .onAppear {
-                         print("CommentsSection Error Detail: \(message)")
+                         print("CommentsSection Error Detail: \(message)") // Log error for debugging
                     }
             case .loaded:
                 if comments.isEmpty {
@@ -32,36 +31,38 @@ struct CommentsSection: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding()
                 } else {
+                    // Use LazyVStack for potentially long comment lists
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(comments) { comment in
                             CommentView(
                                 comment: comment,
-                                previewLinkTarget: $previewLinkTarget // <-- Binding weitergeben (Typ ist jetzt Wrapper)
+                                previewLinkTarget: $previewLinkTarget // Pass down the binding
                             )
-                                .padding(.bottom, 4)
+                                .padding(.bottom, 4) // Add slight spacing below each comment
                             Divider()
                         }
                     }
                 }
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal) // Add horizontal padding to the entire section
     }
 }
 
-// --- Korrigierte Previews (State Typ geändert) ---
+// MARK: - Previews
+
 #Preview("Loaded") {
     let comments = [
         ItemComment(id: 1, parent: 0, content: "Erster Kommentar!", created: Int(Date().timeIntervalSince1970) - 300, up: 5, down: 0, confidence: 0.95, name: "UserA", mark: 1),
         ItemComment(id: 2, parent: 1, content: "Antwort auf den ersten.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7),
         ItemComment(id: 3, parent: 0, content: "Zweiter Top-Level Kommentar. https://pr0gramm.com/new/55555", created: Int(Date().timeIntervalSince1970) - 60, up: 10, down: 3, confidence: 0.9, name: "UserC", mark: 3)
     ]
-    // GEÄNDERT: State Typ für Preview
+    // Use @State for the binding in previews
     @State var previewTarget: PreviewLinkTarget? = nil
-    return ScrollView {
+    return ScrollView { // Embed in ScrollView for preview context
         CommentsSection(comments: comments, status: .loaded, previewLinkTarget: $previewTarget)
     }
-    .environmentObject(AppSettings())
+    .environmentObject(AppSettings()) // Provide necessary environment objects
 }
 
 #Preview("Loading") {
@@ -87,4 +88,3 @@ struct CommentsSection: View {
     }
      .environmentObject(AppSettings())
 }
-// --- END OF COMPLETE FILE ---

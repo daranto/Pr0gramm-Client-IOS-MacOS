@@ -1,30 +1,31 @@
-// Pr0gramm/Pr0gramm/Features/Views/LinkedItemPreviewView.swift
-// --- START OF COMPLETE FILE ---
-
 import SwiftUI
 import os
 
-/// A view designed to be presented in a sheet, fetching and displaying a single linked item.
+/// A view designed to be presented in a sheet, responsible for fetching
+/// and displaying a single item referenced by its ID (typically from a link in a comment).
 struct LinkedItemPreviewView: View {
-    let itemID: Int
+    let itemID: Int // The ID of the item to fetch and display
 
+    // MARK: - Environment & State
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
-    @Environment(\.dismiss) var dismiss
+    @Environment(\.dismiss) var dismiss // To close the sheet
 
-    @State private var fetchedItem: Item? = nil
+    @State private var fetchedItem: Item? = nil // Holds the fetched item data
     @State private var isLoading = true
     @State private var errorMessage: String? = nil
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "LinkedItemPreviewView")
 
+    // MARK: - Body
     var body: some View {
         Group {
             if isLoading {
                 ProgressView("Lade Vorschau für \(itemID)...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the progress view
             } else if let error = errorMessage {
+                // Display error state with retry option
                 VStack {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.largeTitle)
@@ -38,31 +39,34 @@ struct LinkedItemPreviewView: View {
                         .multilineTextAlignment(.center)
                         .padding()
                     Button("Erneut versuchen") {
-                        Task { await loadItem() }
+                        Task { await loadItem() } // Retry loading on button tap
                     }
                     .buttonStyle(.bordered)
                     .padding(.top)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the error view
             } else if let item = fetchedItem {
-                // Zeige das Item in einer PagedDetailView (mit nur einem Element)
-                // Wichtig: Eigene Instanz von PagedDetailView hier
+                // Display the fetched item using PagedDetailView (with a single item)
+                // Note: This creates a *new instance* of PagedDetailView specific to this preview.
+                // Environment objects are passed down automatically from the parent (LinkedItemPreviewWrapperView).
                 PagedDetailView(items: [item], selectedIndex: 0)
-                    // Stelle sicher, dass diese Instanz auch die nötigen Objekte hat
-                    // (Wird durch den Wrapper View sichergestellt)
             } else {
-                // Sollte nicht passieren, wenn isLoading false und kein Fehler/Item da ist
+                // Fallback if not loading, no error, but no item (should ideally not happen)
                 ContentUnavailableView("Inhalt nicht verfügbar", systemImage: "questionmark.diamond")
             }
         }
-        .task { // .task wird automatisch bei Erscheinen ausgeführt
+        .task { // Use .task for automatic loading when the view appears
             await loadItem()
         }
     }
 
+    // MARK: - Data Loading
+    /// Fetches the item data from the API using the provided `itemID`.
     private func loadItem() async {
-        guard fetchedItem == nil else { return } // Nur laden, wenn noch nicht geladen
+        // Avoid redundant fetches if already loaded or currently loading
+        guard fetchedItem == nil || isLoading == false else { return }
 
+        // Reset state before loading
         await MainActor.run {
             isLoading = true
             errorMessage = nil
@@ -70,7 +74,7 @@ struct LinkedItemPreviewView: View {
         Self.logger.info("Fetching preview item with ID: \(itemID)")
 
         do {
-            // Verwende die aktuellen Filter-Flags des Benutzers für den API-Aufruf
+            // Use the user's current content filters for the API request
             let currentFlags = settings.apiFlags
             let item = try await apiService.fetchItem(id: itemID, flags: currentFlags)
 
@@ -79,21 +83,23 @@ struct LinkedItemPreviewView: View {
                     self.fetchedItem = fetched
                     Self.logger.info("Successfully fetched preview item \(itemID)")
                 } else {
-                    // Item konnte nicht abgerufen werden (vielleicht wegen Filter oder gelöscht)
+                    // API returned nil, likely due to filters or item deletion
                     self.errorMessage = "Post konnte nicht gefunden werden oder entspricht nicht deinen Filtern."
                     Self.logger.warning("Could not fetch preview item \(itemID). API returned nil or filter mismatch.")
                 }
                 isLoading = false
             }
         } catch let error as URLError where error.code == .userAuthenticationRequired {
+             // Handle expired session specifically
              Self.logger.error("Failed to fetch preview item \(itemID): Authentication required.")
              await MainActor.run {
                  self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."
                  isLoading = false
-                 // Optional: Den Benutzer ausloggen, wenn die Session hier ungültig ist?
+                 // Optional: Consider automatically logging out the user here
                  // Task { await authService.logout() }
              }
         } catch {
+            // Handle generic network or decoding errors
             Self.logger.error("Failed to fetch preview item \(itemID): \(error.localizedDescription)")
             await MainActor.run {
                 self.errorMessage = "Netzwerkfehler: \(error.localizedDescription)"
@@ -103,27 +109,24 @@ struct LinkedItemPreviewView: View {
     }
 }
 
-// Preview für LinkedItemPreviewView
+// MARK: - Previews
+
 #Preview("Loading") {
-    // Preview benötigt Wrapper für Environment Objects
+    // Preview requires the wrapper to provide environment objects correctly
     LinkedItemPreviewWrapperView(itemID: 12345)
-        .environmentObject(AppSettings()) // <-- Korrekt hier erstellt
-        .environmentObject(AuthService(appSettings: AppSettings())) // <-- Korrekt hier erstellt
+        .environmentObject(AppSettings())
+        .environmentObject(AuthService(appSettings: AppSettings()))
 }
 
 #Preview("Error") {
-    // --- KORREKTUR HIER ---
-    // Erstelle die Services *direkt hier* im Preview-Body
+    // Setup services directly within the preview provider
     let settings = AppSettings()
-    let auth = AuthService(appSettings: settings) // Erstelle Auth mit Settings
+    let auth = AuthService(appSettings: settings)
 
-    // Setze einen Fehlerzustand (optional, da die View selbst lädt)
-    // auth.loginError = "Simulierter Fehler" // Direktes Setzen ist hier schwer, da die View intern lädt
+    // Simulate an error state (if needed, though the view handles its own loading/errors)
+    // Note: Direct state manipulation is hard here as the view loads internally.
 
-    // Gib die Wrapper View zurück und injiziere die Services
-    return LinkedItemPreviewWrapperView(itemID: 999)
+    return LinkedItemPreviewWrapperView(itemID: 999) // Use a dummy ID for error preview
         .environmentObject(settings)
         .environmentObject(auth)
-    // --- ENDE KORREKTUR ---
 }
-// --- END OF COMPLETE FILE ---

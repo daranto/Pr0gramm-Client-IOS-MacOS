@@ -1,122 +1,173 @@
-// Pr0gramm/Pr0gramm/Shared/DetailViewContent.swift
-// --- START OF COMPLETE FILE ---
-
-// DetailViewContent.swift
-
 import SwiftUI
 import AVKit
 import Combine
 import os
+import Kingfisher // Import Kingfisher
 
-// DetailImageView (unverändert)
+// MARK: - Subviews
+
+/// Displays an image for the detail view using Kingfisher, handling loading states and errors.
 struct DetailImageView: View {
     let item: Item
     let logger: Logger
-    let cleanupAction: () -> Void
+    let cleanupAction: () -> Void // Although declared, this seems unused currently.
+
     var body: some View {
-        AsyncImage(url: item.imageUrl) { phase in
-            switch phase {
-            case .success(let image): image.resizable().scaledToFit()
-            case .failure(let error): let _ = logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)"); Rectangle().fill(.secondary.opacity(0.2)).overlay(Image(systemName: "exclamationmark.triangle"))
-            default: Rectangle().fill(.secondary.opacity(0.1)).overlay(ProgressView())
+        // Use Kingfisher's KFImage for loading and caching
+        KFImage(item.imageUrl)
+            .placeholder { // View shown while loading
+                Rectangle().fill(.secondary.opacity(0.1)).overlay(ProgressView())
             }
-        }.onAppear { logger.trace("Displaying image for item \(item.id).") }
+            .onFailure { error in // Action on loading failure
+                logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)")
+            }
+            .resizable()
+            .scaledToFit()
+            .onAppear { logger.trace("Displaying image for item \(item.id).") }
+            .onDisappear(perform: cleanupAction) // Call cleanup when image disappears
+            .background(Color.black) // Ensure background is black for letterboxing
     }
 }
 
-// InfoLoadingStatus (unverändert)
+
+/// Represents the loading status for item details (tags, comments).
 enum InfoLoadingStatus: Equatable { case idle; case loading; case loaded; case error(String) }
 
 
+/// The main content area for the item detail view, arranging media, info, tags, and comments.
+/// Adapts layout based on horizontal size class (Compact vs. Regular).
 struct DetailViewContent: View {
     let item: Item
+    /// Handles keyboard events (left/right arrow) passed down to the underlying video player if applicable.
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
+    /// The AVPlayer instance for video items (nil for images).
     let player: AVPlayer?
+    /// Callback executed just before the video player enters fullscreen.
     let onWillBeginFullScreen: () -> Void
+    /// Callback executed just after the video player exits fullscreen.
     let onWillEndFullScreen: () -> Void
+    /// Tags associated with the item.
     let tags: [ItemTag]
+    /// Comments associated with the item.
     let comments: [ItemComment]
+    /// Loading status for tags and comments.
     let infoLoadingStatus: InfoLoadingStatus
-    @Binding var previewLinkTarget: PreviewLinkTarget? // For comment link previews
-
-    // --- NEU: Favoriten-Status und Aktion ---
+    /// Binding to trigger the preview sheet for linked items in comments.
+    @Binding var previewLinkTarget: PreviewLinkTarget?
+    /// Indicates if the current user has favorited this item.
     let isFavorited: Bool
+    /// Action to toggle the favorite status of the item.
     let toggleFavoriteAction: () async -> Void
-    // --- ENDE NEU ---
 
-    // Inject Services
+    // MARK: - Injected Services & Environment
     @EnvironmentObject var navigationService: NavigationService
-    @EnvironmentObject var authService: AuthService // Für Login-Check
-
+    @EnvironmentObject var authService: AuthService
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
+
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
-    // --- NEU: State für Favoriten-Button-Deaktivierung ---
+
+    /// State to temporarily disable the favorite button during API calls.
     @State private var isProcessingFavorite = false
 
     // MARK: - Computed View Properties
 
-    @ViewBuilder private var mediaContentInternal: some View { /* ... unverändert ... */
+    /// Renders the appropriate media view (image or video player).
+    @ViewBuilder private var mediaContentInternal: some View {
         Group {
             if item.isVideo {
                 if let player = player {
-                    CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler, onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen).id(item.id)
+                    // Use the custom representable to integrate AVPlayerViewController
+                    CustomVideoPlayerRepresentable(
+                        player: player,
+                        handler: keyboardActionHandler,
+                        onWillBeginFullScreen: onWillBeginFullScreen,
+                        onWillEndFullScreen: onWillEndFullScreen
+                    )
+                    .id(item.id) // Ensure recreation if the item ID changes
                 } else {
+                    // Placeholder while the player is being set up
                      Rectangle().fill(.black).overlay(ProgressView().tint(.white))
                          .aspectRatio(guessAspectRatio(), contentMode: .fit)
                 }
             } else {
-                DetailImageView(item: item, logger: Self.logger, cleanupAction: { })
+                // Display the image using DetailImageView
+                DetailImageView(item: item, logger: Self.logger, cleanupAction: {})
             }
         }
     }
-    @ViewBuilder private var voteCounterView: some View { /* ... unverändert ... */
+
+    /// Displays the upvote and downvote counts.
+    @ViewBuilder private var voteCounterView: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) { Image(systemName: "arrow.up.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, .green).imageScale(.medium); Text("\(item.up)").font(.subheadline).foregroundColor(.secondary).fixedSize(horizontal: true, vertical: false) }
-            HStack(spacing: 5) { Image(systemName: "arrow.down.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, .red).imageScale(.medium); Text("\(item.down)").font(.subheadline).foregroundColor(.secondary).fixedSize(horizontal: true, vertical: false) }
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .symbolRenderingMode(.palette) // Allows separate colors for icon parts
+                    .foregroundStyle(.white, .green)
+                    .imageScale(.medium)
+                Text("\(item.up)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: true, vertical: false) // Prevent text wrapping
+            }
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .red)
+                    .imageScale(.medium)
+                Text("\(item.down)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
         }
     }
 
-    // --- NEU: Favoriten Button ---
+    /// Displays the favorite button (heart icon).
     @ViewBuilder private var favoriteButton: some View {
         Button {
+            // Perform the toggle action asynchronously
             Task {
-                isProcessingFavorite = true // Deaktivieren
+                isProcessingFavorite = true // Disable button immediately
                 await toggleFavoriteAction()
-                // Kurze Verzögerung, um Flackern bei schnellen Fehlern zu vermeiden
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                isProcessingFavorite = false // Wieder aktivieren
+                // Short delay to prevent flickering if the action fails very quickly
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                isProcessingFavorite = false // Re-enable button
             }
         } label: {
             Image(systemName: isFavorited ? "heart.fill" : "heart")
-                .imageScale(.large) // Etwas größer machen
-                .foregroundColor(isFavorited ? .pink : .secondary)
-                .frame(width: 44, height: 44) // Größere Tappable Area
-                .contentShape(Rectangle()) // Tappable Area definieren
+                .imageScale(.large) // Slightly larger icon
+                .foregroundColor(isFavorited ? .pink : .secondary) // Pink when favorited
+                .frame(width: 44, height: 44) // Increase tappable area
+                .contentShape(Rectangle()) // Define the hit area explicitly
         }
-        .buttonStyle(.plain)
-        .disabled(isProcessingFavorite || !authService.isLoggedIn) // Deaktivieren während Verarbeitung oder wenn nicht eingeloggt
+        .buttonStyle(.plain) // Remove default button styling
+        .disabled(isProcessingFavorite || !authService.isLoggedIn) // Disable during API call or if logged out
     }
-    // --- ENDE NEU ---
 
 
+    /// Displays the vote counts, favorite button (if logged in), and tags using a FlowLayout.
     @ViewBuilder
     private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-             HStack(alignment: .top, spacing: 15) {
-                 // --- HStack für Votes UND Favoriten ---
-                 HStack(alignment: .center, spacing: 15) { // Zentriert und mit Abstand
+             HStack(alignment: .top, spacing: 15) { // Align items to the top
+                 // Combine Votes and Favorite button horizontally
+                 HStack(alignment: .center, spacing: 15) {
                      voteCounterView
-                     if authService.isLoggedIn { // Zeige Button nur wenn eingeloggt
+                     if authService.isLoggedIn { // Only show favorite button when logged in
                          favoriteButton
                      }
                  }
-                 // ---------------------------------------
-                 Group { // Tags bleiben wie sie sind
-                     if infoLoadingStatus == .loaded {
+
+                 // Tags Section
+                 Group {
+                     switch infoLoadingStatus {
+                     case .loaded:
                          if !tags.isEmpty {
+                             // Use FlowLayout for responsive tag wrapping
                              FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
                                  ForEach(tags) { tag in
                                      Button {
+                                         // Request navigation to search for this tag
                                          navigationService.requestSearch(tag: tag.tag)
                                      } label: {
                                          Text(tag.tag)
@@ -126,101 +177,159 @@ struct DetailViewContent: View {
                                              .background(Color.gray.opacity(0.2))
                                              .foregroundColor(.primary)
                                              .clipShape(Capsule())
-                                             .lineLimit(1)
-                                             .contentShape(Capsule())
+                                             .lineLimit(1) // Prevent multi-line tags
+                                             .contentShape(Capsule()) // Define hit area
                                      }
-                                     .buttonStyle(.plain)
+                                     .buttonStyle(.plain) // Remove default button styling
                                  }
                              }
                          } else {
                               Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                          }
-                    } else if infoLoadingStatus == .loading {
+                    case .loading:
                         ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                    } else if case .error = infoLoadingStatus {
+                    case .error:
                         Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                    }
+                     case .idle:
+                         Text(" ").font(.caption) // Placeholder to maintain layout consistency
+                             .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                     }
                  }
-                 .layoutPriority(1) // Ensure tags take available space
+                 .layoutPriority(1) // Allow tags section to expand horizontally
              }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading) // Take full available width
     }
 
-    @ViewBuilder private var commentsContent: some View { // Unverändert
+    /// Displays the comments section.
+    @ViewBuilder private var commentsContent: some View {
         CommentsSection(
             comments: comments,
             status: infoLoadingStatus,
-            previewLinkTarget: $previewLinkTarget
+            previewLinkTarget: $previewLinkTarget // Pass down the binding
         )
     }
 
-    // Body (unverändert)
-     var body: some View {
+    // MARK: - Body
+
+    var body: some View {
         Group {
+            // Adapt layout based on horizontal size class
             if horizontalSizeClass == .regular {
+                // iPad / wider layouts: Side-by-side
                 HStack(alignment: .top, spacing: 0) {
-                    GeometryReader { geometry in mediaContentInternal.scaledToFit().frame(width: geometry.size.width, height: geometry.size.height).clipped() }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Media content takes flexible space
+                    GeometryReader { geometry in
+                        mediaContentInternal
+                            .scaledToFit()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped() // Clip media to its frame
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Expand fully
+
                     Divider()
-                    ScrollView { VStack(alignment: .leading, spacing: 15) { infoAndTagsContent.padding([.horizontal, .top]); commentsContent.padding([.horizontal, .bottom]) } }
-                    .frame(minWidth: 300, idealWidth: 450, maxWidth: 600).background(Color(.secondarySystemBackground))
+
+                    // Info/Tags/Comments in a scrollable sidebar
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 15) {
+                            infoAndTagsContent.padding([.horizontal, .top])
+                            commentsContent.padding([.horizontal, .bottom])
+                        }
+                    }
+                    .frame(minWidth: 300, idealWidth: 450, maxWidth: 600) // Constrain sidebar width
+                    .background(Color(.secondarySystemBackground)) // Subtle background
                 }
             } else {
-                ScrollView { VStack(spacing: 0) { mediaContentInternal.scaledToFit(); infoAndTagsContent.padding(.horizontal).padding(.vertical, 10); commentsContent.padding(.horizontal).padding(.bottom, 10) } }
+                // iPhone / compact layouts: Vertical stack
+                ScrollView {
+                    VStack(spacing: 0) {
+                        mediaContentInternal.scaledToFit() // Media on top
+                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10) // Info/Tags below
+                        commentsContent.padding(.horizontal).padding(.bottom, 10) // Comments at bottom
+                    }
+                }
             }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity) // Ensure the group fills available space
          .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
          .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
     }
 
-    private func guessAspectRatio() -> CGFloat? { /* ... unverändert ... */
-        if item.width > 0 && item.height > 0 { return CGFloat(item.width) / CGFloat(item.height) }
+    // MARK: - Helper Methods
+
+    /// Provides an estimated aspect ratio for video placeholders before the player is ready.
+    private func guessAspectRatio() -> CGFloat? {
+        if item.width > 0 && item.height > 0 {
+            return CGFloat(item.width) / CGFloat(item.height)
+        }
+        // Default to 16:9 if dimensions are invalid
         return 16.0 / 9.0
     }
 }
 
-// Previews (angepasst, um Favoriten zu demonstrieren)
+// MARK: - Previews
+
 #Preview("Compact Favorited") {
-     // ... setup sample data ...
-     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true); // Favorited = true
+     // Sample data setup
+     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true); // Marked as favorited
      let previewHandler = KeyboardActionHandler(); let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Cool"), ItemTag(id: 2, confidence: 0.7, tag: "Video"), ItemTag(id: 3, confidence: 0.8, tag: "Längerer Tag")]; let previewComments: [ItemComment] = [ItemComment(id: 1, parent: 0, content: "Kommentar", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1)]; let previewPlayer: AVPlayer? = nil
      @State var previewLinkTarget: PreviewLinkTarget? = nil
      let navService = NavigationService()
      let settings = AppSettings()
-     let authService = {
+     let authService = { // Setup logged-in auth service for preview
          let auth = AuthService(appSettings: settings)
-         auth.isLoggedIn = true // Wichtig für Preview
+         auth.isLoggedIn = true
+         auth.favoritesCollectionId = 1234 // Need a dummy ID for preview
          return auth
      }()
 
-     return NavigationStack {
-        DetailViewContent(item: sampleVideoItem, keyboardActionHandler: previewHandler, player: previewPlayer, onWillBeginFullScreen: {}, onWillEndFullScreen: {}, tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded, previewLinkTarget: $previewLinkTarget, isFavorited: true, toggleFavoriteAction: {}) // Pass state + dummy action
+     return NavigationStack { // Required for toolbar/navigation features
+        DetailViewContent(
+            item: sampleVideoItem,
+            keyboardActionHandler: previewHandler,
+            player: previewPlayer,
+            onWillBeginFullScreen: {}, onWillEndFullScreen: {},
+            tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded,
+            previewLinkTarget: $previewLinkTarget,
+            isFavorited: true, // Match item data
+            toggleFavoriteAction: {} // Dummy action for preview
+        )
         .environmentObject(navService)
-        .environmentObject(settings) // Inject settings
-        .environmentObject(authService) // Inject auth
-        .environment(\.horizontalSizeClass, .compact)
+        .environmentObject(settings)
+        .environmentObject(authService)
+        .environment(\.horizontalSizeClass, .compact) // Force compact layout
     }
 }
+
 #Preview("Regular Not Favorited") {
-    // ... setup sample data ...
-    let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false); // Favorited = false
+    // Sample data setup
+    let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false); // Not favorited
     let previewHandler = KeyboardActionHandler(); let previewTags: [ItemTag] = [ItemTag(id: 1, confidence: 0.9, tag: "Bester Tag"), ItemTag(id: 2, confidence: 0.7, tag: "Zweiter Tag"), ItemTag(id:4, confidence: 0.6, tag:"tag3"), ItemTag(id:5, confidence: 0.5, tag:"tag4")]; let previewComments: [ItemComment] = [ItemComment(id: 1, parent: 0, content: "Kommentar https://pr0gramm.com/top/123", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1)]; let previewPlayer: AVPlayer? = nil
      @State var previewLinkTarget: PreviewLinkTarget? = nil
      let navService = NavigationService()
      let settings = AppSettings()
-     let authService = {
+     let authService = { // Setup logged-in auth service for preview
          let auth = AuthService(appSettings: settings)
-         auth.isLoggedIn = true // Wichtig für Preview
+         auth.isLoggedIn = true
+         auth.favoritesCollectionId = 1234 // Need a dummy ID for preview
          return auth
      }()
 
      return NavigationStack {
-        DetailViewContent(item: sampleImageItem, keyboardActionHandler: previewHandler, player: previewPlayer, onWillBeginFullScreen: {}, onWillEndFullScreen: {}, tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded, previewLinkTarget: $previewLinkTarget, isFavorited: false, toggleFavoriteAction: {}) // Pass state + dummy action
+        DetailViewContent(
+            item: sampleImageItem,
+            keyboardActionHandler: previewHandler,
+            player: previewPlayer,
+            onWillBeginFullScreen: {}, onWillEndFullScreen: {},
+            tags: previewTags, comments: previewComments, infoLoadingStatus: .loaded,
+            previewLinkTarget: $previewLinkTarget,
+            isFavorited: false, // Match item data
+            toggleFavoriteAction: {} // Dummy action
+        )
         .environmentObject(navService)
-        .environmentObject(settings) // Inject settings
-        .environmentObject(authService) // Inject auth
-        .environment(\.horizontalSizeClass, .regular)
+        .environmentObject(settings)
+        .environmentObject(authService)
+        .environment(\.horizontalSizeClass, .regular) // Force regular layout
     }
-    .previewDevice("iPad (10th generation)")
+    .previewDevice("iPad (10th generation)") // Simulate iPad for regular layout
 }
-// --- END OF COMPLETE FILE ---

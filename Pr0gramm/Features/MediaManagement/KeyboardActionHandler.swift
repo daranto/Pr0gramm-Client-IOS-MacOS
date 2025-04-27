@@ -1,10 +1,12 @@
-// KeyboardActionHandler.swift
 import Foundation
-import Combine // Wird für ObservableObject benötigt
+import Combine // Required for ObservableObject
 
-// Einfaches Objekt, um die Aktionen zu halten, die bei Tastendruck ausgeführt werden sollen
+/// A simple `ObservableObject` used to bridge keyboard actions (like arrow key presses)
+/// captured by UIKit components (`KeyCommandViewController` or `CustomAVPlayerViewController`)
+/// to SwiftUI views or view models. SwiftUI views can set the action closures.
 class KeyboardActionHandler: ObservableObject {
-    // Optional closures, die von der View gesetzt werden
+    /// Closure to be executed when the "next" action (e.g., right arrow) is detected.
     var selectNextAction: (() -> Void)?
+    /// Closure to be executed when the "previous" action (e.g., left arrow) is detected.
     var selectPreviousAction: (() -> Void)?
 }
