@@ -170,8 +170,7 @@ struct DetailViewContent: View {
 
 
     /// Displays the vote counts, favorite button (if logged in), and tags using a FlowLayout.
-    /// Includes logic for displaying limited tags and a "Show More" button.
-    /// Handles long tags by truncating with ellipsis.
+    /// Tags use manual character-based truncation.
     @ViewBuilder
     private var infoAndTagsContent: some View {
         HStack(alignment: .top, spacing: 15) {
@@ -195,21 +194,19 @@ struct DetailViewContent: View {
                          FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
                              // Display the tags passed in (might be limited)
                              ForEach(displayedTags) { tag in
-                                 Button {
-                                     navigationService.requestSearch(tag: tag.tag)
-                                 } label: {
-                                     TagView(tag: tag) // Use reusable TagView
-                                 }
-                                 .buttonStyle(.plain)
+                                 TagView(tag: tag) // Use TagView with manual truncation
+                                     .contentShape(Capsule()) // Define the tap area
+                                     .onTapGesture { // Add tap gesture for navigation
+                                         navigationService.requestSearch(tag: tag.tag)
+                                     }
                              }
 
-                             // "Show More" button logic
+                             // "Show More" button logic (remains a Button)
                              if !showingAllTags && totalTagCount > displayedTags.count {
                                  let remainingCount = totalTagCount - displayedTags.count
                                  Button {
                                      showAllTagsAction() // Call the action passed from PagedDetailView
                                  } label: {
-                                     // Use TagView styling for consistency
                                      Text("+\(remainingCount) mehr")
                                          .font(.caption)
                                          .padding(.horizontal, 8)
@@ -218,7 +215,7 @@ struct DetailViewContent: View {
                                          .foregroundColor(.accentColor)
                                          .clipShape(Capsule())
                                          .contentShape(Capsule())
-                                         .lineLimit(1) // Ensure "Show More" button text doesn't wrap either
+                                         .lineLimit(1)
                                  }
                                  .buttonStyle(.plain)
                              }
@@ -244,20 +241,32 @@ struct DetailViewContent: View {
         .frame(maxWidth: .infinity, alignment: .leading) // Overall alignment for the HStack
     }
 
-    /// **MODIFIED:** Reusable view for a single tag button. Truncates long text.
+    /// **MODIFIED:** Reusable view for a single tag, manual character limit truncation.
     struct TagView: View {
         let tag: ItemTag
+        // HINWEIS: Passe diesen Wert an, bis es visuell passt.
+        // Hängt von Schriftgröße und durchschnittlicher Zeichenbreite ab.
+        private let characterLimit = 25
+
+        // Berechnet den anzuzeigenden Text (original oder gekürzt)
+        private var displayText: String {
+            if tag.tag.count > characterLimit {
+                // Nimm die ersten (Limit - 1) Zeichen und füge "…" hinzu
+                return String(tag.tag.prefix(characterLimit - 1)) + "…"
+            } else {
+                return tag.tag // Originaltext passt
+            }
+        }
+
         var body: some View {
-            Text(tag.tag)
+            Text(displayText) // Zeigt den gekürzten oder originalen Text
                 .font(.caption)
-                .lineLimit(1) // <--- Force single line, enabling truncation
+                // Kein lineLimit mehr nötig, da wir manuell kürzen
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(Color.gray.opacity(0.2))
                 .foregroundColor(.primary)
                 .clipShape(Capsule())
-                .contentShape(Capsule())
-                // REMOVED .fixedSize and .frame(maxWidth: .infinity)
         }
     }
 
@@ -330,7 +339,29 @@ struct DetailViewContent: View {
     }
 }
 
-// MARK: - Previews (Unchanged, but should show truncation now)
+// Helper extension (Unchanged)
+extension UIFont {
+    static func preferredFont(from font: Font) -> UIFont {
+        // ... (implementation remains the same)
+        switch font {
+        case .largeTitle: return UIFont.preferredFont(forTextStyle: .largeTitle)
+        case .title: return UIFont.preferredFont(forTextStyle: .title1)
+        case .title2: return UIFont.preferredFont(forTextStyle: .title2)
+        case .title3: return UIFont.preferredFont(forTextStyle: .title3)
+        case .headline: return UIFont.preferredFont(forTextStyle: .headline)
+        case .subheadline: return UIFont.preferredFont(forTextStyle: .subheadline)
+        case .body: return UIFont.preferredFont(forTextStyle: .body)
+        case .callout: return UIFont.preferredFont(forTextStyle: .callout)
+        case .footnote: return UIFont.preferredFont(forTextStyle: .footnote)
+        case .caption: return UIFont.preferredFont(forTextStyle: .caption1)
+        case .caption2: return UIFont.preferredFont(forTextStyle: .caption2)
+        default: return UIFont.preferredFont(forTextStyle: .body) // Fallback
+        }
+    }
+}
+
+
+// MARK: - Previews (Unchanged, but will show truncation now)
 
 #Preview("Compact - Limited Tags") {
      let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true);
