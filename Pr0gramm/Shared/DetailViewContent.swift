@@ -10,25 +10,27 @@ import Kingfisher // Import Kingfisher
 // MARK: - Subviews
 
 /// Displays an image for the detail view using Kingfisher, handling loading states and errors.
-struct DetailImageView: View {
+/// Now considers horizontalSizeClass for scaling.
+struct DetailImageView: View { // Defined within DetailViewContent.swift
     let item: Item
     let logger: Logger
-    let cleanupAction: () -> Void // Although declared, this seems unused currently.
+    let cleanupAction: () -> Void
+    let horizontalSizeClass: UserInterfaceSizeClass?
 
     var body: some View {
-        // Use Kingfisher's KFImage for loading and caching
         KFImage(item.imageUrl)
-            .placeholder { // View shown while loading
+            .placeholder {
                 Rectangle().fill(.secondary.opacity(0.1)).overlay(ProgressView())
             }
-            .onFailure { error in // Action on loading failure
+            .onFailure { error in
                 logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)")
             }
             .resizable()
-            .scaledToFit()
+            .aspectRatio(contentMode: horizontalSizeClass == .compact ? .fill : .fit) // Use the property
             .onAppear { logger.trace("Displaying image for item \(item.id).") }
-            .onDisappear(perform: cleanupAction) // Call cleanup when image disappears
-            .background(Color.black) // Ensure background is black for letterboxing
+            .onDisappear(perform: cleanupAction)
+            .background(Color.black) // Background needed for .fit
+            .clipped() // Ensure content is clipped if .fill is used
     }
 }
 
@@ -65,7 +67,7 @@ struct DetailViewContent: View {
     // MARK: - Injected Services & Environment
     @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var authService: AuthService
-    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass // Keep this
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
 
@@ -74,27 +76,33 @@ struct DetailViewContent: View {
 
     // MARK: - Computed View Properties
 
-    /// Renders the appropriate media view (image or video player).
+    /// Renders the appropriate media view (image or video player),
+    /// passing the size class down for scaling adjustments.
     @ViewBuilder private var mediaContentInternal: some View {
         Group {
             if item.isVideo {
                 if let player = player {
-                    // Use the custom representable to integrate AVPlayerViewController
                     CustomVideoPlayerRepresentable(
                         player: player,
                         handler: keyboardActionHandler,
                         onWillBeginFullScreen: onWillBeginFullScreen,
-                        onWillEndFullScreen: onWillEndFullScreen
+                        onWillEndFullScreen: onWillEndFullScreen,
+                        horizontalSizeClass: horizontalSizeClass // Pass down size class
                     )
-                    .id(item.id) // Ensure recreation if the item ID changes
+                    .id(item.id)
                 } else {
-                    // Placeholder while the player is being set up
+                     // Placeholder needs frame defined by parent
                      Rectangle().fill(.black).overlay(ProgressView().tint(.white))
-                         .aspectRatio(guessAspectRatio(), contentMode: .fit)
                 }
             } else {
-                // Display the image using DetailImageView
-                DetailImageView(item: item, logger: Self.logger, cleanupAction: {})
+                // Use the DetailImageView defined above in this file
+                DetailImageView(
+                    item: item,
+                    logger: Self.logger,
+                    cleanupAction: {},
+                    horizontalSizeClass: horizontalSizeClass // Pass down size class
+                )
+                // Scaling/Clipping handled inside DetailImageView
             }
         }
     }
@@ -103,16 +111,14 @@ struct DetailViewContent: View {
     /// with smaller upvote and downvote counts below.
     @ViewBuilder private var voteCounterView: some View {
         let benis = item.up - item.down
-        VStack(alignment: .leading, spacing: 2) { // Align Benis and counts to the left
-            // Prominent Benis score
+        VStack(alignment: .leading, spacing: 2) {
             Text("\(benis)")
-                .font(.largeTitle) // <-- CHANGED to .largeTitle
+                .font(.largeTitle)
                 .fontWeight(.medium)
                 .foregroundColor(.primary)
-                .lineLimit(1) // Ensure Benis doesn't wrap
+                .lineLimit(1)
 
-            // Smaller Up/Down counts below
-            HStack(spacing: 8) { // Increase spacing between up/down slightly
+            HStack(spacing: 8) {
                 HStack(spacing: 3) {
                     Image(systemName: "arrow.up.circle.fill")
                         .symbolRenderingMode(.palette)
@@ -138,45 +144,40 @@ struct DetailViewContent: View {
     /// Displays the favorite button (heart icon).
     @ViewBuilder private var favoriteButton: some View {
         Button {
-            // Perform the toggle action asynchronously
             Task {
-                isProcessingFavorite = true // Disable button immediately
+                isProcessingFavorite = true
                 await toggleFavoriteAction()
-                // Short delay to prevent flickering if the action fails very quickly
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                isProcessingFavorite = false // Re-enable button
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                isProcessingFavorite = false
             }
         } label: {
             Image(systemName: isFavorited ? "heart.fill" : "heart")
-                .imageScale(.large) // Slightly larger icon
-                .foregroundColor(isFavorited ? .pink : .secondary) // Pink when favorited
-                .frame(width: 44, height: 44) // Increase tappable area
-                .contentShape(Rectangle()) // Define the hit area explicitly
+                .imageScale(.large)
+                .foregroundColor(isFavorited ? .pink : .secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain) // Remove default button styling
-        .disabled(isProcessingFavorite || !authService.isLoggedIn) // Disable during API call or if logged out
+        .buttonStyle(.plain)
+        .disabled(isProcessingFavorite || !authService.isLoggedIn)
     }
 
 
     /// Displays the vote counts, favorite button (if logged in), and tags using a FlowLayout.
     @ViewBuilder
     private var infoAndTagsContent: some View {
-        // Use a single HStack for the entire row, align items to the top
         HStack(alignment: .top, spacing: 15) {
-             // Combine Votes and Favorite button vertically first, then place next to tags
              VStack(alignment: .leading, spacing: 8) {
                  HStack(alignment: .firstTextBaseline, spacing: 15) {
                      voteCounterView
                      if authService.isLoggedIn {
                          favoriteButton
-                             .padding(.top, 5) // Adjusted padding slightly for larger title
+                             .padding(.top, 5)
                      }
                      Spacer()
                  }
              }
              .fixedSize(horizontal: true, vertical: false)
 
-             // Tags Section (allow it to expand)
              Group {
                  switch infoLoadingStatus {
                  case .loaded:
@@ -236,39 +237,50 @@ struct DetailViewContent: View {
             if horizontalSizeClass == .regular {
                 // iPad / wider layouts: Side-by-side
                 HStack(alignment: .top, spacing: 0) {
-                    // Media content takes flexible space
                     GeometryReader { geometry in
-                        mediaContentInternal
-                            .scaledToFit()
+                        mediaContentInternal // Handles its own scaling
+                            // Fit the media content within the geometry reader space
                             .frame(width: geometry.size.width, height: geometry.size.height)
-                            .clipped() // Clip media to its frame
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Expand fully
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     Divider()
 
-                    // Info/Tags/Comments in a scrollable sidebar
                     ScrollView {
                         VStack(alignment: .leading, spacing: 15) {
                             infoAndTagsContent.padding([.horizontal, .top])
                             commentsContent.padding([.horizontal, .bottom])
                         }
                     }
-                    .frame(minWidth: 300, idealWidth: 450, maxWidth: 600) // Constrain sidebar width
-                    .background(Color(.secondarySystemBackground)) // Subtle background
+                    .frame(minWidth: 300, idealWidth: 450, maxWidth: 600)
+                    .background(Color(.secondarySystemBackground))
                 }
             } else {
                 // iPhone / compact layouts: Vertical stack
                 ScrollView {
                     VStack(spacing: 0) {
-                        mediaContentInternal.scaledToFit() // Media on top
-                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10) // Info/Tags below
-                        commentsContent.padding(.horizontal).padding(.bottom, 10) // Comments at bottom
+                        // --- MODIFIED Compact Layout Media ---
+                        GeometryReader { geometry in
+                            let availableWidth = geometry.size.width
+                            // Calculate height based on aspect ratio, default to 16:9 if invalid
+                            let aspectRatio = guessAspectRatio() ?? (16.0/9.0)
+                            let calculatedHeight = availableWidth / aspectRatio
+
+                            mediaContentInternal // Image/Video Player (will fill/clip based on size class)
+                                .frame(width: availableWidth, height: calculatedHeight)
+                                // Clipping is handled inside DetailImageView / Video Player should clip automatically
+                        }
+                        // Apply the calculated aspect ratio to the GeometryReader itself
+                        .aspectRatio(guessAspectRatio() ?? (16.0/9.0), contentMode: .fit)
+                        // --------------------------------------
+
+                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
+                        commentsContent.padding(.horizontal).padding(.bottom, 10)
                     }
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity) // Ensure the group fills available space
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
          .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
          .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
     }
@@ -277,11 +289,8 @@ struct DetailViewContent: View {
 
     /// Provides an estimated aspect ratio for video placeholders before the player is ready.
     private func guessAspectRatio() -> CGFloat? {
-        if item.width > 0 && item.height > 0 {
-            return CGFloat(item.width) / CGFloat(item.height)
-        }
-        // Default to 16:9 if dimensions are invalid
-        return 16.0 / 9.0
+        guard item.width > 0, item.height > 0 else { return nil } // Return nil if invalid
+        return CGFloat(item.width) / CGFloat(item.height)
     }
 }
 
@@ -320,9 +329,8 @@ struct DetailViewContent: View {
         .environmentObject(navService)
         .environmentObject(settings)
         .environmentObject(authService)
-        .environment(\.horizontalSizeClass, .compact)
-        .padding() // Add padding for better preview visibility
-        .background(Color.gray.opacity(0.2)) // Background for context
+        .environment(\.horizontalSizeClass, .compact) // Simulate compact
+        // Removed outer padding/background for more realistic preview
     }
 }
 
@@ -358,7 +366,7 @@ struct DetailViewContent: View {
         .environmentObject(navService)
         .environmentObject(settings)
         .environmentObject(authService)
-        .environment(\.horizontalSizeClass, .regular)
+        .environment(\.horizontalSizeClass, .regular) // Simulate regular
     }
     .previewDevice("iPad (10th generation)")
 }
