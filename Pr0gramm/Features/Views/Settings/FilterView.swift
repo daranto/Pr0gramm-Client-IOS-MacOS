@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Features/Views/Settings/FilterView.swift
+// --- START OF COMPLETE FILE ---
+
 import SwiftUI
 
 /// A view, typically presented as a sheet, allowing the user to configure
@@ -18,9 +21,16 @@ struct FilterView: View {
                         }
                     }
                     .pickerStyle(.segmented) // Use segmented control for feed type
+
+                    // Toggle to hide seen items <-- NEUER TOGGLE
+                    Toggle("Gesehene ausblenden", isOn: $settings.hideSeenItems)
+
                 } header: {
                     Text("Anzeige")
+                } footer: {
+                    Text("Blendet Posts aus, die du bereits in der Detailansicht geöffnet hast.") // <-- Erklärung
                 }
+
 
                 // Section for Content Filters (only shown if logged in)
                 if authService.isLoggedIn {
@@ -74,3 +84,4 @@ struct FilterView: View {
             return auth
         }())
 }
+// --- END OF COMPLETE FILE ---

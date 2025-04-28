@@ -1,7 +1,10 @@
+// Pr0gramm/Pr0gramm/Shared/CacheService.swift
+// --- START OF COMPLETE FILE ---
+
 import Foundation
 import os
 
-/// Provides services for saving, loading, and managing structured data (like `[Item]`) in a dedicated disk cache directory.
+/// Provides services for saving, loading, and managing structured data (like `[Item]`) and simple sets (like seen item IDs) in a dedicated disk cache directory.
 /// Handles cache size enforcement using an LRU (Least Recently Used) strategy for the data cache.
 @MainActor
 class CacheService {
@@ -48,7 +51,7 @@ class CacheService {
         }
     }
 
-    // MARK: - Cache File Operations
+    // MARK: - Cache File Operations (Generic Helper)
 
     /// Generates a sanitized file URL within the cache directory for a given key.
     /// Replaces non-alphanumeric characters (except '-' and '_') in the key with underscores.
@@ -64,6 +67,52 @@ class CacheService {
         return cacheDirectory.appendingPathComponent(fileName)
     }
 
+    /// Generic function to save Codable data to a file.
+    private func saveData<T: Codable>(_ data: T, fileURL: URL, key: String) async throws {
+        Self.logger.debug("Attempting to save \(String(describing: T.self)) to data cache file: \(fileURL.lastPathComponent) (Key: \(key))")
+        let encodedData: Data
+        do {
+            encodedData = try JSONEncoder().encode(data)
+        } catch {
+            Self.logger.error("Failed to encode \(String(describing: T.self)) for key '\(key)': \(error.localizedDescription)")
+            throw error
+        }
+
+        do {
+            try encodedData.write(to: fileURL, options: .atomic) // Atomic write for safety
+            Self.logger.info("Successfully saved data cache for key '\(key)' to \(fileURL.lastPathComponent).")
+        } catch {
+            Self.logger.error("Failed to write data cache file \(fileURL.lastPathComponent) (Key: \(key)): \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    /// Generic function to load Codable data from a file.
+    private func loadData<T: Codable>(from fileURL: URL, key: String) async throws -> T? {
+        Self.logger.debug("Attempting to load \(String(describing: T.self)) from data cache file: \(fileURL.lastPathComponent) (Key: \(key))")
+
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            Self.logger.info("Data cache file not found for key '\(key)'.")
+            return nil
+        }
+
+        do {
+            let fileData = try Data(contentsOf: fileURL)
+            let decodedData = try JSONDecoder().decode(T.self, from: fileData)
+            Self.logger.info("Successfully loaded and decoded \(String(describing: T.self)) for key '\(key)' from data cache.")
+            updateFileAccessDate(for: fileURL) // Mark as recently used
+            return decodedData
+        } catch {
+            Self.logger.error("Failed to load or decode data cache file \(fileURL.lastPathComponent) (Key: \(key)): \(error.localizedDescription)")
+            // Corrupted cache file, remove it
+            await clearCache(forKey: key) // Use the public clearCache function
+            throw error // Re-throw the error after attempting cleanup
+        }
+    }
+
+
+    // MARK: - Item Cache Specific Methods
+
     /// Encodes an array of `Item` objects to JSON and saves it to a file in the cache directory.
     /// Enforces the cache size limit after saving.
     /// - Parameters:
@@ -71,25 +120,14 @@ class CacheService {
     ///   - key: The cache key to associate with these items.
     func saveItems(_ items: [Item], forKey key: String) async {
         guard let fileURL = getCacheFileURL(forKey: key) else {
-            Self.logger.error("Could not save cache for key '\(key)': Invalid file URL.")
+            Self.logger.error("Could not save item cache for key '\(key)': Invalid file URL.")
             return
         }
-        Self.logger.debug("Attempting to save \(items.count) items to data cache file: \(fileURL.lastPathComponent) (Key: \(key))")
-
-        let data: Data
         do {
-            data = try JSONEncoder().encode(items)
-        } catch {
-            Self.logger.error("Failed to encode items for key '\(key)': \(error.localizedDescription)")
-            return
-        }
-
-        do {
-            try data.write(to: fileURL, options: .atomic) // Atomic write for safety
-            Self.logger.info("Successfully saved data cache for key '\(key)' to \(fileURL.lastPathComponent).")
+            try await saveData(items, fileURL: fileURL, key: key)
             await enforceSizeLimit() // Check and potentially prune cache after saving
         } catch {
-            Self.logger.error("Failed to write data cache file \(fileURL.lastPathComponent) (Key: \(key)): \(error.localizedDescription)")
+            // Error already logged by saveData
         }
     }
 
@@ -99,30 +137,62 @@ class CacheService {
     /// - Parameter key: The cache key for the items to load.
     /// - Returns: An array of `Item` objects if found and valid, otherwise `nil`.
     func loadItems(forKey key: String) async -> [Item]? {
-        guard let fileURL = getCacheFileURL(forKey: key) else {
-            Self.logger.error("Could not load cache for key '\(key)': Invalid file URL.")
+         guard let fileURL = getCacheFileURL(forKey: key) else {
+            Self.logger.error("Could not load item cache for key '\(key)': Invalid file URL.")
             return nil
         }
-        Self.logger.debug("Attempting to load items from data cache file: \(fileURL.lastPathComponent) (Key: \(key))")
-
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            Self.logger.info("Data cache file not found for key '\(key)'.")
-            return nil
-        }
-
         do {
-            let data = try Data(contentsOf: fileURL)
-            let items = try JSONDecoder().decode([Item].self, from: data)
-            Self.logger.info("Successfully loaded and decoded \(items.count) items for key '\(key)' from data cache.")
-            updateFileAccessDate(for: fileURL) // Mark as recently used
-            return items
+             return try await loadData(from: fileURL, key: key)
         } catch {
-            Self.logger.error("Failed to load or decode data cache file \(fileURL.lastPathComponent) (Key: \(key)): \(error.localizedDescription)")
-            // Corrupted cache file, remove it
-            await clearCache(forKey: key)
+            // Error already logged by loadData
             return nil
         }
     }
+
+    // MARK: - Seen Item IDs Cache Specific Methods <-- NEW SECTION
+
+    /// Saves a Set of seen item IDs to a cache file. Does NOT enforce size limit (assumed small).
+    /// - Parameters:
+    ///   - ids: The Set of integer IDs to save.
+    ///   - key: The cache key (e.g., "seenItems_v1").
+    func saveSeenIDs(_ ids: Set<Int>, forKey key: String) async {
+        guard let fileURL = getCacheFileURL(forKey: key) else {
+            Self.logger.error("Could not save seen IDs cache for key '\(key)': Invalid file URL.")
+            return
+        }
+        do {
+            // Use the generic saveData helper
+            try await saveData(ids, fileURL: fileURL, key: key)
+             // Note: We typically don't enforce size limit for this specific small file.
+             // If it ever became large, enforceSizeLimit() could be called here.
+        } catch {
+            // Error logging handled within saveData
+            Self.logger.error("saveData failed for seen IDs (Key: \(key)). Error logged above.")
+        }
+    }
+
+    /// Loads a Set of seen item IDs from a cache file.
+    /// - Parameter key: The cache key (e.g., "seenItems_v1").
+    /// - Returns: A Set of integer IDs if found and valid, otherwise `nil`.
+    func loadSeenIDs(forKey key: String) async -> Set<Int>? {
+        guard let fileURL = getCacheFileURL(forKey: key) else {
+           Self.logger.error("Could not load seen IDs cache for key '\(key)': Invalid file URL.")
+           return nil
+       }
+       do {
+            // Use the generic loadData helper
+            let loadedIDs: Set<Int>? = try await loadData(from: fileURL, key: key)
+            return loadedIDs ?? Set<Int>() // Return empty set if file not found or empty
+       } catch {
+           // Error logging handled within loadData, return nil on error
+            Self.logger.error("loadData failed for seen IDs (Key: \(key)). Error logged above. Returning nil.")
+           return nil
+       }
+    }
+    // --- END NEW SECTION ---
+
+
+    // MARK: - Cache Clearing Methods
 
     /// Deletes the cache file associated with the given key.
     /// - Parameter key: The cache key of the file to delete.
@@ -270,6 +340,14 @@ class CacheService {
                 // Remove oldest files until size is below the limit
                 for fileInfo in filesWithSizeAndDate {
                     if currentSize <= self.maxDataCacheSizeBytes { break } // Stop if we are within limit
+
+                    // --- IMPORTANT: DO NOT DELETE THE SEEN ITEMS CACHE during LRU cleanup ---
+                    if fileInfo.url.lastPathComponent.hasPrefix("seenItems_") {
+                         Self.logger.debug("LRU Cleanup: Skipping deletion of seen items cache file: \(fileInfo.url.lastPathComponent)")
+                         continue // Skip this file
+                    }
+                    // --- END ---
+
                     do {
                         try fileManager.removeItem(at: fileInfo.url)
                         currentSize -= fileInfo.size
@@ -286,3 +364,4 @@ class CacheService {
         } catch { Self.logger.error("Failed to list contents or get attributes for data cache size enforcement: \(error.localizedDescription)") }
     }
 }
+// --- END OF COMPLETE FILE ---

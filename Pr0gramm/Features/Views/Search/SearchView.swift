@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Features/Views/Search/SearchView.swift
+// --- START OF COMPLETE FILE ---
+
 import SwiftUI
 import os
 
@@ -5,7 +8,7 @@ import os
 /// Displays results in a grid and allows navigation to the detail view.
 /// Also handles programmatic search requests initiated from other views (e.g., tapping a tag).
 struct SearchView: View {
-    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var settings: AppSettings // <-- Benötigt für seenItemIDs
     @EnvironmentObject var navigationService: NavigationService // To observe pending search tags
     /// The text entered by the user in the search bar.
     @State private var searchText = ""
@@ -21,43 +24,15 @@ struct SearchView: View {
     @State private var didPerformInitialPendingSearch = false
 
     private let apiService = APIService()
+    // Use explicit Type.logger instead of Self.logger
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "SearchView")
     /// Grid layout definition.
     let columns: [GridItem] = [ GridItem(.adaptive(minimum: 100), spacing: 3) ]
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            VStack {
-                // Display content based on the current state
-                 if isLoading {
-                    ProgressView("Suche läuft...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = errorMessage {
-                    // Show error message using ContentUnavailableView
-                    ContentUnavailableView { Label("Fehler bei der Suche", systemImage: "exclamationmark.triangle") } description: { Text(error) } actions: { Button("Erneut versuchen") { Task { await performSearch() } } }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if !hasSearched {
-                    // Initial state before any search is performed
-                    ContentUnavailableView("Suche nach Tags", systemImage: "tag")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if items.isEmpty {
-                     // State after a search yielded no results
-                     ContentUnavailableView.search(text: searchText) // Use standard no search results view
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    // Display search results grid
-                    ScrollView {
-                        LazyVGrid(columns: columns, spacing: 3) {
-                            ForEach(items) { item in
-                                NavigationLink(value: item) { FeedItemThumbnail(item: item) }
-                                    .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 5)
-                        .padding(.bottom)
-                    }
-                }
-            }
+            // Use the extracted computed property for content
+            searchContentView
             .navigationTitle("Suche")
             // Integrate searchable modifier for the search bar
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Tags suchen...")
@@ -75,7 +50,7 @@ struct SearchView: View {
             .onAppear {
                 // Check only if we haven't already processed a pending tag on this appear cycle
                 if !didPerformInitialPendingSearch, let tagToSearch = navigationService.pendingSearchTag, !tagToSearch.isEmpty {
-                    Self.logger.info("SearchView appeared with pending tag: '\(tagToSearch)'")
+                    SearchView.logger.info("SearchView appeared with pending tag: '\(tagToSearch)'") // Use explicit type name
                     processPendingTag(tagToSearch)
                     didPerformInitialPendingSearch = true // Mark as processed for this appearance
                 }
@@ -83,7 +58,7 @@ struct SearchView: View {
             // Handle pending search tag if it changes while the view is visible
             .onChange(of: navigationService.pendingSearchTag) { _, newTag in
                 if let tagToSearch = newTag, !tagToSearch.isEmpty {
-                    Self.logger.info("Received pending search tag via onChange: '\(tagToSearch)'")
+                    SearchView.logger.info("Received pending search tag via onChange: '\(tagToSearch)'") // Use explicit type name
                     processPendingTag(tagToSearch)
                     // Reset the appear flag if a new tag comes in while visible
                     didPerformInitialPendingSearch = true
@@ -99,8 +74,57 @@ struct SearchView: View {
              .onDisappear {
                  didPerformInitialPendingSearch = false
              }
+              // Refresh the view if the seen items change (to update checkmarks)
+              .onChange(of: settings.seenItemIDs) { _, _ in
+                  SearchView.logger.trace("SearchView detected change in seenItemIDs, body will update.") // Use explicit type name
+              }
         }
     }
+
+    // MARK: - Extracted Content View
+
+    /// Computed property that builds the main content based on the current state.
+    @ViewBuilder
+    private var searchContentView: some View {
+        // Display content based on the current state
+        if isLoading {
+            ProgressView("Suche läuft...")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = errorMessage {
+            // Show error message using ContentUnavailableView
+            ContentUnavailableView { Label("Fehler bei der Suche", systemImage: "exclamationmark.triangle") } description: { Text(error) } actions: { Button("Erneut versuchen") { Task { await performSearch() } } }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if !hasSearched {
+            // Initial state before any search is performed
+            ContentUnavailableView("Suche nach Tags", systemImage: "tag")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if items.isEmpty {
+            // State after a search yielded no results
+            ContentUnavailableView.search(text: searchText) // Use standard no search results view
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            // Display search results grid
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 3) {
+                    ForEach(items) { item in
+                        NavigationLink(value: item) {
+                            // Pass the isSeen state to the thumbnail
+                            FeedItemThumbnail(
+                                item: item,
+                                isSeen: settings.seenItemIDs.contains(item.id) // <-- Prüfen, ob gesehen
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 5)
+                .padding(.bottom)
+            }
+        }
+    }
+
+
+    // MARK: - Helper Methods
 
     /// Updates the local search text, performs the search, and clears the pending tag in `NavigationService`.
     /// - Parameter tagToSearch: The tag received from `NavigationService`.
@@ -125,13 +149,13 @@ struct SearchView: View {
         let trimmedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         // Prevent search with empty or whitespace-only text
         guard !trimmedSearchText.isEmpty else {
-            Self.logger.info("Search skipped: search text is empty.")
+            SearchView.logger.info("Search skipped: search text is empty.") // Use explicit type name
             // Reset state if search is cancelled by clearing text
             await MainActor.run { items = []; hasSearched = false; errorMessage = nil; isLoading = false; didPerformInitialPendingSearch = false }
             return
         }
 
-        Self.logger.info("Performing search for tags: '\(trimmedSearchText)'")
+        SearchView.logger.info("Performing search for tags: '\(trimmedSearchText)'") // Use explicit type name
         // Set loading state immediately
         await MainActor.run { isLoading = true; errorMessage = nil; items = []; hasSearched = true }
 
@@ -146,19 +170,19 @@ struct SearchView: View {
             // Only update the UI if the search text is still the same
             if currentSearchText == trimmedSearchText {
                 await MainActor.run { self.items = fetchedItems }
-                Self.logger.info("Search successful, found \(fetchedItems.count) items for '\(trimmedSearchText)'.")
+                SearchView.logger.info("Search successful, found \(fetchedItems.count) items for '\(trimmedSearchText)'.") // Use explicit type name
             } else {
-                 Self.logger.info("Search results for '\(trimmedSearchText)' discarded, search text changed to '\(currentSearchText)' during fetch.")
+                 SearchView.logger.info("Search results for '\(trimmedSearchText)' discarded, search text changed to '\(currentSearchText)' during fetch.") // Use explicit type name
             }
         } catch {
             // Handle API errors
-            Self.logger.error("Search failed for tags '\(trimmedSearchText)': \(error.localizedDescription)")
+            SearchView.logger.error("Search failed for tags '\(trimmedSearchText)': \(error.localizedDescription)") // Use explicit type name
             let currentSearchText = await MainActor.run { self.searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
              // Only show the error if the search text hasn't changed
             if currentSearchText == trimmedSearchText {
                  await MainActor.run { self.errorMessage = "Fehler: \(error.localizedDescription)"; self.items = [] }
              } else {
-                  Self.logger.info("Search error for '\(trimmedSearchText)' discarded, search text changed to '\(currentSearchText)' during fetch.")
+                  SearchView.logger.info("Search error for '\(trimmedSearchText)' discarded, search text changed to '\(currentSearchText)' during fetch.") // Use explicit type name
              }
         }
     }
@@ -175,6 +199,7 @@ struct SearchView: View {
     // Preview the SearchView directly
     return SearchView()
         .environmentObject(settings)
-        .environmentObject(authService)
+        .environmentObject(authService) // Though not directly used, good practice for previews
         .environmentObject(navigationService)
 }
+// --- END OF COMPLETE FILE ---

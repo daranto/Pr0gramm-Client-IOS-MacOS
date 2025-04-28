@@ -22,9 +22,9 @@ struct PagedDetailTabViewItem: View {
     /// via `PagedDetailView`. Will be `nil` if this item is not the currently active video.
     let player: AVPlayer?
 
-    let displayedTags: [ItemTag] // <-- Renamed from 'tags'
-    let totalTagCount: Int // <-- New: Total number of tags available
-    let showingAllTags: Bool // <-- New: Flag if all tags are currently displayed
+    let displayedTags: [ItemTag]
+    let totalTagCount: Int
+    let showingAllTags: Bool
     let comments: [DisplayComment]
     let infoLoadingStatus: InfoLoadingStatus
     /// Action to load info for the *currently visible* item.
@@ -40,7 +40,7 @@ struct PagedDetailTabViewItem: View {
     @Binding var previewLinkTarget: PreviewLinkTarget?
     let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
-    let showAllTagsAction: () -> Void // <-- New: Action to show all tags
+    let showAllTagsAction: () -> Void
 
     var body: some View {
         DetailViewContent(
@@ -49,15 +49,15 @@ struct PagedDetailTabViewItem: View {
             player: player,
             onWillBeginFullScreen: onWillBeginFullScreen,
             onWillEndFullScreen: onWillEndFullScreen,
-            displayedTags: displayedTags, // <-- Pass displayed tags
-            totalTagCount: totalTagCount, // <-- Pass total count
-            showingAllTags: showingAllTags, // <-- Pass flag
+            displayedTags: displayedTags,
+            totalTagCount: totalTagCount,
+            showingAllTags: showingAllTags,
             comments: comments,
             infoLoadingStatus: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget,
             isFavorited: isFavorited,
             toggleFavoriteAction: toggleFavoriteAction,
-            showAllTagsAction: showAllTagsAction // <-- Pass action
+            showAllTagsAction: showAllTagsAction
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity) // Ensure it fills the tab page
         .onAppear {
@@ -66,6 +66,7 @@ struct PagedDetailTabViewItem: View {
             // Preload info for the next and previous items for smoother navigation
             if currentIndex + 1 < allItems.count { Task { await preloadInfoAction(allItems[currentIndex + 1]) } }
             if currentIndex > 0 { Task { await preloadInfoAction(allItems[currentIndex - 1]) } }
+            // Note: Marking as seen is handled in PagedDetailView's onChange(of: selectedIndex) and onAppear
         }
     }
 }
@@ -74,14 +75,14 @@ struct PagedDetailTabViewItem: View {
 
 /// A view that displays a list of items in a swipeable, paged interface (`TabView`).
 /// Manages video playback via `VideoPlayerManager`, loads item details (tags/comments),
-/// handles keyboard navigation, fullscreen state, and favoriting actions.
+/// handles keyboard navigation, fullscreen state, favoriting actions, and marks items as seen.
 struct PagedDetailView: View {
     /// The list of items to display in the pager.
     @State var items: [Item]
     /// The index of the currently visible item.
     @State private var selectedIndex: Int
     @Environment(\.dismiss) var dismiss
-    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var settings: AppSettings // <-- Now used for marking seen
     @EnvironmentObject var authService: AuthService
     @Environment(\.scenePhase) var scenePhase
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
@@ -151,10 +152,13 @@ struct PagedDetailView: View {
              // When the selected index changes (user swipes)
              Self.logger.info("Selected index changed from \(oldValue) to \(newValue)")
              if newValue >= 0 && newValue < items.count {
+                  let currentItem = items[newValue]
                   // Tell the VideoPlayerManager to set up the player for the *new* item.
-                  playerManager.setupPlayerIfNeeded(for: items[newValue], isFullscreen: isFullscreen)
+                  playerManager.setupPlayerIfNeeded(for: currentItem, isFullscreen: isFullscreen)
                   // Load info for the new item if needed
-                  Task { await loadInfoIfNeeded(for: items[newValue]) }
+                  Task { await loadInfoIfNeeded(for: currentItem) }
+                  // Mark the *new* item as seen
+                  Task { await settings.markItemAsSeen(id: currentItem.id) } // <-- Mark as seen
              }
              isTogglingFavorite = false // Reset favorite toggle state on page change
         }
@@ -170,8 +174,11 @@ struct PagedDetailView: View {
             // Configure the player manager with settings and set up the initial player
             playerManager.configure(settings: settings) // Configure links settings
             if selectedIndex >= 0 && selectedIndex < items.count {
-                 playerManager.setupPlayerIfNeeded(for: items[selectedIndex], isFullscreen: isFullscreen)
-                 Task { await loadInfoIfNeeded(for: items[selectedIndex]) } // Load info for initial item
+                 let initialItem = items[selectedIndex]
+                 playerManager.setupPlayerIfNeeded(for: initialItem, isFullscreen: isFullscreen)
+                 Task { await loadInfoIfNeeded(for: initialItem) } // Load info for initial item
+                 // Mark the *initial* item as seen
+                 Task { await settings.markItemAsSeen(id: initialItem.id) } // <-- Mark as seen
             }
         }
         .onDisappear {
@@ -213,9 +220,9 @@ struct PagedDetailView: View {
                 item: pageData.currentItem,
                 keyboardActionHandler: keyboardActionHandler,
                 player: pageData.currentItem.id == playerManager.playerItemID ? playerManager.player : nil,
-                displayedTags: pageData.displayedTags, // <-- Pass limited/all tags
-                totalTagCount: pageData.totalTagCount, // <-- Pass total count
-                showingAllTags: pageData.showingAllTags, // <-- Pass flag
+                displayedTags: pageData.displayedTags,
+                totalTagCount: pageData.totalTagCount,
+                showingAllTags: pageData.showingAllTags,
                 comments: pageData.comments,
                 infoLoadingStatus: pageData.status,
                 loadInfoAction: loadInfoIfNeeded,
@@ -233,7 +240,7 @@ struct PagedDetailView: View {
                 previewLinkTarget: $previewLinkTarget,
                 isFavorited: items[index].favorited ?? false,
                 toggleFavoriteAction: toggleFavorite,
-                showAllTagsAction: { // <-- Implement action closure
+                showAllTagsAction: {
                     let itemId = items[index].id
                     Self.logger.info("Show all tags action triggered for item \(itemId)")
                     // Add the item ID to the set, triggering a view update
@@ -252,9 +259,9 @@ struct PagedDetailView: View {
         currentItem: Item,
         status: InfoLoadingStatus,
         comments: [DisplayComment],
-        displayedTags: [ItemTag], // <-- Tags to actually display
-        totalTagCount: Int,       // <-- Total number of tags available
-        showingAllTags: Bool      // <-- Flag if all are being displayed
+        displayedTags: [ItemTag],
+        totalTagCount: Int,
+        showingAllTags: Bool
     )? {
         guard index >= 0 && index < items.count else {
             Self.logger.error("preparePageData failed: Invalid index \(index)")
@@ -266,18 +273,18 @@ struct PagedDetailView: View {
         let itemId = currentItem.id
         let statusForItem = infoLoadingStatus[itemId] ?? .idle
         let baseComments = loadedInfos[itemId]?.comments ?? []
-        let sortedTags = loadedInfos[itemId]?.tags ?? [] // <-- Get pre-sorted tags
+        let sortedTags = loadedInfos[itemId]?.tags ?? []
 
         // --- Build Comment Hierarchy ---
-        // (Comment logic remains unchanged)
         let commentsById = Dictionary(grouping: baseComments, by: { $0.id }).compactMapValues { $0.first }
         var childrenByParentId: [Int: [ItemComment]] = Dictionary(grouping: baseComments, by: { $0.parent ?? 0 })
         childrenByParentId.removeValue(forKey: 0)
 
         func buildHierarchy(for comments: [ItemComment]) -> [DisplayComment] {
             comments.map { comment in
-                let children = childrenByParentId[comment.id]?.sorted { $0.created < $1.created } ?? []
-                let displayChildren = buildHierarchy(for: children)
+                // Find children for the current comment, sort by date (or score later)
+                let children = childrenByParentId[comment.id]?.sorted { $0.created < $1.created } ?? [] // Default sort by date
+                let displayChildren = buildHierarchy(for: children) // Recursively build for children
                 return DisplayComment(id: comment.id, comment: comment, children: displayChildren)
             }
         }
@@ -288,6 +295,7 @@ struct PagedDetailView: View {
         case .score: sortedTopLevelComments = topLevelComments.sorted { ($0.up - $0.down) > ($1.up - $1.down) }
         }
         let displayComments = buildHierarchy(for: sortedTopLevelComments)
+
 
         // --- Tag Limiting Logic (operates on pre-sorted tags) ---
         let totalTagCount = sortedTags.count
@@ -315,7 +323,7 @@ struct PagedDetailView: View {
     }
 
 
-    // **REVISED:** Info Loading Method - Sorts tags upon successful fetch and stores sorted result
+    // Info Loading Method - Sorts tags upon successful fetch and stores sorted result
     private func loadInfoIfNeeded(for item: Item) async {
         let itemId = item.id
         let currentStatus = infoLoadingStatus[itemId]
@@ -364,7 +372,7 @@ struct PagedDetailView: View {
         }
     }
 
-    // Favoriting Logic (Unchanged)
+    // Favoriting Logic
     private func toggleFavorite() async {
         let localSettings = self.settings
         guard !isTogglingFavorite else { return }
@@ -390,8 +398,10 @@ struct PagedDetailView: View {
             await localSettings.updateCacheSizes()
         } catch {
             Self.logger.error("Failed to toggle favorite status for item \(itemId): \(error.localizedDescription)")
+            // Revert optimistic UI only if we are still on the same item
             if selectedIndex == currentItemIndex { items[currentItemIndex].favorited = !targetFavoriteState }
         }
+        // Reset toggle state only if we are still on the same item
         if selectedIndex == currentItemIndex { isTogglingFavorite = false }
         else { Self.logger.info("Favorite toggle finished, but index changed. isTogglingFavorite remains false for new item.") }
     }
