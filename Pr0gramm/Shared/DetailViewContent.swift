@@ -16,6 +16,7 @@ struct DetailImageView: View { // Defined within DetailViewContent.swift
     let logger: Logger
     let cleanupAction: () -> Void
     let horizontalSizeClass: UserInterfaceSizeClass?
+    @Binding var fullscreenImageTarget: FullscreenImageTarget? // <-- NEUES Binding
 
     var body: some View {
         KFImage(item.imageUrl)
@@ -26,11 +27,18 @@ struct DetailImageView: View { // Defined within DetailViewContent.swift
                 logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)")
             }
             .resizable()
-            .aspectRatio(contentMode: horizontalSizeClass == .compact ? .fill : .fit) // Use the property
+            .aspectRatio(contentMode: .fit) // Immer .fit, Zoom regelt den Rest
             .onAppear { logger.trace("Displaying image for item \(item.id).") }
             .onDisappear(perform: cleanupAction)
             .background(Color.black) // Background needed for .fit
-            .clipped() // Ensure content is clipped if .fill is used
+            .clipped()
+            // --- NEU: Tap Gesture zum Öffnen des Sheets ---
+            .onTapGesture {
+                logger.info("Image tapped for item \(item.id), setting fullscreen target.")
+                fullscreenImageTarget = FullscreenImageTarget(item: item)
+            }
+            // WICHTIG: Füge diese Zeile hinzu, um den Tap nur für Bilder zu aktivieren
+            .disabled(item.isVideo)
     }
 }
 
@@ -67,6 +75,8 @@ struct DetailViewContent: View {
     let infoLoadingStatus: InfoLoadingStatus
     /// Binding to trigger the preview sheet for linked items in comments.
     @Binding var previewLinkTarget: PreviewLinkTarget?
+    /// --- NEU: Binding für Vollbild-Sheet ---
+    @Binding var fullscreenImageTarget: FullscreenImageTarget?
     /// Indicates if the current user has favorited this item.
     let isFavorited: Bool
     /// Action to toggle the favorite status of the item.
@@ -108,7 +118,8 @@ struct DetailViewContent: View {
                     item: item,
                     logger: Self.logger,
                     cleanupAction: {},
-                    horizontalSizeClass: horizontalSizeClass // Pass down size class
+                    horizontalSizeClass: horizontalSizeClass, // Pass down size class
+                    fullscreenImageTarget: $fullscreenImageTarget // <-- Binding weitergeben
                 )
             }
         }
@@ -277,7 +288,8 @@ struct DetailViewContent: View {
             comments: comments,
             status: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget
-        )
+        ) // Binding für fullscreenImageTarget wird automatisch von außen gesetzt
+
     }
 
     // MARK: - Body (Layout logic remains unchanged)
@@ -375,6 +387,7 @@ extension UIFont {
      let previewComments: [DisplayComment] = [ DisplayComment(id: 1, comment: ItemComment(id: 1, parent: 0, content: "Kommentar", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), children: []) ]
      let previewPlayer: AVPlayer? = nil
      @State var previewLinkTarget: PreviewLinkTarget? = nil
+     @State var fullscreenTarget: FullscreenImageTarget? = nil // <-- State für Preview
      let navService = NavigationService()
      let settings = AppSettings()
      let authService = { let auth = AuthService(appSettings: settings); auth.isLoggedIn = true; auth.favoritesCollectionId = 1234; return auth }()
@@ -390,6 +403,7 @@ extension UIFont {
             showingAllTags: false,                     // Simulate not showing all
             comments: previewComments, infoLoadingStatus: .loaded,
             previewLinkTarget: $previewLinkTarget,
+            fullscreenImageTarget: $fullscreenTarget, // <-- Binding übergeben
             isFavorited: true,
             toggleFavoriteAction: {},
             showAllTagsAction: {}                      // Dummy action for preview
@@ -413,6 +427,7 @@ extension UIFont {
      let previewComments: [DisplayComment] = [ DisplayComment(id: 1, comment: ItemComment(id: 1, parent: 0, content: "Kommentar", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), children: []) ]
      let previewPlayer: AVPlayer? = nil
      @State var previewLinkTarget: PreviewLinkTarget? = nil
+     @State var fullscreenTarget: FullscreenImageTarget? = nil // <-- State für Preview
      let navService = NavigationService()
      let settings = AppSettings()
      let authService = { let auth = AuthService(appSettings: settings); auth.isLoggedIn = true; auth.favoritesCollectionId = 1234; return auth }()
@@ -428,6 +443,7 @@ extension UIFont {
             showingAllTags: true,                 // Simulate showing all
             comments: previewComments, infoLoadingStatus: .loaded,
             previewLinkTarget: $previewLinkTarget,
+            fullscreenImageTarget: $fullscreenTarget, // <-- Binding übergeben
             isFavorited: true,
             toggleFavoriteAction: {},
             showAllTagsAction: {}
@@ -451,6 +467,7 @@ extension UIFont {
     ];
     let previewComments: [DisplayComment] = [ DisplayComment(id: 1, comment: ItemComment(id: 1, parent: 0, content: "Kommentar https://pr0gramm.com/top/123", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), children: []) ];
     let previewPlayer: AVPlayer? = nil
+    @State var fullscreenTarget: FullscreenImageTarget? = nil // <-- State für Preview
      @State var previewLinkTarget: PreviewLinkTarget? = nil
      let navService = NavigationService()
      let settings = AppSettings()
@@ -467,6 +484,7 @@ extension UIFont {
             showingAllTags: false,                     // Not showing all
             comments: previewComments, infoLoadingStatus: .loaded,
             previewLinkTarget: $previewLinkTarget,
+            fullscreenImageTarget: $fullscreenTarget, // <-- Binding übergeben
             isFavorited: false,
             toggleFavoriteAction: {},
             showAllTagsAction: {}

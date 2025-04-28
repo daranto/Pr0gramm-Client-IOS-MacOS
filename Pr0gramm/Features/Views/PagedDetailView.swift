@@ -10,6 +10,12 @@ struct PreviewLinkTarget: Identifiable {
     let id: Int // The item ID to preview
 }
 
+// --- NEU: Wrapper struct for fullscreen image sheet ---
+struct FullscreenImageTarget: Identifiable {
+    let item: Item
+    var id: Int { item.id } // Use item ID for Identifiable conformance
+}
+
 // MARK: - PagedDetailTabViewItem
 
 /// Represents a single page (item) within the `PagedDetailView`'s `TabView`.
@@ -37,6 +43,7 @@ struct PagedDetailTabViewItem: View {
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
     @Binding var previewLinkTarget: PreviewLinkTarget?
+    @Binding var fullscreenImageTarget: FullscreenImageTarget? // <-- NEUES Binding
     let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
     let showAllTagsAction: () -> Void
@@ -54,6 +61,7 @@ struct PagedDetailTabViewItem: View {
             comments: comments,
             infoLoadingStatus: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget,
+            fullscreenImageTarget: $fullscreenImageTarget, // <-- Binding weitergeben
             isFavorited: isFavorited,
             toggleFavoriteAction: toggleFavoriteAction,
             showAllTagsAction: showAllTagsAction
@@ -105,6 +113,8 @@ struct PagedDetailView: View {
     @State private var previewLinkTarget: PreviewLinkTarget? = nil
     /// State to prevent concurrent favorite toggle API calls.
     @State private var isTogglingFavorite = false
+    /// --- NEU: State für Vollbild-Sheet ---
+    @State private var fullscreenImageTarget: FullscreenImageTarget? = nil
     /// State to manage the favorited status locally, reflecting optimistic updates.
     @State private var localFavoritedStatus: [Int: Bool] = [:]
 
@@ -144,6 +154,14 @@ struct PagedDetailView: View {
              LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
                  .environmentObject(settings)
                  .environmentObject(authService)
+        }
+        // --- NEU: Sheet für Vollbild-Bildansicht ---
+        .sheet(item: $fullscreenImageTarget) { targetWrapper in
+             FullscreenImageView(item: targetWrapper.item)
+                 // Umgebungsobjekte weitergeben, falls nötig (wahrscheinlich nicht für FullscreenImageView selbst)
+                 // .environmentObject(settings)
+                 // .environmentObject(authService)
+                 // .environmentObject(playerManager) // Sicher nicht nötig hier
         }
     }
 
@@ -295,6 +313,7 @@ struct PagedDetailView: View {
                      }
                 },
                 previewLinkTarget: $previewLinkTarget,
+                fullscreenImageTarget: $fullscreenImageTarget, // <-- Binding weitergeben
                 // Use the local state for the favorite button display
                 isFavorited: localFavoritedStatus[pageData.currentItem.id] ?? pageData.currentItem.favorited ?? false,
                 toggleFavoriteAction: toggleFavorite,
