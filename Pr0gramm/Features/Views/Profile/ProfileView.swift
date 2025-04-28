@@ -32,6 +32,9 @@ struct ProfileView: View {
                 }
             }
             .navigationTitle(navigationTitleText)
+            // You might need to apply font modifiers to section headers too if they appear too small.
+            // SwiftUI doesn't offer a direct modifier for all section headers globally easily.
+            // Consider using .headerProminence(.increased) on Sections as done below.
             .sheet(isPresented: $showingLoginSheet) {
                 // Present the LoginView sheet
                 LoginView()
@@ -54,72 +57,75 @@ struct ProfileView: View {
     @ViewBuilder
     private var loggedInContent: some View {
         // Section for Badges (optional)
-        // --- MODIFIED: Check authService.currentUser for badges ---
         if let user = authService.currentUser, let badges = user.badges, !badges.isEmpty {
             Section { // No header text for badges section
                 badgeScrollView(badges: badges)
                      .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0)) // Adjust insets
             }
         }
-        // --- END MODIFICATION ---
 
         Section("Benutzerinformationen") {
             if let user = authService.currentUser {
                 // HStacks with Spacer for right-alignment
                 HStack {
                     Text("Rang")
+                        .font(UIConstants.bodyFont) // Use adaptive font
                     Spacer()
-                    UserMarkView(markValue: user.mark)
+                    UserMarkView(markValue: user.mark) // UserMarkView uses adaptive font now
                 }
                 HStack {
                     Text("Benis")
+                        .font(UIConstants.bodyFont) // Use adaptive font
                     Spacer()
-                    Text("\(user.score)").foregroundColor(.secondary)
+                    Text("\(user.score)")
+                        .font(UIConstants.bodyFont) // Values use the same font as labels
+                        .foregroundColor(.secondary)
                 }
                 HStack {
                     Text("Registriert seit")
+                        .font(UIConstants.bodyFont) // Use adaptive font
                     Spacer()
                     Text(formatDateGerman(date: Date(timeIntervalSince1970: TimeInterval(user.registered))))
-                         .foregroundColor(.secondary)
+                        .font(UIConstants.bodyFont) // Values use the same font as labels
+                        .foregroundColor(.secondary)
                 }
 
                 // NavigationLink to uploads
                 NavigationLink(value: user.name) {
                     Text("Meine Uploads")
+                        .font(UIConstants.bodyFont) // Use adaptive font
                 }
 
             } else {
                 // Show placeholder while user data might still be loading initially
-                HStack { Spacer(); ProgressView(); Text("Lade Profildaten...").foregroundColor(.secondary).font(.footnote); Spacer() }.listRowSeparator(.hidden)
+                HStack { Spacer(); ProgressView(); Text("Lade Profildaten...")
+                        .font(UIConstants.footnoteFont) // Use footnote for placeholder
+                        .foregroundColor(.secondary); Spacer() }.listRowSeparator(.hidden)
             }
         }
+        .headerProminence(.increased) // Make section header slightly more prominent
+
         Section {
              // Logout button
              Button("Logout", role: .destructive) {
-                 Task { await authService.logout() } // Perform logout asynchronously
+                 Task { await authService.logout() }
              }
-             .disabled(authService.isLoading) // Disable during loading
-             .frame(maxWidth: .infinity, alignment: .center) // Center the button text
+             .disabled(authService.isLoading)
+             .frame(maxWidth: .infinity, alignment: .center)
+             .font(UIConstants.bodyFont) // Use adaptive font
         }
     }
 
-    // ViewBuilder function for displaying badges horizontally
+    // Badge ScrollView
     @ViewBuilder
     private func badgeScrollView(badges: [ApiBadge]) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
-                // --- MODIFIED: Use badge.id (which is the image filename) ---
                 ForEach(badges, id: \.id) { badge in
-                    // --- MODIFIED: Use computed property for full URL ---
                     KFImage(badge.fullImageUrl)
-                        .placeholder { // Optional: Add placeholder
-                            Circle().fill(.gray.opacity(0.2)).frame(width: 32, height: 32)
-                        }
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 32, height: 32) // Badge size
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(Color.gray.opacity(0.3), lineWidth: 0.5))
+                        .placeholder { Circle().fill(.gray.opacity(0.2)).frame(width: 32, height: 32) }
+                        .resizable().scaledToFit().frame(width: 32, height: 32)
+                        .clipShape(Circle()).overlay(Circle().stroke(Color.gray.opacity(0.3), lineWidth: 0.5))
                         .help(badge.description ?? "")
                 }
             }
@@ -134,17 +140,15 @@ struct ProfileView: View {
         Section { // Wrap in Section for proper List display
             VStack(spacing: 20) {
                  Text("Du bist nicht angemeldet.")
-                     .font(.headline)
+                     .font(UIConstants.headlineFont) // Use adaptive headline
                      .foregroundColor(.secondary)
                  // Button to open the login sheet
                  Button { showingLoginSheet = true } label: {
-                     HStack {
-                         Image(systemName: "person.crop.circle.badge.plus")
-                         Text("Anmelden")
-                     }.padding(.horizontal)
+                     HStack { Image(systemName: "person.crop.circle.badge.plus"); Text("Anmelden") }.padding(.horizontal)
                  }
                  .buttonStyle(.borderedProminent)
                  .disabled(authService.isLoading)
+                 .font(UIConstants.bodyFont) // Use adaptive body for button text
              }
              .frame(maxWidth: .infinity, alignment: .center) // Center content within the VStack
              .padding(.vertical) // Add some vertical padding
@@ -161,45 +165,35 @@ struct ProfileView: View {
         }
     }
 
-    // Helper function for date formatting (unchanged)
+    // Helper function for date formatting
     private func formatDateGerman(date: Date) -> String {
         return germanDateFormatter.string(from: date)
     }
 }
 
-// MARK: - Helper View: UserMarkView (unchanged)
+// MARK: - Helper View: UserMarkView
 
-/// A small reusable view to display the user's rank (mark) with its corresponding color indicator and name.
 struct UserMarkView: View {
     let markValue: Int
     private var markEnum: Mark
-
-    init(markValue: Int) {
-        self.markValue = markValue
-        self.markEnum = Mark(rawValue: markValue) // Initialize enum from raw value
-    }
-
-    /// Static helper to get the mark name without creating an instance.
+    init(markValue: Int) { self.markValue = markValue; self.markEnum = Mark(rawValue: markValue) }
     static func getMarkName(for mark: Int) -> String { Mark(rawValue: mark).displayName }
-
     private var markColor: Color { markEnum.displayColor }
     private var markName: String { markEnum.displayName }
 
     var body: some View {
         HStack(spacing: 5) {
-            Circle() // Color indicator
-                .fill(markColor)
-                .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5)) // Subtle border
+            Circle().fill(markColor)
+                .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
                 .frame(width: 8, height: 8)
-            Text(markName) // Rank name
-                .font(.subheadline)
+            Text(markName)
+                .font(UIConstants.subheadlineFont) // Use adaptive subheadline
                 .foregroundColor(.secondary)
         }
     }
 }
 
-
-// MARK: - Previews (unverändert, zeigt jetzt Badges, da UserInfo angepasst wurde)
+// MARK: - Previews
 
 /// Wrapper view for creating a logged-in state for the ProfileView preview.
 private struct LoggedInProfilePreviewWrapper: View {

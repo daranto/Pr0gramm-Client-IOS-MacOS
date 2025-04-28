@@ -137,7 +137,7 @@ struct FavoritesView: View {
             Spacer()
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .font(.largeTitle).foregroundColor(.secondary).padding(.bottom, 5)
-            Text("Keine Favoriten ausgewählt").font(.headline)
+            Text("Keine Favoriten ausgewählt").font(UIConstants.headlineFont)
             Text("Bitte passe deine Filter an, um deine Favoriten zu sehen.")
                 .font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
             Button("Filter anpassen") { showingFilterSheet = true }

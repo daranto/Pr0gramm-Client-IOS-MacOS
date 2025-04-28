@@ -20,15 +20,23 @@ struct SettingsView: View {
                 // Section for Video Settings
                 Section("Video") {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
+                        // --- MODIFIED: Use adaptive font ---
+                        .font(UIConstants.bodyFont)
+                        // --- END MODIFICATION ---
                 }
 
-                // Section for Comment Settings <-- NEUE SEKTION
+                // Section for Comment Settings
                 Section("Kommentare") {
                     Picker("Sortierung", selection: $settings.commentSortOrder) {
                         ForEach(CommentSortOrder.allCases) { order in
                             Text(order.displayName).tag(order)
+                                // Apply font inside ForEach if needed, though Picker might handle it
+                                .font(UIConstants.bodyFont) // Apply here too
                         }
                     }
+                     // --- MODIFIED: Use adaptive font ---
+                    .font(UIConstants.bodyFont) // Apply to Picker label
+                     // --- END MODIFICATION ---
                 }
 
                 // Section for Cache Settings
@@ -36,15 +44,26 @@ struct SettingsView: View {
                     // Display current cache sizes (read-only)
                     HStack {
                         Text("Bild-Cache Größe")
+                             // --- MODIFIED: Use adaptive font ---
+                            .font(UIConstants.bodyFont)
+                             // --- END MODIFICATION ---
                         Spacer()
-                        // Format cache size nicely
                         Text(String(format: "%.1f MB", settings.currentImageDataCacheSizeMB))
+                             // --- MODIFIED: Use adaptive font ---
+                            .font(UIConstants.bodyFont)
+                             // --- END MODIFICATION ---
                             .foregroundColor(.secondary)
                     }
                     HStack {
                         Text("Daten-Cache Größe")
+                             // --- MODIFIED: Use adaptive font ---
+                            .font(UIConstants.bodyFont)
+                             // --- END MODIFICATION ---
                         Spacer()
                         Text(String(format: "%.1f MB", settings.currentDataCacheSizeMB))
+                             // --- MODIFIED: Use adaptive font ---
+                            .font(UIConstants.bodyFont)
+                             // --- END MODIFICATION ---
                             .foregroundColor(.secondary)
                     }
 
@@ -52,10 +71,13 @@ struct SettingsView: View {
                     Picker("Max. Bild-Cache Größe", selection: $settings.maxImageCacheSizeMB) {
                         ForEach(cacheSizeOptions, id: \.self) { size in
                             Text("\(size) MB").tag(size)
+                                .font(UIConstants.bodyFont) // Apply font to picker options
                         }
                     }
+                     // --- MODIFIED: Use adaptive font ---
+                    .font(UIConstants.bodyFont) // Apply to Picker label
+                     // --- END MODIFICATION ---
                     .onChange(of: settings.maxImageCacheSizeMB) { _, _ in
-                        // Log when the setting changes (the actual update happens in AppSettings)
                         Self.logger.info("Max image cache size setting changed.")
                     }
 
@@ -63,14 +85,26 @@ struct SettingsView: View {
                     Button("Gesamten App-Cache leeren", role: .destructive) {
                         showingClearAllCacheAlert = true // Trigger confirmation alert
                     }
+                     // --- MODIFIED: Use adaptive font ---
+                    .font(UIConstants.bodyFont)
+                    .frame(maxWidth: .infinity, alignment: .center) // Center button text
+                     // --- END MODIFICATION ---
 
                 } header: {
                     // Use standard header for the section title
                     Text("Cache")
+                        // Optional: Adjust header font if needed
+                        // .font(UIConstants.headlineFont)
                 } footer: {
                     // Provide explanatory text about cache limits
                     Text("Der Bild-Cache (Kingfisher) wird automatisch auf die gewählte Maximalgröße begrenzt. Der Daten-Cache (Feeds etc.) hat ein festes Limit von 50 MB und löscht die ältesten Einträge bei Überschreitung (LRU).")
+                         // --- MODIFIED: Use adaptive font ---
+                        .font(UIConstants.footnoteFont) // Use footnote font for footer
+                         // --- END MODIFICATION ---
                 }
+                 // Optional: Make header slightly more prominent on Mac
+                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+
             }
             .navigationTitle("Einstellungen")
             .alert("Gesamten App-Cache leeren?", isPresented: $showingClearAllCacheAlert) {
@@ -85,6 +119,8 @@ struct SettingsView: View {
             } message: {
                 // Confirmation alert message
                 Text("Möchtest du wirklich alle zwischengespeicherten Daten (Feeds, Favoriten, Bilder etc.) löschen? Dies kann nicht rückgängig gemacht werden.")
+                    // Optional: Apply font to alert message if needed
+                    // .font(UIConstants.bodyFont)
             }
             .onAppear {
                 // Update displayed cache sizes when the view appears

@@ -26,9 +26,7 @@ struct SearchView: View {
 
     // Computed property for adaptive columns
     private var gridColumns: [GridItem] {
-        // Use ProcessInfo to detect if the iPad app is running ON macOS
         let isRunningOnMac = ProcessInfo.processInfo.isiOSAppOnMac
-        // Verwende 250 auf dem Mac für deutlich weniger Spalten
         let minWidth: CGFloat = isRunningOnMac ? 250 : 100 // Set to 250 for Mac
         return [GridItem(.adaptive(minimum: minWidth), spacing: 3)]
     }
@@ -37,6 +35,8 @@ struct SearchView: View {
         NavigationStack(path: $navigationPath) {
             searchContentView // Use extracted view
             .navigationTitle("Suche")
+            // Apply adaptive font to the search bar placeholder indirectly via environment if possible,
+            // or accept system default size which usually scales reasonably.
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Tags suchen...")
             .onSubmit(of: .search) { Task { await performSearch() } }
             .navigationDestination(for: Item.self) { destinationItem in
@@ -56,11 +56,52 @@ struct SearchView: View {
     // MARK: - Extracted Content View
 
     @ViewBuilder private var searchContentView: some View {
-        if isLoading { ProgressView("Suche läuft...").frame(maxWidth: .infinity, maxHeight: .infinity) }
-        else if let error = errorMessage { ContentUnavailableView { Label("Fehler bei der Suche", systemImage: "exclamationmark.triangle") } description: { Text(error) } actions: { Button("Erneut versuchen") { Task { await performSearch() } } }.frame(maxWidth: .infinity, maxHeight: .infinity) }
-        else if !hasSearched { ContentUnavailableView("Suche nach Tags", systemImage: "tag").frame(maxWidth: .infinity, maxHeight: .infinity) }
-        else if items.isEmpty { ContentUnavailableView.search(text: searchText).frame(maxWidth: .infinity, maxHeight: .infinity) }
-        else { searchResultsGrid } // Renamed for clarity
+        if isLoading {
+            ProgressView("Suche läuft...")
+                // --- MODIFIED: Use adaptive font ---
+                .font(UIConstants.bodyFont) // Apply font to ProgressView text
+                // --- END MODIFICATION ---
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = errorMessage {
+            ContentUnavailableView {
+                Label("Fehler bei der Suche", systemImage: "exclamationmark.triangle")
+                    // --- MODIFIED: Use adaptive font ---
+                    .font(UIConstants.headlineFont) // Apply to label
+                    // --- END MODIFICATION ---
+            } description: {
+                Text(error)
+                     // --- MODIFIED: Use adaptive font ---
+                    .font(UIConstants.bodyFont) // Apply to description
+                     // --- END MODIFICATION ---
+            } actions: {
+                Button("Erneut versuchen") { Task { await performSearch() } }
+                     // --- MODIFIED: Use adaptive font ---
+                    .font(UIConstants.bodyFont) // Apply to button
+                     // --- END MODIFICATION ---
+            }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if !hasSearched {
+            ContentUnavailableView("Suche nach Tags", systemImage: "tag")
+                 // --- MODIFIED: Use adaptive font ---
+                .font(UIConstants.headlineFont) // Apply to title
+                 // --- END MODIFICATION ---
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if items.isEmpty {
+             ContentUnavailableView {
+                 Label("Keine Ergebnisse", systemImage: "magnifyingglass")
+                    // --- MODIFIED: Use adaptive font ---
+                    .font(UIConstants.headlineFont)
+                    // --- END MODIFICATION ---
+             } description: {
+                 Text("Keine Posts für '\(searchText)' gefunden.")
+                    // --- MODIFIED: Use adaptive font ---
+                    .font(UIConstants.bodyFont)
+                    // --- END MODIFICATION ---
+             }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            searchResultsGrid // Grid itself uses adaptive columns
+        }
     }
 
     // Extracted the ScrollView/LazyVGrid part
@@ -68,7 +109,7 @@ struct SearchView: View {
         ScrollView {
             // Use computed gridColumns
             LazyVGrid(columns: gridColumns, spacing: 3) {
-                ForEach(items) { item in // Iterate original items
+                ForEach(items) { item in
                     NavigationLink(value: item) { FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id)) }.buttonStyle(.plain)
                 }
             }
@@ -76,7 +117,7 @@ struct SearchView: View {
         }
     }
 
-    // MARK: - Helper Methods
+    // MARK: - Helper Methods (unverändert)
     private func processPendingTag(_ tagToSearch: String) {
         self.searchText = tagToSearch; Task { await performSearch(); await MainActor.run { if navigationService.pendingSearchTag == tagToSearch { navigationService.pendingSearchTag = nil } } }
     }
@@ -99,6 +140,6 @@ struct SearchView: View {
     }
 }
 
-// MARK: - Preview
+// MARK: - Preview (unverändert)
 #Preview { let settings = AppSettings(); let authService = AuthService(appSettings: settings); let navigationService = NavigationService(); return SearchView().environmentObject(settings).environmentObject(authService).environmentObject(navigationService) }
 // --- END OF COMPLETE FILE ---

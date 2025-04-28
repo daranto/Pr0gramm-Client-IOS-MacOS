@@ -39,7 +39,7 @@ struct LinkedItemPreviewView: View {
                         .foregroundColor(.orange)
                         .padding(.bottom)
                     Text("Fehler beim Laden")
-                        .font(.headline)
+                        .font(UIConstants.headlineFont)
                     Text(error)
                         .font(.subheadline)
                         .foregroundColor(.secondary)

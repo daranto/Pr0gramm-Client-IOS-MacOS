@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Features/Views/MainView.swift
+// --- START OF COMPLETE FILE ---
+
 import SwiftUI
 
 /// Represents the main tabs of the application.
@@ -9,107 +12,68 @@ enum Tab: Int, CaseIterable, Identifiable {
 /// The root view of the application, containing the main content area and the tab bar.
 /// It observes `NavigationService` to switch between different content views (Feed, Favorites, etc.).
 struct MainView: View {
-    /// Service managing the currently selected tab and navigation requests.
     @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
-    /// State variable used to trigger popping the FeedView's navigation stack to root.
     @State private var feedPopToRootTrigger = UUID()
 
-    /// The currently selected tab, derived from the `NavigationService`.
-    private var selectedTab: Tab {
-        navigationService.selectedTab
-    }
+    private var selectedTab: Tab { navigationService.selectedTab }
 
     var body: some View {
-        VStack(spacing: 0) { // Use spacing 0 to have Divider touch content and bar
-            // Main content area that changes based on the selected tab
-            Group {
+        VStack(spacing: 0) {
+            Group { // Main Content Area
                 switch selectedTab {
                 case .feed: FeedView(popToRootTrigger: feedPopToRootTrigger)
                 case .favorites: FavoritesView()
-                case .search: SearchView() // SearchView reacts to pendingSearchTag from NavigationService
+                case .search: SearchView()
                 case .profile: ProfileView()
                 case .settings: SettingsView()
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity) // Ensure content fills space
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider() // Visual separator above the tab bar
 
-            // Custom tab bar implementation
-            tabBarHStack
-                .background { Rectangle().fill(.bar).ignoresSafeArea(edges: .bottom) } // Use standard bar background material
+            tabBarHStack // Custom tab bar
+                .background { Rectangle().fill(.bar).ignoresSafeArea(edges: .bottom) }
 
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom) // Prevent keyboard from overlapping tab bar
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
     /// The horizontal stack representing the custom tab bar.
     private var tabBarHStack: some View {
-        HStack(spacing: 0) { // Use spacing 0 for tightly packed buttons
+        HStack(spacing: 0) {
             ForEach(Tab.allCases) { tab in
-                 // Conditionally hide Favorites tab if user is not logged in
-                 if tab == .favorites && !authService.isLoggedIn {
-                     // Skip rendering the button
-                 } else {
+                 if tab == .favorites && !authService.isLoggedIn { /* Skip */ }
+                 else {
                      Button { handleTap(on: tab) } label: {
-                         TabBarButtonLabel(
+                         TabBarButtonLabel( // Use the updated label
                              iconName: iconName(for: tab),
                              label: label(for: tab),
-                             isSelected: selectedTab == tab // Highlight if selected
+                             isSelected: selectedTab == tab
                          )
                      }
-                     .buttonStyle(.plain) // Use plain style for custom appearance
-                     .frame(minWidth: 40, maxWidth: .infinity) // Distribute space evenly
+                     .buttonStyle(.plain)
+                     .frame(minWidth: 40, maxWidth: .infinity)
                  }
             }
         }
-        .padding(.horizontal) // Add padding to the sides of the bar
-        .padding(.top, 5) // Padding above icons/text
-        .padding(.bottom, 4) // Padding below icons/text (adjust for safe area)
+        .padding(.horizontal)
+        .padding(.top, 5)
+        .padding(.bottom, 4)
     }
 
-    /// Handles taps on tab bar buttons.
-    /// Updates the `NavigationService` or triggers pop-to-root for the feed tab.
-    /// - Parameter tab: The tab that was tapped.
-    private func handleTap(on tab: Tab) {
-        // Special case: If Feed tab is tapped again, pop its navigation stack
-        if tab == .feed && selectedTab == .feed {
-            print("Feed tab tapped again. Triggering pop to root.")
-            feedPopToRootTrigger = UUID() // Change UUID to trigger onChange in FeedView
-        } else {
-            // Otherwise, update the selected tab in the central navigation service
-            navigationService.selectedTab = tab
-            // Clear any pending search tag if the user manually navigates away from Search
-            // or taps Search again without an active pending tag.
-            if navigationService.pendingSearchTag != nil && tab != .search {
-                 print("Clearing pending search tag due to manual tab navigation.")
-                 navigationService.pendingSearchTag = nil
-            }
-        }
-    }
 
-    /// Returns the system icon name for a given tab.
-    private func iconName(for tab: Tab) -> String {
-        switch tab {
-        case .feed: return "square.grid.2x2.fill"
-        case .favorites: return "heart.fill"
-        case .search: return "magnifyingglass"
-        case .profile: return "person.crop.circle"
-        case .settings: return "gearshape.fill"
-        }
+    private func handleTap(on tab: Tab) { /* Unverändert */
+        if tab == .feed && selectedTab == .feed { print("Feed tab tapped again. Triggering pop to root."); feedPopToRootTrigger = UUID() }
+        else { navigationService.selectedTab = tab; if navigationService.pendingSearchTag != nil && tab != .search { print("Clearing pending search tag due to manual tab navigation."); navigationService.pendingSearchTag = nil } }
     }
-
-    /// Returns the display label for a given tab.
-    private func label(for tab: Tab) -> String {
-        switch tab {
-        case .feed: return settings.feedType.displayName // Dynamic label based on feed type
-        case .favorites: return "Favoriten"
-        case .search: return "Suche"
-        case .profile: return "Profil"
-        case .settings: return "Einstellungen"
-        }
+    private func iconName(for tab: Tab) -> String { /* Unverändert */
+        switch tab { case .feed: return "square.grid.2x2.fill"; case .favorites: return "heart.fill"; case .search: return "magnifyingglass"; case .profile: return "person.crop.circle"; case .settings: return "gearshape.fill" }
+    }
+    private func label(for tab: Tab) -> String { /* Unverändert */
+        switch tab { case .feed: return settings.feedType.displayName; case .favorites: return "Favoriten"; case .search: return "Suche"; case .profile: return "Profil"; case .settings: return "Einstellungen" }
     }
 }
 
@@ -122,14 +86,17 @@ struct TabBarButtonLabel: View {
     var body: some View {
         VStack(spacing: 2) {
              Image(systemName: iconName)
-                 .font(.body)
-                 .symbolVariant(isSelected ? .fill : .none) // Use filled variant when selected
+                 // --- MODIFIED: Use even larger adaptive font size for icon ---
+                 .font(UIConstants.headlineFont) // Mac: title2, iOS: headline
+                 // --- END MODIFICATION ---
+                 .symbolVariant(isSelected ? .fill : .none)
              Text(label)
-                 .font(.caption2)
+                 // --- MODIFIED: Use larger adaptive font size for label ---
+                 .font(UIConstants.subheadlineFont) // Mac: headline, iOS: subheadline
+                 // --- END MODIFICATION ---
                  .lineLimit(1)
         }
         .padding(.vertical, 3)
-        // Use accent color for selected, secondary for others
         .foregroundStyle(isSelected ? Color.accentColor : .secondary)
     }
 }

@@ -62,10 +62,32 @@ struct UserUploadsView: View {
 
     @ViewBuilder private var uploadsContentView: some View {
         Group {
-            if isLoading && items.isEmpty { ProgressView("Lade Uploads...").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else if let error = errorMessage, items.isEmpty { ContentUnavailableView { Label("Fehler", systemImage: "exclamationmark.triangle") } description: { Text(error) } actions: { Button("Erneut versuchen") { Task { await refreshUploads() } } }.frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else if items.isEmpty && !isLoading && errorMessage == nil { Text("\(username) hat noch nichts hochgeladen (oder nichts passt zu deinen Filtern).").foregroundColor(.secondary).multilineTextAlignment(.center).padding().frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else { scrollViewContent }
+            if isLoading && items.isEmpty {
+                ProgressView("Lade Uploads...")
+                    .font(UIConstants.bodyFont) // Use adaptive font
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = errorMessage, items.isEmpty {
+                 ContentUnavailableView {
+                     Label("Fehler", systemImage: "exclamationmark.triangle")
+                        .font(UIConstants.headlineFont) // Use adaptive font
+                 } description: {
+                     Text(error)
+                        .font(UIConstants.bodyFont) // Use adaptive font
+                 } actions: {
+                     Button("Erneut versuchen") { Task { await refreshUploads() } }
+                        .font(UIConstants.bodyFont) // Use adaptive font
+                 }
+                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if items.isEmpty && !isLoading && errorMessage == nil {
+                Text("\(username) hat noch nichts hochgeladen (oder nichts passt zu deinen Filtern).")
+                    .font(UIConstants.bodyFont) // Use adaptive font
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                scrollViewContent // Grid uses adaptive columns internally
+            }
         }
     }
     private var scrollViewContent: some View {
@@ -78,7 +100,11 @@ struct UserUploadsView: View {
                  if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
                      Color.clear.frame(height: 1).onAppear { UserUploadsView.logger.info("Uploads: End trigger appeared."); Task { await loadMoreUploads() } }
                  }
-                 if isLoadingMore { ProgressView("Lade mehr...").padding() }
+                 if isLoadingMore {
+                     ProgressView("Lade mehr...")
+                        .font(UIConstants.bodyFont) // Use adaptive font
+                        .padding()
+                 }
             }
             .padding(.horizontal, 5).padding(.bottom)
         }

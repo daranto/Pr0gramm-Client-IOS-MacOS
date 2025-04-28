@@ -124,7 +124,7 @@ struct FeedView: View {
     @ViewBuilder private var noFilterContentView: some View { /* Unverändert */
         VStack {
              Spacer(); Image(systemName: "line.3.horizontal.decrease.circle").font(.largeTitle).foregroundColor(.secondary).padding(.bottom, 5)
-             Text("Keine Inhalte ausgewählt").font(.headline); Text("Bitte passe deine Filter an, um Inhalte zu sehen.").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
+             Text("Keine Inhalte ausgewählt").font(UIConstants.headlineFont); Text("Bitte passe deine Filter an, um Inhalte zu sehen.").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
              Button("Filter anpassen") { showingFilterSheet = true }.buttonStyle(.bordered).padding(.top); Spacer()
         }.frame(maxWidth: .infinity, maxHeight: .infinity).refreshable { await refreshItems() }
     }
