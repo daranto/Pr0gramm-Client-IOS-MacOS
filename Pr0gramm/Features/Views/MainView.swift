@@ -50,9 +50,10 @@ struct MainView: View {
                      Button { handleTap(on: tab) } label: {
                          TabBarButtonLabel( // Use the updated label
                              iconName: iconName(for: tab),
-                             label: label(for: tab),
                              isSelected: selectedTab == tab
                          )
+                         // Add accessibility label for screen readers
+                         .accessibilityLabel(label(for: tab))
                      }
                      .buttonStyle(.plain)
                      .frame(minWidth: 40, maxWidth: .infinity)
@@ -72,32 +73,25 @@ struct MainView: View {
     private func iconName(for tab: Tab) -> String { /* Unverändert */
         switch tab { case .feed: return "square.grid.2x2.fill"; case .favorites: return "heart.fill"; case .search: return "magnifyingglass"; case .profile: return "person.crop.circle"; case .settings: return "gearshape.fill" }
     }
-    private func label(for tab: Tab) -> String { /* Unverändert */
+    // Label function is kept for accessibility, but not displayed visually anymore
+    private func label(for tab: Tab) -> String {
         switch tab { case .feed: return settings.feedType.displayName; case .favorites: return "Favoriten"; case .search: return "Suche"; case .profile: return "Profil"; case .settings: return "Einstellungen" }
     }
 }
 
-/// A reusable view for the content of a tab bar button (icon and label).
+/// A reusable view for the content of a tab bar button (icon only).
 struct TabBarButtonLabel: View {
     let iconName: String
-    let label: String
     let isSelected: Bool
 
     var body: some View {
-        VStack(spacing: 2) {
-             Image(systemName: iconName)
-                 // --- MODIFIED: Use even larger adaptive font size for icon ---
-                 .font(UIConstants.headlineFont) // Mac: title2, iOS: headline
-                 // --- END MODIFICATION ---
-                 .symbolVariant(isSelected ? .fill : .none)
-             Text(label)
-                 // --- MODIFIED: Use larger adaptive font size for label ---
-                 .font(UIConstants.subheadlineFont) // Mac: headline, iOS: subheadline
-                 // --- END MODIFICATION ---
-                 .lineLimit(1)
-        }
-        .padding(.vertical, 3)
-        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+        Image(systemName: iconName)
+             // --- MODIFIED: Use .titleFont (Mac: .title, iOS: .title3) ---
+            .font(UIConstants.titleFont) // Changed from .largeTitleFont
+             // --- END MODIFICATION ---
+            .symbolVariant(isSelected ? .fill : .none)
+            .padding(.vertical, 6) // Adjusted padding since text is gone
+            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
     }
 }
 
@@ -114,3 +108,4 @@ struct TabBarButtonLabel: View {
         .environmentObject(authService)
         .environmentObject(navigationService)
 }
+// --- END OF COMPLETE FILE ---
