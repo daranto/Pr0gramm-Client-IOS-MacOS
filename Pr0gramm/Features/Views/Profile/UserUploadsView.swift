@@ -252,20 +252,19 @@ struct UserUploadsView: View {
 // MARK: - Previews
 
 #Preview {
-    // Setup necessary services for the preview
-    let settings = AppSettings()
-    let authService = {
-        let auth = AuthService(appSettings: settings)
-        auth.isLoggedIn = true
-        auth.currentUser = UserInfo(id: 123, name: "PreviewUser", registered: 1, score: 100, mark: 2)
-        return auth
-    }()
-
-    // Wrap in NavigationStack for the preview to function correctly
-    return NavigationStack {
+    // --- CORRECTED PREVIEW ---
+    // 1. Create settings instance first
+    let previewSettings = AppSettings()
+    // 2. Create AuthService instance, potentially configuring it
+    let previewAuthService = AuthService(appSettings: previewSettings)
+    previewAuthService.isLoggedIn = true
+    previewAuthService.currentUser = UserInfo(id: 123, name: "PreviewUser", registered: 1, score: 100, mark: 2, badges: []) // Added badges: []
+    // 3. Return the view, applying environment objects
+    return NavigationStack { // Wrap in NavStack for title etc.
         UserUploadsView(username: "PreviewUser")
-            .environmentObject(settings)
-            .environmentObject(authService)
+            .environmentObject(previewSettings)
+            .environmentObject(previewAuthService)
     }
+    // --- END CORRECTION ---
 }
 // --- END OF COMPLETE FILE ---

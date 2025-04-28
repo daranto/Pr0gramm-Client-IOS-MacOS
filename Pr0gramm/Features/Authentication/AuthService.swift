@@ -20,7 +20,7 @@ class AuthService: ObservableObject {
 
     // MARK: - Published Properties
     @Published var isLoggedIn: Bool = false
-    @Published var currentUser: UserInfo? = nil
+    @Published var currentUser: UserInfo? = nil // Includes badges
     @Published var userNonce: String? = nil // Wird jetzt aus JSON Cookie ID extrahiert & gekürzt
     @Published var favoritesCollectionId: Int? = nil
     @Published private(set) var isLoading: Bool = false
@@ -66,8 +66,7 @@ class AuthService: ObservableObject {
             logAllCookiesForPr0gramm()
 
             // Nonce aus Cookie lesen (JSON-Parsing + Kürzen)
-            // Wir ignorieren loginResponse.nonce komplett
-            self.userNonce = extractNonceFromCookieStorage() // Ruft die JSON-Parsing+Kürzen Funktion auf
+            self.userNonce = extractNonceFromCookieStorage()
             if self.userNonce == nil {
                  Self.logger.error("CRITICAL: Failed to obtain nonce from Cookie parsing after successful login!")
             } else {
@@ -77,7 +76,8 @@ class AuthService: ObservableObject {
             if loginResponse.success {
                 Self.logger.info("Login successful via API for user: \(username)")
 
-                let profileLoaded = await loadProfileInfo(username: username, setLoadingState: false)
+                // Load profile (including badges)
+                let profileLoaded = await loadProfileInfo(username: username, setLoadingState: false) // Updated function
                 var collectionLoaded = false
                 if profileLoaded {
                     collectionLoaded = await fetchUserCollections()
@@ -94,7 +94,7 @@ class AuthService: ObservableObject {
 
                     self.isLoggedIn = true
                     self.needsCaptcha = false; self.captchaToken = nil; self.captchaImage = nil
-                    Self.logger.info("User \(self.currentUser!.name) is now logged in. Nonce available: true. Fav Collection ID: \(self.favoritesCollectionId ?? -1)")
+                    Self.logger.info("User \(self.currentUser!.name) is now logged in. Nonce available: true. Fav Collection ID: \(self.favoritesCollectionId ?? -1). Badges: \(self.currentUser?.badges?.count ?? 0)")
 
                 } else { // Profil, Collection ODER Nonce fehlgeschlagen
                     self.isLoggedIn = false
@@ -163,7 +163,8 @@ class AuthService: ObservableObject {
              self.userNonce = extractNonceFromCookieStorage()
              nonceAvailable = (self.userNonce != nil) // Prüfen ob erfolgreich
 
-             sessionValidAndProfileLoaded = await loadProfileInfo(username: username, setLoadingState: false)
+             // Load profile (including badges)
+             sessionValidAndProfileLoaded = await loadProfileInfo(username: username, setLoadingState: false) // Updated function
              if sessionValidAndProfileLoaded {
                  collectionLoaded = await fetchUserCollections()
              }
@@ -184,7 +185,7 @@ class AuthService: ObservableObject {
         self.isLoggedIn = sessionValidAndProfileLoaded && collectionLoaded && nonceAvailable
 
         if self.isLoggedIn {
-             Self.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce available: true. Fav Collection ID: \(self.favoritesCollectionId ?? -1)")
+             Self.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce available: true. Fav Collection ID: \(self.favoritesCollectionId ?? -1). Badges: \(self.currentUser?.badges?.count ?? 0)")
         } else {
             Self.logger.info("Initial check: User is not logged in (or session/profile/collection load/nonce extraction failed).")
         }
@@ -199,15 +200,20 @@ class AuthService: ObservableObject {
         self.currentUser = nil // Reset vor dem Laden
 
         do {
-            let profileInfoResponse = try await apiService.getProfileInfo(username: username)
+            // Use flags=31 to try and get badges
+            let profileInfoResponse = try await apiService.getProfileInfo(username: username, flags: 31)
+
+            // --- MODIFIED: Copy badges from response root level ---
             self.currentUser = UserInfo(
                 id: profileInfoResponse.user.id,
                 name: profileInfoResponse.user.name,
                 registered: profileInfoResponse.user.registered,
                 score: profileInfoResponse.user.score,
-                mark: profileInfoResponse.user.mark
+                mark: profileInfoResponse.user.mark,
+                badges: profileInfoResponse.badges // <-- Kopiere Badges von der Response, nicht vom user-Objekt
             )
-            Self.logger.info("Successfully created UserInfo for: \(self.currentUser!.name)")
+            // --- END MODIFICATION ---
+            Self.logger.info("Successfully created UserInfo for: \(self.currentUser!.name) with \(self.currentUser?.badges?.count ?? 0) badges.")
             if setLoadingState { isLoading = false }; return true // Erfolg
 
         } catch {
@@ -216,6 +222,7 @@ class AuthService: ObservableObject {
             if setLoadingState { isLoading = false }; return false // Fehler
         }
     }
+
 
     @discardableResult
     private func fetchUserCollections() async -> Bool {
@@ -262,7 +269,7 @@ class AuthService: ObservableObject {
     private func performLogoutCleanup() async {
         Self.logger.debug("Performing local logout cleanup.");
         self.isLoggedIn = false;
-        self.currentUser = nil;
+        self.currentUser = nil; // Wichtig: UserInfo (inkl. Badges) wird gelöscht
         self.userNonce = nil;
         self.favoritesCollectionId = nil;
         self.needsCaptcha = false;
@@ -324,7 +331,7 @@ class AuthService: ObservableObject {
     }
 
 
-    // --- Angepasste Nonce Extraktion (JSON zuerst, dann Kürzen) ---
+    // Angepasste Nonce Extraktion (JSON zuerst, dann Kürzen) - Unverändert
     private func extractNonceFromCookieStorage() -> String? {
         Self.logger.debug("Attempting to extract nonce from cookie storage (trying JSON format first, then shorten)...")
         guard let url = URL(string: "https://pr0gramm.com"),
@@ -351,17 +358,15 @@ class AuthService: ObservableObject {
                    let longNonceFromJson = jsonDict["id"] as? String { // Das ist der LANGE Nonce
                     Self.logger.debug("[EXTRACT NONCE] Found 'id' field in JSON: \(longNonceFromJson)")
 
-                    // --- NEU: Nonce auf erwartete Länge kürzen ---
-                    let expectedNonceLength = 16 // Länge von "a561cca3c5c917b0"
+                    let expectedNonceLength = 16
                     if longNonceFromJson.count >= expectedNonceLength {
                         let shortNonce = String(longNonceFromJson.prefix(expectedNonceLength))
                         Self.logger.info("[EXTRACT NONCE] Successfully extracted and shortened nonce from JSON 'id' field: '\(shortNonce)'")
-                        return shortNonce // Gekürzten Nonce zurückgeben
+                        return shortNonce
                     } else {
                          Self.logger.warning("[EXTRACT NONCE] Nonce from JSON 'id' field is shorter than expected length (\(expectedNonceLength)): '\(longNonceFromJson)'")
-                         return nil // Zu kurz, kann nicht der korrekte sein
+                         return nil
                     }
-                    // --- ENDE NEU ---
 
                 } else {
                     Self.logger.warning("[EXTRACT NONCE] Failed to parse URL-decoded cookie value as JSON Dictionary or find 'id' key.")
@@ -375,11 +380,9 @@ class AuthService: ObservableObject {
             Self.logger.warning("[EXTRACT NONCE] Failed to URL-decode cookie value or convert to Data.")
             return nil
         }
-        // Fallback auf ':' Parsing ist hier nicht mehr sinnvoll, da wir wissen, dass es JSON ist.
     }
-    // --- ENDE Anpassung ---
 
-    // --- NEUE LOGGING HELFER FUNKTION ---
+    // Logging Helfer Funktion - Unverändert
     private func logAllCookiesForPr0gramm() {
         guard let url = URL(string: "https://pr0gramm.com") else { return }
         Self.logger.debug("--- Current Cookies for \(url.host ?? "pr0gramm.com") ---")
@@ -392,6 +395,5 @@ class AuthService: ObservableObject {
         }
         Self.logger.debug("--- End Cookie List ---")
     }
-    // --- ENDE NEUE LOGGING FUNKTION ---
 }
 // --- END OF COMPLETE FILE ---

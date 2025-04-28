@@ -294,16 +294,18 @@ struct FavoritesView: View {
 // MARK: - Previews
 
 #Preview("Logged In") {
-    let settings = AppSettings()
-    let authService = {
-        let auth = AuthService(appSettings: settings)
-        auth.isLoggedIn = true
-        auth.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2)
-        return auth
-    }()
+    // --- CORRECTED PREVIEW ---
+    // 1. Create settings instance first
+    let previewSettings = AppSettings()
+    // 2. Create AuthService instance, potentially configuring it
+    let previewAuthService = AuthService(appSettings: previewSettings)
+    previewAuthService.isLoggedIn = true
+    previewAuthService.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2, badges: []) // Added badges: []
+    // 3. Return the view, applying environment objects
     return FavoritesView()
-        .environmentObject(settings)
-        .environmentObject(authService)
+        .environmentObject(previewSettings)
+        .environmentObject(previewAuthService)
+    // --- END CORRECTION ---
 }
 
 #Preview("Logged Out") {

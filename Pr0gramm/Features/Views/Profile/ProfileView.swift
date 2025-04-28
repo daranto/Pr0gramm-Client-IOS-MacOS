@@ -2,6 +2,7 @@
 // --- START OF COMPLETE FILE ---
 
 import SwiftUI
+import Kingfisher // Import Kingfisher
 
 /// Displays the user's profile information when logged in, or prompts for login otherwise.
 struct ProfileView: View {
@@ -21,15 +22,16 @@ struct ProfileView: View {
 
     var body: some View {
         NavigationStack {
-            VStack {
+            // Use List directly for standard iOS profile appearance
+            List {
                 // Show different content based on login status
                 if authService.isLoggedIn {
                     loggedInContent
                 } else {
-                    loggedOutContent
+                    loggedOutContentSection // Embed logged out content in a section
                 }
             }
-            .navigationTitle(navigationTitleText) // Dynamic title
+            .navigationTitle(navigationTitleText)
             .sheet(isPresented: $showingLoginSheet) {
                 // Present the LoginView sheet
                 LoginView()
@@ -44,92 +46,118 @@ struct ProfileView: View {
             // Add navigation destination for UserUploadsView
             .navigationDestination(for: String.self) { username in
                  UserUploadsView(username: username)
-                     // EnvironmentObjects are typically passed down automatically in NavigationStack destinations
             }
         }
     }
 
-    /// Content displayed when the user is logged in. Shows user details and logout button.
+    /// Content displayed when the user is logged in. Structured as List Sections.
     @ViewBuilder
     private var loggedInContent: some View {
-        List {
-            Section("Benutzerinformationen") {
-                if let user = authService.currentUser {
-                    // --- REMOVED Username HStack ---
-                    // HStack {
-                    //     Text("Username")
-                    //     Spacer()
-                    //     Text(user.name).foregroundColor(.secondary)
-                    // }
-                    // --- END REMOVAL ---
+        // Section for Badges (optional)
+        // --- MODIFIED: Check authService.currentUser for badges ---
+        if let user = authService.currentUser, let badges = user.badges, !badges.isEmpty {
+            Section { // No header text for badges section
+                badgeScrollView(badges: badges)
+                     .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0)) // Adjust insets
+            }
+        }
+        // --- END MODIFICATION ---
 
-                    HStack {
-                        Text("Rang")
-                        Spacer()
-                        UserMarkView(markValue: user.mark)
-                    }
-                    HStack {
-                        Text("Benis")
-                        Spacer()
-                        Text("\(user.score)").foregroundColor(.secondary)
-                    }
-                    HStack {
-                        Text("Registriert seit")
-                        Spacer()
-                        Text(formatDateGerman(date: Date(timeIntervalSince1970: TimeInterval(user.registered))))
-                             .foregroundColor(.secondary)
-                    }
-
-                    // NavigationLink to uploads remains unchanged
-                    NavigationLink(value: user.name) {
-                        Text("Meine Uploads") // Use plain Text for precise alignment
-                    }
-
-                } else {
-                    // Show placeholder while user data might still be loading initially
-                    HStack { Spacer(); ProgressView(); Text("Lade Profildaten...").foregroundColor(.secondary).font(.footnote); Spacer() }.listRowSeparator(.hidden)
+        Section("Benutzerinformationen") {
+            if let user = authService.currentUser {
+                // HStacks with Spacer for right-alignment
+                HStack {
+                    Text("Rang")
+                    Spacer()
+                    UserMarkView(markValue: user.mark)
                 }
+                HStack {
+                    Text("Benis")
+                    Spacer()
+                    Text("\(user.score)").foregroundColor(.secondary)
+                }
+                HStack {
+                    Text("Registriert seit")
+                    Spacer()
+                    Text(formatDateGerman(date: Date(timeIntervalSince1970: TimeInterval(user.registered))))
+                         .foregroundColor(.secondary)
+                }
+
+                // NavigationLink to uploads
+                NavigationLink(value: user.name) {
+                    Text("Meine Uploads")
+                }
+
+            } else {
+                // Show placeholder while user data might still be loading initially
+                HStack { Spacer(); ProgressView(); Text("Lade Profildaten...").foregroundColor(.secondary).font(.footnote); Spacer() }.listRowSeparator(.hidden)
             }
-            Section {
-                 // Logout button
-                 Button("Logout", role: .destructive) {
-                     Task { await authService.logout() } // Perform logout asynchronously
-                 }
-                 .disabled(authService.isLoading) // Disable during loading
-                 .frame(maxWidth: .infinity, alignment: .center) // Center the button text
-            }
+        }
+        Section {
+             // Logout button
+             Button("Logout", role: .destructive) {
+                 Task { await authService.logout() } // Perform logout asynchronously
+             }
+             .disabled(authService.isLoading) // Disable during loading
+             .frame(maxWidth: .infinity, alignment: .center) // Center the button text
         }
     }
 
-    /// Content displayed when the user is logged out. Shows a login prompt.
+    // ViewBuilder function for displaying badges horizontally
     @ViewBuilder
-    private var loggedOutContent: some View {
-       VStack(spacing: 20) {
-            Spacer() // Push content towards center
-            Text("Du bist nicht angemeldet.")
-                .font(.headline)
-                .foregroundColor(.secondary)
-            // Button to open the login sheet
-            Button { showingLoginSheet = true } label: {
-                HStack {
-                    Image(systemName: "person.crop.circle.badge.plus")
-                    Text("Anmelden")
-                }.padding(.horizontal)
+    private func badgeScrollView(badges: [ApiBadge]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                // --- MODIFIED: Use badge.id (which is the image filename) ---
+                ForEach(badges, id: \.id) { badge in
+                    // --- MODIFIED: Use computed property for full URL ---
+                    KFImage(badge.fullImageUrl)
+                        .placeholder { // Optional: Add placeholder
+                            Circle().fill(.gray.opacity(0.2)).frame(width: 32, height: 32)
+                        }
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 32, height: 32) // Badge size
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.gray.opacity(0.3), lineWidth: 0.5))
+                        .help(badge.description ?? "")
+                }
             }
-            .buttonStyle(.borderedProminent) // Use prominent style for primary action
-            .disabled(authService.isLoading) // Disable if already loading auth state
-            Spacer() // Push content towards center
-            Spacer()
-        }.padding()
+            .padding(.horizontal)
+        }
     }
+
+
+    /// Content displayed when the user is logged out, now structured as a List Section.
+    @ViewBuilder
+    private var loggedOutContentSection: some View {
+        Section { // Wrap in Section for proper List display
+            VStack(spacing: 20) {
+                 Text("Du bist nicht angemeldet.")
+                     .font(.headline)
+                     .foregroundColor(.secondary)
+                 // Button to open the login sheet
+                 Button { showingLoginSheet = true } label: {
+                     HStack {
+                         Image(systemName: "person.crop.circle.badge.plus")
+                         Text("Anmelden")
+                     }.padding(.horizontal)
+                 }
+                 .buttonStyle(.borderedProminent)
+                 .disabled(authService.isLoading)
+             }
+             .frame(maxWidth: .infinity, alignment: .center) // Center content within the VStack
+             .padding(.vertical) // Add some vertical padding
+        }
+    }
+
 
     /// Determines the navigation title based on login status and user data.
     private var navigationTitleText: String {
         if authService.isLoggedIn {
-            // Use username if available, otherwise fallback to rank name
-            return authService.currentUser?.name ?? UserMarkView.getMarkName(for: authService.currentUser?.mark ?? -1)
+            return authService.currentUser?.name ?? "Profil"
         } else {
-            return "Profil" // Default title when logged out
+            return "Profil"
         }
     }
 
@@ -171,7 +199,7 @@ struct UserMarkView: View {
 }
 
 
-// MARK: - Previews (unchanged)
+// MARK: - Previews (unverändert, zeigt jetzt Badges, da UserInfo angepasst wurde)
 
 /// Wrapper view for creating a logged-in state for the ProfileView preview.
 private struct LoggedInProfilePreviewWrapper: View {
@@ -182,8 +210,25 @@ private struct LoggedInProfilePreviewWrapper: View {
         let si = AppSettings()
         let ai = AuthService(appSettings: si)
         ai.isLoggedIn = true // Simulate logged in
-        // Provide dummy user data
-        ai.currentUser = UserInfo(id: 1, name: "PreviewUser", registered: Int(Date().timeIntervalSince1970) - 500000, score: 1337, mark: 2) // Altschwuchtel
+
+        // Sample badges using the updated structure
+        let sampleBadges = [
+            ApiBadge(image: "pr0-coin.png", description: "Hat 1 Tag pr0mium erschürft", created: 1500688733, link: "#top/2043677", category: nil),
+            ApiBadge(image: "connect4-red.png", description: "Ging am 1. April 2018 siegreich hervor", created: 1522620001, link: "#top/2472492", category: nil),
+            ApiBadge(image: "krebs-donation.png", description: "Hat gegen Krebs gespendet", created: 1525794290, link: "#top/Das%20pr0%20spendet", category: nil),
+            ApiBadge(image: "benitrator-lose.png", description: "Hat im März 2019 nach 17 Drehs 16 Benis verzockt", created: 1554060600, link: "#top/3084263", category: nil),
+            ApiBadge(image: "shopping-cart.png", description: "Kommerzhure", created: 1569425891, link: "https://pr0mart.com", category: nil)
+        ]
+
+        ai.currentUser = UserInfo(
+            id: 1,
+            name: "PreviewUser",
+            registered: Int(Date().timeIntervalSince1970) - 500000,
+            score: 1337,
+            mark: 2,
+            badges: sampleBadges // Include badges in preview user
+        )
+
         _settings = StateObject(wrappedValue: si)
         _authService = StateObject(wrappedValue: ai)
     }
@@ -195,12 +240,11 @@ private struct LoggedInProfilePreviewWrapper: View {
     }
 }
 
-#Preview("Logged In") {
+#Preview("Logged In with Badges") {
     LoggedInProfilePreviewWrapper()
 }
 
 #Preview("Logged Out") {
-    // Provide default (logged out) services for the preview
     ProfileView()
         .environmentObject(AppSettings())
         .environmentObject(AuthService(appSettings: AppSettings()))

@@ -117,7 +117,7 @@ struct PagedDetailView: View {
         // Initialize local favorite status from the initial items
         var initialFavStatus: [Int: Bool] = [:]
         for item in items {
-            initialFavStatus[item.id] = item.favorited // Use nil-coalescing if needed: item.favorited ?? false
+            initialFavStatus[item.id] = item.favorited ?? false // Use nil-coalescing for safety
         }
         self._localFavoritedStatus = State(initialValue: initialFavStatus)
 
@@ -524,35 +524,35 @@ struct LinkedItemPreviewWrapperView: View {
 
 // Preview Provider needs adjustment to pass the PlayerManager
 #Preview("Preview") {
-    // Create instances needed for the preview
-    let settings = AppSettings()
-    let authService: AuthService = {
-        let auth = AuthService(appSettings: settings)
-        auth.isLoggedIn = true
-        auth.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1)
-        auth.userNonce = "preview_nonce_12345"
-        auth.favoritesCollectionId = 6749
-        return auth
-    }()
-    // Create the PlayerManager instance for the preview
-    let playerManager = VideoPlayerManager()
+    // --- CORRECTED PREVIEW ---
+    // 1. Create instances needed for the preview
+    let previewSettings = AppSettings()
+    let previewAuthService = AuthService(appSettings: previewSettings)
+    previewAuthService.isLoggedIn = true
+    previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: []) // Added badges: []
+    previewAuthService.userNonce = "preview_nonce_12345"
+    previewAuthService.favoritesCollectionId = 6749
 
-    // Sample items
+    // 2. Create the PlayerManager instance for the preview
+    let previewPlayerManager = VideoPlayerManager()
+
+    // 3. Sample items
     let sampleItems = [ // Use let for preview data
         Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false),
         Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true),
         Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: Int(Date().timeIntervalSince1970) - 50, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil, favorited: nil)
     ]
 
-    // Configure the manager within the preview setup
-    // Use Task to run async configure on main thread
-    Task { @MainActor in await playerManager.configure(settings: settings) }
+    // 4. Configure the manager within the preview setup
+    Task { @MainActor in await previewPlayerManager.configure(settings: previewSettings) }
 
+    // 5. Return the view hierarchy
     return NavigationStack {
         // Pass the playerManager to the PagedDetailView initializer
-        PagedDetailView(items: sampleItems, selectedIndex: 1, playerManager: playerManager)
+        PagedDetailView(items: sampleItems, selectedIndex: 1, playerManager: previewPlayerManager)
     }
-    .environmentObject(settings)
-    .environmentObject(authService)
+    .environmentObject(previewSettings)
+    .environmentObject(previewAuthService)
+    // --- END CORRECTION ---
 }
 // --- END OF COMPLETE FILE ---

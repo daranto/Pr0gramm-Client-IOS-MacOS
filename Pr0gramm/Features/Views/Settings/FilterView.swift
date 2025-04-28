@@ -22,13 +22,13 @@ struct FilterView: View {
                     }
                     .pickerStyle(.segmented) // Use segmented control for feed type
 
-                    // Toggle to hide seen items <-- NEUER TOGGLE
+                    // Toggle to hide seen items
                     Toggle("Gesehene ausblenden", isOn: $settings.hideSeenItems)
 
                 } header: {
                     Text("Anzeige")
                 } footer: {
-                    Text("Blendet Posts aus, die du bereits in der Detailansicht geöffnet hast.") // <-- Erklärung
+                    Text("Blendet Posts aus, die du bereits in der Detailansicht geöffnet hast.")
                 }
 
 
@@ -73,15 +73,18 @@ struct FilterView: View {
 }
 
 #Preview("Logged In") {
-    // Simulate logged-in state
-    FilterView()
-        .environmentObject(AppSettings()) // Provide default settings
-        .environmentObject({ // Create and configure a logged-in auth service for preview
-            let settings = AppSettings()
-            let auth = AuthService(appSettings: settings)
-            auth.isLoggedIn = true
-            auth.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1)
-            return auth
-        }())
+    // --- CORRECTED PREVIEW ---
+    // 1. Create settings instance first
+    let previewSettings = AppSettings()
+    // 2. Create AuthService instance, configuring it for logged-in state
+    let previewAuthService = AuthService(appSettings: previewSettings)
+    previewAuthService.isLoggedIn = true
+    // 3. Provide necessary UserInfo, including the 'badges' argument
+    previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: []) // Added badges: []
+    // 4. Return the view, applying environment objects
+    return FilterView()
+        .environmentObject(previewSettings)
+        .environmentObject(previewAuthService)
+    // --- END CORRECTION ---
 }
 // --- END OF COMPLETE FILE ---
