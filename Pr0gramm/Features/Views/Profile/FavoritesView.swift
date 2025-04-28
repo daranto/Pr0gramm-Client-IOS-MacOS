@@ -4,6 +4,7 @@
 import SwiftUI
 import os
 import Kingfisher
+// import UIKit // Nicht mehr benötigt
 
 /// Displays the user's favorited items in a grid.
 /// Requires the user to be logged in. Handles loading, pagination, filtering, and navigation.
@@ -26,8 +27,17 @@ struct FavoritesView: View {
     // ------------------------------------
 
     private let apiService = APIService()
-    let columns: [GridItem] = [ GridItem(.adaptive(minimum: 100), spacing: 3) ]
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "FavoritesView")
+
+    // --- MODIFIED: Computed property for adaptive columns ---
+    private var gridColumns: [GridItem] {
+        // Use ProcessInfo to detect if the iPad app is running ON macOS
+        let isRunningOnMac = ProcessInfo.processInfo.isiOSAppOnMac
+        // Deutlich größere Mindestbreite auf dem Mac -> weniger Spalten
+        let minWidth: CGFloat = isRunningOnMac ? 250 : 100 // Set to 250 for Mac
+        return [GridItem(.adaptive(minimum: minWidth), spacing: 3)]
+    }
+    // --- END MODIFICATION ---
 
     private var favoritesCacheKey: String? {
         guard let username = authService.currentUser?.name.lowercased() else { return nil }
@@ -98,7 +108,8 @@ struct FavoritesView: View {
 
     private var scrollViewContent: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 3) {
+            // --- MODIFIED: Use computed gridColumns ---
+            LazyVGrid(columns: gridColumns, spacing: 3) {
                 ForEach(items) { item in
                     NavigationLink(value: item) {
                         FeedItemThumbnail(
@@ -114,6 +125,7 @@ struct FavoritesView: View {
                 }
                 if isLoadingMore { ProgressView("Lade mehr...").padding() }
             }
+            // --- END MODIFICATION ---
             .padding(.horizontal, 5)
             .padding(.bottom)
         }
@@ -149,7 +161,7 @@ struct FavoritesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Logic Methods
+    // MARK: - Logic Methods (handleLoginOrFilterChange, refreshFavorites, loadMoreFavorites bleiben unverändert)
 
     private func handleLoginOrFilterChange() async {
         if authService.isLoggedIn {
@@ -162,7 +174,6 @@ struct FavoritesView: View {
 
     func refreshFavorites() async {
         FavoritesView.logger.info("Pull-to-Refresh triggered or refreshFavorites called.")
-
         guard authService.isLoggedIn, let username = authService.currentUser?.name else {
             FavoritesView.logger.warning("Cannot refresh favorites: User not logged in or username unavailable.")
             await MainActor.run { self.errorMessage = "Bitte anmelden."; self.items = []; self.showNoFilterMessage = false }
@@ -178,139 +189,31 @@ struct FavoritesView: View {
             await MainActor.run { self.errorMessage = "Interner Fehler (Cache Key)." }
             return
         }
-
         await MainActor.run { self.showNoFilterMessage = false; self.isLoading = true; self.errorMessage = nil }
         defer { Task { @MainActor in self.isLoading = false; FavoritesView.logger.info("Finishing favorites refresh process (isLoading set to false via defer).") } }
-
         FavoritesView.logger.info("Starting refresh data fetch for favorites (User: \(username), Flags: \(settings.apiFlags))...")
-        canLoadMore = true
-        isLoadingMore = false
-        var initialItemsFromCache: [Item]? = nil
-
-        if items.isEmpty {
-            if let cachedItems = await settings.loadItemsFromCache(forKey: cacheKey), !cachedItems.isEmpty {
-                initialItemsFromCache = cachedItems
-                FavoritesView.logger.info("Found \(cachedItems.count) favorite items in cache initially.")
-            } else {
-                FavoritesView.logger.info("No usable data cache found for favorites.")
-            }
-        }
-
+        canLoadMore = true; isLoadingMore = false; var initialItemsFromCache: [Item]? = nil
+        if items.isEmpty { if let cachedItems = await settings.loadItemsFromCache(forKey: cacheKey), !cachedItems.isEmpty { initialItemsFromCache = cachedItems; FavoritesView.logger.info("Found \(cachedItems.count) favorite items in cache initially.") } else { FavoritesView.logger.info("No usable data cache found for favorites.") } }
         FavoritesView.logger.info("Performing API fetch for favorites refresh with flags: \(settings.apiFlags)...")
-        do {
-            let fetchedItemsFromAPI = try await apiService.fetchFavorites(username: username, flags: settings.apiFlags)
-            FavoritesView.logger.info("API fetch for favorites completed: \(fetchedItemsFromAPI.count) fresh items.")
-
-            await MainActor.run {
-                self.items = fetchedItemsFromAPI
-                self.canLoadMore = !fetchedItemsFromAPI.isEmpty
-                FavoritesView.logger.info("FavoritesView updated with \(fetchedItemsFromAPI.count) items directly from API.")
-                if !navigationPath.isEmpty && initialItemsFromCache != nil {
-                    navigationPath = NavigationPath()
-                    FavoritesView.logger.info("Popped navigation due to refresh overwriting cache.")
-                }
-            }
-            await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey)
-            await settings.updateCacheSizes()
-
-        } catch let error as URLError where error.code == .userAuthenticationRequired {
-            FavoritesView.logger.error("API fetch for favorites failed: Authentication required.")
-            await MainActor.run { self.items = []; self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."; self.canLoadMore = false }
-            await settings.saveItemsToCache([], forKey: cacheKey)
-            await authService.logout()
-
-        } catch {
-            FavoritesView.logger.error("API fetch for favorites failed: \(error.localizedDescription)")
-            await MainActor.run {
-                if self.items.isEmpty {
-                    self.errorMessage = "Fehler beim Laden der Favoriten: \(error.localizedDescription)"
-                } else {
-                    FavoritesView.logger.warning("Showing potentially stale cached favorites data because API refresh failed.")
-                }
-                self.canLoadMore = false
-            }
-        }
+        do { let fetchedItemsFromAPI = try await apiService.fetchFavorites(username: username, flags: settings.apiFlags); FavoritesView.logger.info("API fetch for favorites completed: \(fetchedItemsFromAPI.count) fresh items."); await MainActor.run { self.items = fetchedItemsFromAPI; self.canLoadMore = !fetchedItemsFromAPI.isEmpty; FavoritesView.logger.info("FavoritesView updated with \(fetchedItemsFromAPI.count) items directly from API."); if !navigationPath.isEmpty && initialItemsFromCache != nil { navigationPath = NavigationPath(); FavoritesView.logger.info("Popped navigation due to refresh overwriting cache.") } }; await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey); await settings.updateCacheSizes() }
+        catch let error as URLError where error.code == .userAuthenticationRequired { FavoritesView.logger.error("API fetch for favorites failed: Authentication required."); await MainActor.run { self.items = []; self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."; self.canLoadMore = false }; await settings.saveItemsToCache([], forKey: cacheKey); await authService.logout() }
+        catch { FavoritesView.logger.error("API fetch for favorites failed: \(error.localizedDescription)"); await MainActor.run { if self.items.isEmpty { self.errorMessage = "Fehler beim Laden der Favoriten: \(error.localizedDescription)" } else { FavoritesView.logger.warning("Showing potentially stale cached favorites data because API refresh failed.") }; self.canLoadMore = false } }
     }
 
     func loadMoreFavorites() async {
         guard settings.hasActiveContentFilter else { FavoritesView.logger.warning("Skipping loadMoreFavorites: No active content filter selected."); await MainActor.run { canLoadMore = false }; return }
         guard authService.isLoggedIn, let username = authService.currentUser?.name else { FavoritesView.logger.warning("Cannot load more favorites: User not logged in."); return }
-        guard !isLoadingMore && canLoadMore && !isLoading else { FavoritesView.logger.debug("Skipping loadMoreFavorites: isLoadingMore=\(isLoadingMore), canLoadMore=\(canLoadMore), isLoading=\(isLoading)"); return }
+        guard !isLoadingMore && canLoadMore && !isLoading else { FavoritesView.logger.debug("Skipping loadMoreFavorites: State prevents loading."); return }
         guard let lastItemId = items.last?.id else { FavoritesView.logger.warning("Skipping loadMoreFavorites: No last item found."); return }
         guard let cacheKey = favoritesCacheKey else { FavoritesView.logger.error("Cannot load more favorites: Could not generate cache key."); return }
-
-        FavoritesView.logger.info("--- Starting loadMoreFavorites older than \(lastItemId) ---")
-        await MainActor.run { isLoadingMore = true }
-        defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; FavoritesView.logger.info("--- Finished loadMoreFavorites older than \(lastItemId) (isLoadingMore set to false via defer) ---") } } }
-
-        do {
-            let newItems = try await apiService.fetchFavorites(username: username, flags: settings.apiFlags, olderThanId: lastItemId)
-            FavoritesView.logger.info("Loaded \(newItems.count) more favorite items from API (requesting older than \(lastItemId)).")
-            var appendedItemCount = 0
-
-            await MainActor.run {
-                guard self.isLoadingMore else { FavoritesView.logger.info("Load more cancelled before UI update."); return }
-
-                if newItems.isEmpty {
-                    FavoritesView.logger.info("Reached end of favorites feed (API returned empty list for older than \(lastItemId)).")
-                    canLoadMore = false
-                } else {
-                    let currentIDs = Set(self.items.map { $0.id })
-                    let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
-                    if uniqueNewItems.isEmpty {
-                        FavoritesView.logger.warning("All loaded favorite items (older than \(lastItemId)) were duplicates.")
-                        canLoadMore = false
-                         FavoritesView.logger.info("Assuming end of feed because only duplicates were returned.")
-                    } else {
-                        self.items.append(contentsOf: uniqueNewItems)
-                        appendedItemCount = uniqueNewItems.count
-                        FavoritesView.logger.info("Appended \(uniqueNewItems.count) unique favorite items. Total items: \(self.items.count)")
-                        self.canLoadMore = true
-                    }
-                }
-            }
-
-            if appendedItemCount > 0 {
-                let itemsToSave = await MainActor.run { self.items }
-                await settings.saveItemsToCache(itemsToSave, forKey: cacheKey)
-                await settings.updateCacheSizes()
-            }
-
-        } catch let error as URLError where error.code == .userAuthenticationRequired {
-            FavoritesView.logger.error("API fetch for more favorites failed: Authentication required.")
-            await MainActor.run { self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."; self.canLoadMore = false; Task { await authService.logout() } }
-
-        } catch {
-            FavoritesView.logger.error("API fetch failed during loadMoreFavorites: \(error.localizedDescription)")
-            await MainActor.run {
-                guard self.isLoadingMore else { return }
-                if items.isEmpty { errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" }
-                canLoadMore = false
-            }
-        }
+        FavoritesView.logger.info("--- Starting loadMoreFavorites older than \(lastItemId) ---"); await MainActor.run { isLoadingMore = true }; defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; FavoritesView.logger.info("--- Finished loadMoreFavorites older than \(lastItemId) (isLoadingMore set to false via defer) ---") } } }
+        do { let newItems = try await apiService.fetchFavorites(username: username, flags: settings.apiFlags, olderThanId: lastItemId); FavoritesView.logger.info("Loaded \(newItems.count) more favorite items from API (requesting older than \(lastItemId))."); var appendedItemCount = 0; await MainActor.run { guard self.isLoadingMore else { FavoritesView.logger.info("Load more cancelled before UI update."); return }; if newItems.isEmpty { FavoritesView.logger.info("Reached end of favorites feed (API returned empty list for older than \(lastItemId))."); canLoadMore = false } else { let currentIDs = Set(self.items.map { $0.id }); let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }; if uniqueNewItems.isEmpty { FavoritesView.logger.warning("All loaded favorite items (older than \(lastItemId)) were duplicates."); canLoadMore = false; FavoritesView.logger.info("Assuming end of feed because only duplicates were returned.") } else { self.items.append(contentsOf: uniqueNewItems); appendedItemCount = uniqueNewItems.count; FavoritesView.logger.info("Appended \(uniqueNewItems.count) unique favorite items. Total items: \(self.items.count)"); self.canLoadMore = true } } }; if appendedItemCount > 0 { let itemsToSave = await MainActor.run { self.items }; await settings.saveItemsToCache(itemsToSave, forKey: cacheKey); await settings.updateCacheSizes() } }
+        catch let error as URLError where error.code == .userAuthenticationRequired { FavoritesView.logger.error("API fetch for more favorites failed: Authentication required."); await MainActor.run { self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."; self.canLoadMore = false; Task { await authService.logout() } } }
+        catch { FavoritesView.logger.error("API fetch failed during loadMoreFavorites: \(error.localizedDescription)"); await MainActor.run { guard self.isLoadingMore else { return }; if items.isEmpty { errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" }; canLoadMore = false } }
     }
 }
 
-// MARK: - Previews
-
-#Preview("Logged In") {
-    // --- CORRECTED PREVIEW ---
-    // 1. Create settings instance first
-    let previewSettings = AppSettings()
-    // 2. Create AuthService instance, potentially configuring it
-    let previewAuthService = AuthService(appSettings: previewSettings)
-    previewAuthService.isLoggedIn = true
-    previewAuthService.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2, badges: []) // Added badges: []
-    // 3. Return the view, applying environment objects
-    return FavoritesView()
-        .environmentObject(previewSettings)
-        .environmentObject(previewAuthService)
-    // --- END CORRECTION ---
-}
-
-#Preview("Logged Out") {
-    FavoritesView()
-        .environmentObject(AppSettings())
-        .environmentObject(AuthService(appSettings: AppSettings()))
-}
+// MARK: - Previews (unverändert)
+#Preview("Logged In") { let previewSettings = AppSettings(); let previewAuthService = AuthService(appSettings: previewSettings); previewAuthService.isLoggedIn = true; previewAuthService.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2, badges: []); return FavoritesView().environmentObject(previewSettings).environmentObject(previewAuthService) }
+#Preview("Logged Out") { FavoritesView().environmentObject(AppSettings()).environmentObject(AuthService(appSettings: AppSettings())) }
 // --- END OF COMPLETE FILE ---
