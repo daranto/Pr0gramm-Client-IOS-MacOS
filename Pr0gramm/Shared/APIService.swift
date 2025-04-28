@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Shared/APIService.swift
+// --- START OF COMPLETE FILE ---
+
 import Foundation
 import os
 import UIKit // For UIImage in CaptchaResponse
@@ -118,25 +121,59 @@ class APIService {
 
     // MARK: - API Methods
 
-    /// Fetches a list of items (main feed).
+    /// Fetches a list of items (main feed, user uploads, search results).
     /// - Parameters:
     ///   - flags: Content flags (SFW, NSFW, etc.) combined into an integer.
-    ///   - promoted: Feed type (0 for New, 1 for Promoted).
-    ///   - olderThanId: Optional ID to fetch items older than this one (used for pagination). For promoted feed, this should be the `promoted` ID, otherwise the `item` ID.
+    ///   - promoted: Feed type (0 for New, 1 for Promoted). Ignored if `user` is specified.
+    ///   - user: Optional username to fetch items uploaded by this user.
+    ///   - tags: Optional search query string.
+    ///   - olderThanId: Optional ID to fetch items older than this one. Behavior depends on context (promoted feed uses `promoted` ID, others use `item` ID).
     /// - Returns: An array of `Item` objects.
     /// - Throws: Network or decoding errors.
-    func fetchItems(flags: Int, promoted: Int, olderThanId: Int? = nil) async throws -> [Item] {
-        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
-        var queryItems = [ URLQueryItem(name: "flags", value: String(flags)), URLQueryItem(name: "promoted", value: String(promoted)) ]
-        if let olderId = olderThanId { queryItems.append(URLQueryItem(name: "older", value: String(olderId))) }
-        urlComponents.queryItems = queryItems; guard let url = urlComponents.url else { throw URLError(.badURL) }
+    func fetchItems(flags: Int, promoted: Int? = nil, user: String? = nil, tags: String? = nil, olderThanId: Int? = nil) async throws -> [Item] {
+        let endpoint = "/items/get"
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
+
+        var queryItems = [ URLQueryItem(name: "flags", value: String(flags)) ]
+
+        // Build log description
+        var logDescription = "flags=\(flags)"
+
+        if let user = user {
+            queryItems.append(URLQueryItem(name: "user", value: user))
+            logDescription += ", user=\(user)"
+        } else if let tags = tags {
+            queryItems.append(URLQueryItem(name: "tags", value: tags))
+            // Promote is usually 0 for tag search
+            queryItems.append(URLQueryItem(name: "promoted", value: "0"))
+            logDescription += ", tags='\(tags)', promoted=0"
+        } else if let promoted = promoted {
+            queryItems.append(URLQueryItem(name: "promoted", value: String(promoted)))
+             logDescription += ", promoted=\(promoted)"
+        }
+
+        if let olderId = olderThanId {
+            queryItems.append(URLQueryItem(name: "older", value: String(olderId)))
+            logDescription += ", older=\(olderId)"
+        }
+
+        urlComponents.queryItems = queryItems
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+
         let request = URLRequest(url: url)
+        Self.logger.info("Fetching items from \(endpoint) with params: [\(logDescription)]")
+
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (feed)")
+            let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "\(endpoint) (\(logDescription))")
+            Self.logger.info("API fetch completed for [\(logDescription)]: \(apiResponse.items.count) items received. atEnd: \(apiResponse.atEnd ?? false)")
             return apiResponse.items
-        } catch { Self.logger.error("Error during /items/get (feed): \(error.localizedDescription)"); throw error }
+        } catch {
+             Self.logger.error("Error during \(endpoint) (\(logDescription)): \(error.localizedDescription)")
+             throw error
+        }
     }
+
 
     /// Fetches a single item by its ID.
     /// - Parameters:
@@ -203,29 +240,16 @@ class APIService {
         }
     }
 
+    /// DEPRECATED: Use fetchItems(tags:...) instead. Kept for potential internal compatibility if needed.
     /// Searches for items based on tags.
     /// - Parameters:
     ///   - tags: The search query string (space-separated tags, use '+' for AND, '!' for NOT etc. - refer to pr0gramm search syntax).
     ///   - flags: Content flags to filter results.
     /// - Returns: An array of matching `Item` objects.
     /// - Throws: Network or decoding errors.
+    @available(*, deprecated, message: "Use fetchItems(tags:flags:olderThanId:) instead")
     func searchItems(tags: String, flags: Int) async throws -> [Item] {
-        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
-        let queryItems = [
-            URLQueryItem(name: "tags", value: tags),
-            URLQueryItem(name: "flags", value: String(flags)),
-            URLQueryItem(name: "promoted", value: "0") // Search across both new and promoted
-        ]
-        urlComponents.queryItems = queryItems
-        guard let url = urlComponents.url else { throw URLError(.badURL) }
-        Self.logger.info("Searching items with tags '\(tags)' and flags \(flags)")
-        let request = URLRequest(url: url)
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (search)")
-            Self.logger.info("Search returned \(apiResponse.items.count) items for tags '\(tags)'. atEnd: \(apiResponse.atEnd ?? false)")
-            return apiResponse.items
-        } catch { Self.logger.error("Error during /items/get (search) for tags '\(tags)': \(error.localizedDescription)"); throw error }
+         return try await fetchItems(flags: flags, tags: tags)
     }
 
     /// Fetches tags and comments for a specific item.
@@ -524,3 +548,4 @@ class APIService {
         Self.logger.debug("--- End Request Details ---")
     }
 }
+// --- END OF COMPLETE FILE ---

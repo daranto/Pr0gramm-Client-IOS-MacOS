@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Features/Views/Profile/ProfileView.swift
+// --- START OF COMPLETE FILE ---
+
 import SwiftUI
 
 /// Displays the user's profile information when logged in, or prompts for login otherwise.
@@ -6,6 +9,15 @@ struct ProfileView: View {
     @EnvironmentObject var settings: AppSettings // Required for preview setup
     /// State to control the presentation of the login sheet.
     @State private var showingLoginSheet = false
+
+    // Date formatter for German locale
+    private let germanDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long // e.g., "3. Mai 2014"
+        formatter.timeStyle = .none
+        formatter.locale = Locale(identifier: "de_DE")
+        return formatter
+    }()
 
     var body: some View {
         NavigationStack {
@@ -29,6 +41,11 @@ struct ProfileView: View {
                          .padding().background(Material.regular).cornerRadius(10)
                  }
             }
+            // Add navigation destination for UserUploadsView
+            .navigationDestination(for: String.self) { username in
+                 UserUploadsView(username: username)
+                     // EnvironmentObjects are typically passed down automatically in NavigationStack destinations
+            }
         }
     }
 
@@ -38,11 +55,36 @@ struct ProfileView: View {
         List {
             Section("Benutzerinformationen") {
                 if let user = authService.currentUser {
-                    // Display user details
-                    HStack { Text("Username"); Spacer(); Text(user.name).foregroundColor(.secondary) }
-                    HStack { Text("Rang"); Spacer(); UserMarkView(markValue: user.mark) } // Use helper view for rank
-                    HStack { Text("Benis"); Spacer(); Text("\(user.score)").foregroundColor(.secondary) }
-                    HStack { Text("Registriert seit"); Spacer(); Text(Date(timeIntervalSince1970: TimeInterval(user.registered)), style: .date).foregroundColor(.secondary) }
+                    // --- REMOVED Username HStack ---
+                    // HStack {
+                    //     Text("Username")
+                    //     Spacer()
+                    //     Text(user.name).foregroundColor(.secondary)
+                    // }
+                    // --- END REMOVAL ---
+
+                    HStack {
+                        Text("Rang")
+                        Spacer()
+                        UserMarkView(markValue: user.mark)
+                    }
+                    HStack {
+                        Text("Benis")
+                        Spacer()
+                        Text("\(user.score)").foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Text("Registriert seit")
+                        Spacer()
+                        Text(formatDateGerman(date: Date(timeIntervalSince1970: TimeInterval(user.registered))))
+                             .foregroundColor(.secondary)
+                    }
+
+                    // NavigationLink to uploads remains unchanged
+                    NavigationLink(value: user.name) {
+                        Text("Meine Uploads") // Use plain Text for precise alignment
+                    }
+
                 } else {
                     // Show placeholder while user data might still be loading initially
                     HStack { Spacer(); ProgressView(); Text("Lade Profildaten...").foregroundColor(.secondary).font(.footnote); Spacer() }.listRowSeparator(.hidden)
@@ -90,9 +132,14 @@ struct ProfileView: View {
             return "Profil" // Default title when logged out
         }
     }
+
+    // Helper function for date formatting (unchanged)
+    private func formatDateGerman(date: Date) -> String {
+        return germanDateFormatter.string(from: date)
+    }
 }
 
-// MARK: - Helper View: UserMarkView
+// MARK: - Helper View: UserMarkView (unchanged)
 
 /// A small reusable view to display the user's rank (mark) with its corresponding color indicator and name.
 struct UserMarkView: View {
@@ -124,10 +171,10 @@ struct UserMarkView: View {
 }
 
 
-// MARK: - Previews
+// MARK: - Previews (unchanged)
 
 /// Wrapper view for creating a logged-in state for the ProfileView preview.
-private struct LoggedInPreviewWrapper: View {
+private struct LoggedInProfilePreviewWrapper: View {
     @StateObject private var settings: AppSettings
     @StateObject private var authService: AuthService
 
@@ -149,7 +196,7 @@ private struct LoggedInPreviewWrapper: View {
 }
 
 #Preview("Logged In") {
-    LoggedInPreviewWrapper()
+    LoggedInProfilePreviewWrapper()
 }
 
 #Preview("Logged Out") {
@@ -158,3 +205,4 @@ private struct LoggedInPreviewWrapper: View {
         .environmentObject(AppSettings())
         .environmentObject(AuthService(appSettings: AppSettings()))
 }
+// --- END OF COMPLETE FILE ---
