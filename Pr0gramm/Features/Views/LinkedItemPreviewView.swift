@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Features/Views/LinkedItemPreviewView.swift
+// --- START OF COMPLETE FILE ---
+
 import SwiftUI
 import os
 
@@ -14,6 +17,10 @@ struct LinkedItemPreviewView: View {
     @State private var fetchedItem: Item? = nil // Holds the fetched item data
     @State private var isLoading = true
     @State private var errorMessage: String? = nil
+
+    // --- ADD PlayerManager StateObject for the preview ---
+    @StateObject private var playerManager = VideoPlayerManager()
+    // ------------------------------------------------------
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "LinkedItemPreviewView")
@@ -46,32 +53,46 @@ struct LinkedItemPreviewView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the error view
             } else if let item = fetchedItem {
-                // Display the fetched item using PagedDetailView (with a single item)
-                // Note: This creates a *new instance* of PagedDetailView specific to this preview.
-                // Environment objects are passed down automatically from the parent (LinkedItemPreviewWrapperView).
-                PagedDetailView(items: [item], selectedIndex: 0)
+                // Display the fetched item using PagedDetailView
+                // ** PASS the newly created playerManager to the PagedDetailView **
+                PagedDetailView(
+                    items: [item],
+                    selectedIndex: 0,
+                    playerManager: playerManager // <-- Pass the local manager instance
+                )
+                // Environment objects (settings, authService) are passed down automatically
             } else {
                 // Fallback if not loading, no error, but no item (should ideally not happen)
                 ContentUnavailableView("Inhalt nicht verfügbar", systemImage: "questionmark.diamond")
             }
         }
-        .task { // Use .task for automatic loading when the view appears
-            await loadItem()
-        }
+        .task { // Use .task for automatic loading AND manager configuration
+             // Configure the local player manager when the task starts
+             await playerManager.configure(settings: settings)
+             // Load the item data
+             await loadItem()
+         }
+        // Removed onAppear configuration, handled in .task now
     }
 
     // MARK: - Data Loading
     /// Fetches the item data from the API using the provided `itemID`.
     private func loadItem() async {
         // Avoid redundant fetches if already loaded or currently loading
-        guard fetchedItem == nil || isLoading == false else { return }
+        // Reset loading state only if not already loading
+        if isLoading { return }
+        if fetchedItem != nil {
+            // If item is already fetched, ensure loading is false and return
+            await MainActor.run { isLoading = false }
+             return
+        }
 
         // Reset state before loading
         await MainActor.run {
             isLoading = true
             errorMessage = nil
         }
-        Self.logger.info("Fetching preview item with ID: \(itemID)")
+        LinkedItemPreviewView.logger.info("Fetching preview item with ID: \(itemID)") // Use explicit type name
 
         do {
             // Use the user's current content filters for the API request
@@ -81,26 +102,24 @@ struct LinkedItemPreviewView: View {
             await MainActor.run {
                 if let fetched = item {
                     self.fetchedItem = fetched
-                    Self.logger.info("Successfully fetched preview item \(itemID)")
+                    LinkedItemPreviewView.logger.info("Successfully fetched preview item \(itemID)") // Use explicit type name
                 } else {
                     // API returned nil, likely due to filters or item deletion
                     self.errorMessage = "Post konnte nicht gefunden werden oder entspricht nicht deinen Filtern."
-                    Self.logger.warning("Could not fetch preview item \(itemID). API returned nil or filter mismatch.")
+                    LinkedItemPreviewView.logger.warning("Could not fetch preview item \(itemID). API returned nil or filter mismatch.") // Use explicit type name
                 }
                 isLoading = false
             }
         } catch let error as URLError where error.code == .userAuthenticationRequired {
              // Handle expired session specifically
-             Self.logger.error("Failed to fetch preview item \(itemID): Authentication required.")
+             LinkedItemPreviewView.logger.error("Failed to fetch preview item \(itemID): Authentication required.") // Use explicit type name
              await MainActor.run {
                  self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."
                  isLoading = false
-                 // Optional: Consider automatically logging out the user here
-                 // Task { await authService.logout() }
              }
         } catch {
             // Handle generic network or decoding errors
-            Self.logger.error("Failed to fetch preview item \(itemID): \(error.localizedDescription)")
+            LinkedItemPreviewView.logger.error("Failed to fetch preview item \(itemID): \(error.localizedDescription)") // Use explicit type name
             await MainActor.run {
                 self.errorMessage = "Netzwerkfehler: \(error.localizedDescription)"
                 isLoading = false
@@ -130,3 +149,4 @@ struct LinkedItemPreviewView: View {
         .environmentObject(settings)
         .environmentObject(auth)
 }
+// --- END OF COMPLETE FILE ---
