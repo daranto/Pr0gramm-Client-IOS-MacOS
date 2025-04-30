@@ -10,83 +10,76 @@ struct PreviewLinkTarget: Identifiable {
     let id: Int // The item ID to preview
 }
 
-// --- NEU: Wrapper struct for fullscreen image sheet ---
+/// Wrapper struct for fullscreen image sheet
 struct FullscreenImageTarget: Identifiable {
     let item: Item
     var id: Int { item.id } // Use item ID for Identifiable conformance
 }
 
+// MARK: - Cache Structure for Item Details
+/// Structure to hold fetched item info along with the pre-calculated FLAT comment list.
+struct CachedItemDetails {
+    let info: ItemsInfoResponse // Raw tags and comments (tags pre-sorted by confidence)
+    let sortedBy: CommentSortOrder // Which sort order was used for flatDisplayComments
+    let flatDisplayComments: [FlatCommentDisplayItem] // Pre-calculated FLAT comment list
+}
+
+
 // MARK: - PagedDetailTabViewItem
 
-/// Represents a single page (item) within the `PagedDetailView`'s `TabView`.
-/// Displays the `DetailViewContent` and is responsible for triggering info loading/preloading.
+@MainActor
 struct PagedDetailTabViewItem: View {
     let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
-    /// The `AVPlayer` instance for this item, passed down from the `VideoPlayerManager`
-    /// via `PagedDetailView`. Will be `nil` if this item is not the currently active video.
-    let player: AVPlayer? // Passed down player instance
-
+    let player: AVPlayer?
+    let flatCommentsToDisplay: [FlatCommentDisplayItem]
     let displayedTags: [ItemTag]
     let totalTagCount: Int
     let showingAllTags: Bool
-    let comments: [DisplayComment]
     let infoLoadingStatus: InfoLoadingStatus
-    /// Action to load info for the *currently visible* item.
     let loadInfoAction: (Item) async -> Void
-    /// Action to preload info for adjacent items.
     let preloadInfoAction: (Item) async -> Void
-    /// The full list of items in the pager.
     let allItems: [Item]
-    /// The index of this specific item in the `allItems` array.
     let currentIndex: Int
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
     @Binding var previewLinkTarget: PreviewLinkTarget?
-    @Binding var fullscreenImageTarget: FullscreenImageTarget? // <-- NEUES Binding
+    @Binding var fullscreenImageTarget: FullscreenImageTarget?
     let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
     let showAllTagsAction: () -> Void
 
+    @EnvironmentObject private var settings: AppSettings
+
     var body: some View {
         DetailViewContent(
-            item: item,
-            keyboardActionHandler: keyboardActionHandler,
-            player: player, // Use the passed down player
-            onWillBeginFullScreen: onWillBeginFullScreen,
-            onWillEndFullScreen: onWillEndFullScreen,
-            displayedTags: displayedTags,
-            totalTagCount: totalTagCount,
-            showingAllTags: showingAllTags,
-            comments: comments,
-            infoLoadingStatus: infoLoadingStatus,
-            previewLinkTarget: $previewLinkTarget,
-            fullscreenImageTarget: $fullscreenImageTarget, // <-- Binding weitergeben
-            isFavorited: isFavorited,
-            toggleFavoriteAction: toggleFavoriteAction,
+            item: item, keyboardActionHandler: keyboardActionHandler, player: player,
+            onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen,
+            displayedTags: displayedTags, totalTagCount: totalTagCount, showingAllTags: showingAllTags,
+            flatComments: flatCommentsToDisplay, infoLoadingStatus: infoLoadingStatus,
+            previewLinkTarget: $previewLinkTarget, fullscreenImageTarget: $fullscreenImageTarget,
+            isFavorited: isFavorited, toggleFavoriteAction: toggleFavoriteAction,
             showAllTagsAction: showAllTagsAction
         )
-        .frame(maxWidth: .infinity, maxHeight: .infinity) // Ensure it fills the tab page
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            // Load info for this item when it becomes visible
             Task { await loadInfoAction(item) }
-            // Preload info for the next and previous items for smoother navigation
-            if currentIndex + 1 < allItems.count { Task { await preloadInfoAction(allItems[currentIndex + 1]) } }
-            if currentIndex > 0 { Task { await preloadInfoAction(allItems[currentIndex - 1]) } }
-            // Note: Marking as seen is handled in PagedDetailView's onChange(of: selectedIndex) and onAppear
+            // Check result before accessing array to avoid out-of-bounds
+            if let nextVisibleIndex = findNextVisibleIndex(from: currentIndex, in: allItems, settings: settings), nextVisibleIndex < allItems.count {
+                 Task { await preloadInfoAction(allItems[nextVisibleIndex]) }
+             }
+            if let prevVisibleIndex = findPreviousVisibleIndex(from: currentIndex, in: allItems, settings: settings), prevVisibleIndex >= 0 {
+                 Task { await preloadInfoAction(allItems[prevVisibleIndex]) }
+             }
         }
     }
 }
 
 // MARK: - PagedDetailView
 
-/// A view that displays a list of items in a swipeable, paged interface (`TabView`).
-/// Manages video playback via `VideoPlayerManager`, loads item details (tags/comments),
-/// handles keyboard navigation, fullscreen state, favoriting actions, and marks items as seen.
+@MainActor
 struct PagedDetailView: View {
-    /// The list of items to display in the pager. Passed from parent.
-    let items: [Item] // Changed from @State, assuming parent manages the source list for navigation
-    /// The index of the currently visible item.
+    let items: [Item]
     @State private var selectedIndex: Int
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var settings: AppSettings
@@ -94,79 +87,60 @@ struct PagedDetailView: View {
     @Environment(\.scenePhase) var scenePhase
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
-    // MARK: State for View Logic
-    /// Handles keyboard events (passed down to item views).
-    @StateObject private var keyboardActionHandler = KeyboardActionHandler() // Remains StateObject
-    /// Manages the single AVPlayer instance and its state. Passed from parent.
-    @ObservedObject var playerManager: VideoPlayerManager // <-- CHANGED to ObservedObject, passed in init
-    /// Tracks if the video player is currently in fullscreen mode (managed by callbacks).
+    @StateObject private var keyboardActionHandler = KeyboardActionHandler()
+    @ObservedObject var playerManager: VideoPlayerManager
     @State private var isFullscreen = false
-    /// Cache for loaded item details (tags, comments). Tags are now stored pre-sorted.
-    @State private var loadedInfos: [Int: ItemsInfoResponse] = [:]
-    /// Tracks the loading status for details of each item ID.
+    @State private var cachedDetails: [Int: CachedItemDetails] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
-    /// Stores the IDs of items for which the user wants to see all tags.
     @State private var showAllTagsForItem: Set<Int> = []
-    /// API service instance.
     private let apiService = APIService()
-    /// State variable to trigger the presentation of the linked item preview sheet.
     @State private var previewLinkTarget: PreviewLinkTarget? = nil
-    /// State to prevent concurrent favorite toggle API calls.
     @State private var isTogglingFavorite = false
-    /// --- NEU: State für Vollbild-Sheet ---
     @State private var fullscreenImageTarget: FullscreenImageTarget? = nil
-    /// State to manage the favorited status locally, reflecting optimistic updates.
     @State private var localFavoritedStatus: [Int: Bool] = [:]
+    @State private var isCorrectingIndex = false
 
-    /// Initializes the view with the items, starting index, and the player manager.
-    init(items: [Item], selectedIndex: Int, playerManager: VideoPlayerManager) { // <-- ADD playerManager parameter
-        self.items = items // Store the passed items
-        self._selectedIndex = State(initialValue: selectedIndex)
-        self.playerManager = playerManager // <-- Store the passed manager
+    let commentMaxDepth = 5
 
-        // Initialize local favorite status from the initial items
-        var initialFavStatus: [Int: Bool] = [:]
-        for item in items {
-            initialFavStatus[item.id] = item.favorited ?? false // Use nil-coalescing for safety
+    init(items: [Item], selectedIndex: Int, playerManager: VideoPlayerManager) {
+        self.items = items
+        self.playerManager = playerManager
+        let initialSettingsCheck = AppSettings()
+        var effectiveStartIndex = selectedIndex
+
+        if initialSettingsCheck.hideSeenItems,
+           selectedIndex >= 0, selectedIndex < items.count,
+           initialSettingsCheck.seenItemIDs.contains(items[selectedIndex].id) {
+            Self.logger.info("[Init] Initial index \(selectedIndex) points to a hidden item. Searching.")
+            if let nextVisible = findNextVisibleIndex(from: selectedIndex - 1, in: items, settings: initialSettingsCheck) { effectiveStartIndex = nextVisible }
+            else if let prevVisible = findPreviousVisibleIndex(from: selectedIndex + 1, in: items, settings: initialSettingsCheck) { effectiveStartIndex = prevVisible }
+            else { Self.logger.error("[Init] Could not find ANY visible item.") }
+            Self.logger.info("[Init] Adjusted start index to \(effectiveStartIndex).")
         }
-        self._localFavoritedStatus = State(initialValue: initialFavStatus)
-
-        Self.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex)")
+        self._selectedIndex = State(initialValue: effectiveStartIndex)
+        var initialFavStatus: [Int: Bool] = [:]; for item in items { initialFavStatus[item.id] = item.favorited ?? false }; self._localFavoritedStatus = State(initialValue: initialFavStatus)
+        Self.logger.info("PagedDetailView init with final selectedIndex: \(effectiveStartIndex)")
     }
 
-    /// Checks the local favorite status for the currently selected item.
     private var isCurrentItemFavorited: Bool {
         guard selectedIndex >= 0 && selectedIndex < items.count else { return false }
-        let currentItemID = items[selectedIndex].id
-        // Return local state, fallback to original item state if not found (shouldn't happen)
-        return localFavoritedStatus[currentItemID] ?? items[selectedIndex].favorited ?? false
+        return localFavoritedStatus[items[selectedIndex].id] ?? items[selectedIndex].favorited ?? false
     }
 
     // MARK: - Body
     var body: some View {
-        // Group to apply background and sheet modifiers
-        Group {
-            tabViewContent // Use the extracted computed property
-        }
-        .background(KeyCommandView(handler: keyboardActionHandler)) // Add keyboard handling overlay
-        .sheet(item: $previewLinkTarget) { targetWrapper in // Present sheet for linked item previews
-             // Wrap the preview view in a navigation stack and provide environment objects
+        Group { tabViewContent }
+        .background(KeyCommandView(handler: keyboardActionHandler))
+        .sheet(item: $previewLinkTarget) { targetWrapper in
              LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
-                 .environmentObject(settings)
-                 .environmentObject(authService)
+                 .environmentObject(settings).environmentObject(authService)
         }
-        // --- NEU: Sheet für Vollbild-Bildansicht ---
         .sheet(item: $fullscreenImageTarget) { targetWrapper in
              FullscreenImageView(item: targetWrapper.item)
-                 // Umgebungsobjekte weitergeben, falls nötig (wahrscheinlich nicht für FullscreenImageView selbst)
-                 // .environmentObject(settings)
-                 // .environmentObject(authService)
-                 // .environmentObject(playerManager) // Sicher nicht nötig hier
         }
     }
 
-    // MARK: - Extracted TabView Content
-    /// The main TabView containing the pages. Extracted to help compiler diagnostics.
+    // MARK: - TabView Content and Page Generation
     private var tabViewContent: some View {
         TabView(selection: $selectedIndex) {
             ForEach(items.indices, id: \.self) { index in
@@ -179,346 +153,337 @@ struct PagedDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .onChange(of: selectedIndex) { oldValue, newValue in
-             Self.logger.info("Selected index changed from \(oldValue) to \(newValue)")
-             if newValue >= 0 && newValue < items.count {
-                  let currentItem = items[newValue]
-                  // Use the PASSED playerManager
-                  playerManager.setupPlayerIfNeeded(for: currentItem, isFullscreen: isFullscreen)
-                  Task { await loadInfoIfNeeded(for: currentItem) }
-                  Task { await settings.markItemAsSeen(id: currentItem.id) }
-             }
-             isTogglingFavorite = false
+            handleIndexChange(oldValue: oldValue, newValue: newValue)
         }
-        .onAppear {
-            Self.logger.info("PagedDetailView appeared.")
-             if isFullscreen {
-                 Self.logger.warning("PagedDetailView appeared while isFullscreen is true. Potential state issue.")
-                 // If returning to view while fullscreen, ensure player state is correct (might already be handled by scenePhase)
-                 if let currentItem = items[safe: selectedIndex], currentItem.isVideo {
-                      playerManager.setupPlayerIfNeeded(for: currentItem, isFullscreen: isFullscreen) // Re-validate player state
-                 }
-             } else {
-                 isFullscreen = false // Ensure it's false on appear
-             }
-            isTogglingFavorite = false
-            keyboardActionHandler.selectNextAction = self.selectNext
-            keyboardActionHandler.selectPreviousAction = self.selectPrevious
-
-            // Manager should already be configured by parent view
-            if selectedIndex >= 0 && selectedIndex < items.count {
-                 let initialItem = items[selectedIndex]
-                 // Setup player using the PASSED manager
-                 playerManager.setupPlayerIfNeeded(for: initialItem, isFullscreen: isFullscreen)
-                 Task { await loadInfoIfNeeded(for: initialItem) }
-                 Task { await settings.markItemAsSeen(id: initialItem.id) }
-            } else {
-                 Self.logger.warning("PagedDetailView onAppear: Invalid selectedIndex \(selectedIndex). Cannot setup initial player.")
-            }
-        }
-        .onDisappear {
-            Self.logger.info("PagedDetailView disappearing.")
-            keyboardActionHandler.selectNextAction = nil
-            keyboardActionHandler.selectPreviousAction = nil
-
-            // --- MODIFIED: Only clean up if NOT disappearing due to fullscreen ---
-            if !isFullscreen {
-                Self.logger.info("Cleaning up player because view is disappearing AND we are NOT in fullscreen.")
-                playerManager.cleanupPlayer() // Cleanup player via the manager instance held by the parent
-            } else {
-                Self.logger.info("Skipping player cleanup because view is disappearing WHILE entering fullscreen.")
-                // Consider pausing here if the system doesn't do it reliably,
-                // although AVPlayerViewController usually handles this.
-                // Task { @MainActor in playerManager.player?.pause() }
-            }
-            // ----------------------------------------------------------------------
-
-            showAllTagsForItem = [] // Reset this state anyway
-            Self.logger.debug("Reset showAllTagsForItem state on disappear.")
-        }
+        .onAppear { setupView() }
+        .onDisappear { cleanupView() }
         .onChange(of: scenePhase) { oldPhase, newPhase in
-            Self.logger.debug("Scene phase changed from \(String(describing: oldPhase)) to \(String(describing: newPhase))")
-            if newPhase == .active {
-                Self.logger.info("App became active. Resetting transientSessionMuteState to nil.")
-                settings.transientSessionMuteState = nil
-                // Use the passed playerManager
-                if let player = playerManager.player, player.isMuted != settings.isVideoMuted {
-                     Self.logger.debug("Applying persisted mute state (\(settings.isVideoMuted)) to current player (\(playerManager.playerItemID ?? -1)) on app activation.")
-                     player.isMuted = settings.isVideoMuted
-                }
-                 // If returning to active state *while* fullscreen was active, might need to resume play
-                 if isFullscreen, let player = playerManager.player, player.timeControlStatus != .playing {
-                     Self.logger.info("App became active while fullscreen. Resuming player.")
-                     player.play()
-                 }
-
-            } else if newPhase == .inactive || newPhase == .background {
-                 // Pause when going inactive/background if not fullscreen
-                  if !isFullscreen, let player = playerManager.player, player.timeControlStatus == .playing {
-                     player.pause()
-                     Self.logger.debug("App inactive/background, pausing non-fullscreen player.")
-                  }
-            }
+             handleScenePhaseChange(oldPhase: oldPhase, newPhase: newPhase)
         }
-         .onChange(of: settings.commentSortOrder) { _, newOrder in
-             Self.logger.info("Comment sort order changed in settings, PagedDetailView body will re-evaluate.")
-         }
+        .onChange(of: settings.commentSortOrder) { newOrder in
+             handleSortOrderChange(newOrder: newOrder)
+        }
+        .onChange(of: settings.hideSeenItems) { newValue in
+             handleHideSeenChange(newValue: newValue)
+        }
     }
 
-    // MARK: - Helper Function for TabView Page Content
-    /// Creates the view content for a single page in the TabView.
+    /// Generates the content view for a single tab page.
     @ViewBuilder
     private func tabViewPage(for index: Int) -> some View {
-        // Use `if let` to get prepared data or return EmptyView if preparation fails
         if let pageData = preparePageData(for: index) {
             PagedDetailTabViewItem(
                 item: pageData.currentItem,
                 keyboardActionHandler: keyboardActionHandler,
-                // Pass the player from the manager if the ID matches
                 player: pageData.currentItem.id == playerManager.playerItemID ? playerManager.player : nil,
+                flatCommentsToDisplay: pageData.flatComments,
                 displayedTags: pageData.displayedTags,
                 totalTagCount: pageData.totalTagCount,
                 showingAllTags: pageData.showingAllTags,
-                comments: pageData.comments,
                 infoLoadingStatus: pageData.status,
-                loadInfoAction: loadInfoIfNeeded,
-                preloadInfoAction: loadInfoIfNeeded,
-                allItems: items, // Pass original items
+                loadInfoAction: loadInfoIfNeededAndPrepareHierarchy,
+                preloadInfoAction: loadInfoIfNeededAndPrepareHierarchy,
+                allItems: items,
                 currentIndex: index,
-                onWillBeginFullScreen: { // Fullscreen Callbacks
-                    Self.logger.debug("[View] Callback: willBeginFullScreen")
-                    self.isFullscreen = true
-                    // System usually handles pause/resume for fullscreen AVPlayerVC
-                },
-                onWillEndFullScreen: {
-                     Self.logger.debug("[View] Callback: willEndFullScreen")
-                     self.isFullscreen = false
-                     // Explicitly resume playback *after* exiting fullscreen animation completes
-                     // Check if we are still on the same video item
-                     if let currentItem = items[safe: self.selectedIndex], currentItem.isVideo, currentItem.id == playerManager.playerItemID {
-                         Task { @MainActor in
-                             // Small delay might be needed for transition to fully complete
-                             try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                             // Check isFullscreen again in case state changed rapidly
-                             if !self.isFullscreen && self.playerManager.player?.timeControlStatus != .playing {
-                                 self.playerManager.player?.play()
-                                 Self.logger.debug("[View] Explicitly calling play() on player after exiting fullscreen.")
-                             } else if self.isFullscreen {
-                                 Self.logger.debug("[View] Exited fullscreen callback, but isFullscreen is still true. Not playing.")
-                             } else {
-                                 Self.logger.debug("[View] Exited fullscreen callback, player already playing or not applicable.")
-                             }
-                         }
-                     } else {
-                         Self.logger.debug("[View] Exited fullscreen callback, but selected index/item changed or not a video. Not playing.")
-                     }
-                },
+                onWillBeginFullScreen: { self.isFullscreen = true },
+                onWillEndFullScreen: handleEndFullScreen,
                 previewLinkTarget: $previewLinkTarget,
-                fullscreenImageTarget: $fullscreenImageTarget, // <-- Binding weitergeben
-                // Use the local state for the favorite button display
+                fullscreenImageTarget: $fullscreenImageTarget,
                 isFavorited: localFavoritedStatus[pageData.currentItem.id] ?? pageData.currentItem.favorited ?? false,
                 toggleFavoriteAction: toggleFavorite,
-                showAllTagsAction: {
-                    let itemId = pageData.currentItem.id // Use item from pageData
-                    Self.logger.info("Show all tags action triggered for item \(itemId)")
-                    showAllTagsForItem.insert(itemId)
-                }
+                showAllTagsAction: { showAllTagsForItem.insert(pageData.currentItem.id) }
             )
             .tag(index)
         } else {
-            EmptyView()
+            EmptyView().tag(index)
         }
     }
 
-    /// Helper function to prepare hierarchical data for a single page.
-    /// Works with pre-sorted tags from `loadedInfos`.
+
+    // MARK: - Data Preparation and Loading
+    /// Prepares data needed for a specific page index, utilizing cached flat comment lists.
     private func preparePageData(for index: Int) -> (
-        currentItem: Item,
-        status: InfoLoadingStatus,
-        comments: [DisplayComment],
-        displayedTags: [ItemTag],
-        totalTagCount: Int,
-        showingAllTags: Bool
+        currentItem: Item, status: InfoLoadingStatus, flatComments: [FlatCommentDisplayItem],
+        displayedTags: [ItemTag], totalTagCount: Int, showingAllTags: Bool
     )? {
         guard index >= 0 && index < items.count else {
-            Self.logger.error("preparePageData failed: Invalid index \(index)")
-            return nil
+             Self.logger.error("preparePageData failed: Invalid index \(index)")
+             return nil
         }
-
         let currentItem = items[index]
         let itemId = currentItem.id
         let statusForItem = infoLoadingStatus[itemId] ?? .idle
-        let baseComments = loadedInfos[itemId]?.comments ?? []
-        let sortedTags = loadedInfos[itemId]?.tags ?? []
+        var finalFlatComments: [FlatCommentDisplayItem] = []
+        var finalSortedTags: [ItemTag] = []
 
-        // --- Build Comment Hierarchy ---
-        let commentsById = Dictionary(grouping: baseComments, by: { $0.id }).compactMapValues { $0.first }
-        var childrenByParentId: [Int: [ItemComment]] = Dictionary(grouping: baseComments, by: { $0.parent ?? 0 })
-        childrenByParentId.removeValue(forKey: 0)
-
-        func buildHierarchy(for comments: [ItemComment]) -> [DisplayComment] {
-            comments.map { comment in
-                let children = childrenByParentId[comment.id]?.sorted { $0.created < $1.created } ?? []
-                let displayChildren = buildHierarchy(for: children)
-                return DisplayComment(id: comment.id, comment: comment, children: displayChildren)
+        if let cached = cachedDetails[itemId] {
+            if cached.sortedBy == settings.commentSortOrder {
+                 finalFlatComments = cached.flatDisplayComments
+            } else {
+                 Self.logger.info("Recalculating flat comment list for item \(itemId) due to sort order change.")
+                 finalFlatComments = prepareFlatDisplayComments(from: cached.info.comments, sortedBy: settings.commentSortOrder, maxDepth: commentMaxDepth)
+                 cachedDetails[itemId] = CachedItemDetails(info: cached.info, sortedBy: settings.commentSortOrder, flatDisplayComments: finalFlatComments)
             }
+            finalSortedTags = cached.info.tags
+        } else if statusForItem == .loaded {
+             Self.logger.warning("preparePageData: Status loaded for \(itemId), but no cached details found.")
+             finalFlatComments = []; finalSortedTags = []
         }
-        let topLevelComments = baseComments.filter { $0.parent == nil || $0.parent == 0 }
+
+        let totalTagCount = finalSortedTags.count
+        let shouldShowAll = showAllTagsForItem.contains(itemId)
+        let tagsToDisplay = shouldShowAll ? finalSortedTags : Array(finalSortedTags.prefix(4))
+
+        return (currentItem, statusForItem, finalFlatComments, tagsToDisplay, totalTagCount, shouldShowAll)
+    }
+
+    /// Loads item info (if needed) and prepares/caches the FLAT comment list.
+    private func loadInfoIfNeededAndPrepareHierarchy(for item: Item) async {
+         let itemId = item.id
+         let currentStatus = infoLoadingStatus[itemId]
+         if let cached = cachedDetails[itemId], currentStatus == .loaded {
+             if cached.sortedBy == settings.commentSortOrder { return }
+             else {
+                  Self.logger.info("loadInfoIfNeeded: Recalculating flat list for cached item \(itemId).")
+                  let newFlatList = prepareFlatDisplayComments(from: cached.info.comments, sortedBy: settings.commentSortOrder, maxDepth: commentMaxDepth)
+                  cachedDetails[itemId] = CachedItemDetails(info: cached.info, sortedBy: settings.commentSortOrder, flatDisplayComments: newFlatList)
+                  return
+             }
+         }
+         guard !(currentStatus == .loading) else { return }
+         if case .error = currentStatus { Self.logger.debug("Retrying info load for item \(itemId).") }
+         Self.logger.debug("Starting info load & FLAT prep for item \(itemId)...")
+         infoLoadingStatus[itemId] = .loading
+         do {
+             let fetchedInfoResponse = try await apiService.fetchItemInfo(itemId: itemId)
+             let sortedTags = fetchedInfoResponse.tags.sorted { $0.confidence > $1.confidence }
+             let infoWithSortedTags = ItemsInfoResponse(tags: sortedTags, comments: fetchedInfoResponse.comments)
+             let flatDisplayComments = prepareFlatDisplayComments(from: fetchedInfoResponse.comments, sortedBy: settings.commentSortOrder, maxDepth: commentMaxDepth)
+             let detailsToCache = CachedItemDetails(info: infoWithSortedTags, sortedBy: settings.commentSortOrder, flatDisplayComments: flatDisplayComments)
+             cachedDetails[itemId] = detailsToCache
+             infoLoadingStatus[itemId] = .loaded
+             Self.logger.info("Successfully loaded/prepared FLAT hierarchy for item \(itemId). Count: \(flatDisplayComments.count)")
+         } catch {
+             Self.logger.error("Failed load/prep FLAT hierarchy for item \(itemId): \(error.localizedDescription)")
+             infoLoadingStatus[itemId] = .error(error.localizedDescription)
+         }
+    }
+
+    /// Helper function to build the FLAT comment list from raw comments. Includes sorting and depth limit.
+    private func prepareFlatDisplayComments(from comments: [ItemComment], sortedBy sortOrder: CommentSortOrder, maxDepth: Int) -> [FlatCommentDisplayItem] {
+        Self.logger.debug("Preparing FLAT display comments (\(comments.count) raw), sort: \(sortOrder.displayName), depth: \(maxDepth).")
+        let startTime = Date()
+        var flatList: [FlatCommentDisplayItem] = []
+        let childrenByParentId = Dictionary(grouping: comments.filter { $0.parent != nil && $0.parent != 0 }, by: { $0.parent! })
+        let commentDict = Dictionary(uniqueKeysWithValues: comments.map { ($0.id, $0) })
+
+        func traverse(commentId: Int, currentLevel: Int) {
+            guard currentLevel <= maxDepth, let comment = commentDict[commentId] else { return }
+            flatList.append(FlatCommentDisplayItem(id: comment.id, comment: comment, level: currentLevel))
+            guard currentLevel < maxDepth else { return }
+            let children = childrenByParentId[commentId] ?? []
+            let sortedChildren: [ItemComment]
+            switch sortOrder {
+            case .date: sortedChildren = children.sorted { $0.created < $1.created }
+            case .score: sortedChildren = children.sorted { ($0.up - $0.down) > ($1.up - $1.down) }
+            }
+            sortedChildren.forEach { traverse(commentId: $0.id, currentLevel: currentLevel + 1) }
+        }
+
+        let topLevelComments = comments.filter { $0.parent == nil || $0.parent == 0 }
         let sortedTopLevelComments: [ItemComment]
-        switch settings.commentSortOrder {
+        switch sortOrder {
         case .date: sortedTopLevelComments = topLevelComments.sorted { $0.created < $1.created }
         case .score: sortedTopLevelComments = topLevelComments.sorted { ($0.up - $0.down) > ($1.up - $1.down) }
         }
-        let displayComments = buildHierarchy(for: sortedTopLevelComments)
+        sortedTopLevelComments.forEach { traverse(commentId: $0.id, currentLevel: 0) }
 
-
-        // --- Tag Limiting Logic ---
-        let totalTagCount = sortedTags.count
-        let shouldShowAll = showAllTagsForItem.contains(itemId)
-        let tagsToDisplay: [ItemTag]
-        if shouldShowAll {
-            tagsToDisplay = sortedTags
-            if statusForItem == .loaded { Self.logger.trace("Showing ALL \(totalTagCount) pre-sorted tags for item \(itemId) (user requested).") }
-        } else {
-            tagsToDisplay = Array(sortedTags.prefix(4))
-            if statusForItem == .loaded { Self.logger.trace("Showing TOP \(tagsToDisplay.count) of \(totalTagCount) pre-sorted tags for item \(itemId) (default).") }
-        }
-
-        return (
-            currentItem: currentItem,
-            status: statusForItem,
-            comments: displayComments,
-            displayedTags: tagsToDisplay,
-            totalTagCount: totalTagCount,
-            showingAllTags: shouldShowAll
-        )
+        let duration = Date().timeIntervalSince(startTime)
+        Self.logger.info("Finished preparing FLAT comments (\(flatList.count) items) in \(String(format: "%.3f", duration))s.")
+        return flatList // Ensure return statement is present
     }
 
-
-    // Info Loading Method - Sorts tags upon successful fetch and stores sorted result
-    private func loadInfoIfNeeded(for item: Item) async {
-        let itemId = item.id
-        let currentStatus = infoLoadingStatus[itemId]
-        guard !(currentStatus == .loading || currentStatus == .loaded) else { return }
-        if case .error = currentStatus { Self.logger.debug("Retrying info load for item \(itemId) after previous error.") }
-        Self.logger.debug("Starting info load for item \(itemId)...")
-        await MainActor.run { infoLoadingStatus[itemId] = .loading }
-        do {
-            let fetchedInfoResponse = try await apiService.fetchItemInfo(itemId: itemId)
-
-            let sortedTags = fetchedInfoResponse.tags.sorted { $0.confidence > $1.confidence }
-            Self.logger.trace("Sorted \(sortedTags.count) tags for item \(itemId) after fetching.")
-
-            let updatedInfoResponse = ItemsInfoResponse(tags: sortedTags, comments: fetchedInfoResponse.comments)
-
-            await MainActor.run {
-                loadedInfos[itemId] = updatedInfoResponse
-                infoLoadingStatus[itemId] = .loaded
-            }
-        } catch {
-            Self.logger.error("Failed to load info for item \(itemId): \(error.localizedDescription)")
-            await MainActor.run { infoLoadingStatus[itemId] = .error(error.localizedDescription) }
-        }
+    // MARK: - View Lifecycle and State Handling Helpers
+    private func setupView() {
+        Self.logger.info("PagedDetailView appeared.")
+        if isFullscreen { isFullscreen = false }
+        isTogglingFavorite = false
+        keyboardActionHandler.selectNextAction = self.selectNext
+        keyboardActionHandler.selectPreviousAction = self.selectPrevious
+        if selectedIndex >= 0 && selectedIndex < items.count {
+            let initialItem = items[selectedIndex]
+            playerManager.setupPlayerIfNeeded(for: initialItem, isFullscreen: isFullscreen)
+            Task { await loadInfoIfNeededAndPrepareHierarchy(for: initialItem) }
+            Task { await settings.markItemAsSeen(id: initialItem.id) }
+        } else { Self.logger.warning("onAppear: Invalid selectedIndex \(selectedIndex).") }
     }
 
-    // Navigation Methods
-    private func selectNext() { if canSelectNext { selectedIndex += 1 } }
-    private var canSelectNext: Bool { selectedIndex < items.count - 1 }
-    private func selectPrevious() { if canSelectPrevious { selectedIndex -= 1 } }
-    private var canSelectPrevious: Bool { selectedIndex > 0 }
+    private func cleanupView() {
+        Self.logger.info("PagedDetailView disappearing.")
+        keyboardActionHandler.selectNextAction = nil; keyboardActionHandler.selectPreviousAction = nil
+        if !isFullscreen { playerManager.cleanupPlayer() }
+        else { Self.logger.info("Skipping player cleanup (entering fullscreen).") }
+        showAllTagsForItem = []
+    }
+
+    private func handleIndexChange(oldValue: Int, newValue: Int) {
+         guard !isCorrectingIndex else { return }
+         Self.logger.info("Selected index changed from \(oldValue) to \(newValue)")
+         guard newValue >= 0 && newValue < items.count else { return }
+         let newItem = items[newValue]
+         if settings.hideSeenItems && settings.seenItemIDs.contains(newItem.id) {
+              Self.logger.debug("Index -> \(newValue), item hidden. Correcting...")
+              isCorrectingIndex = true
+              let directionForward = newValue > oldValue
+              let targetIndex = directionForward ? findNextVisibleIndex(from: newValue, in: items, settings: settings)
+                                                 : findPreviousVisibleIndex(from: newValue, in: items, settings: settings)
+              DispatchQueue.main.async {
+                 if self.selectedIndex == newValue {
+                     if let correctedIndex = targetIndex { self.selectedIndex = correctedIndex }
+                     else { self.selectedIndex = oldValue; Self.logger.warning("No visible item found, snapping back.") }
+                 }
+                 self.isCorrectingIndex = false
+              }
+         } else {
+              Self.logger.debug("Index -> \(newValue), item visible. Performing actions.")
+              playerManager.setupPlayerIfNeeded(for: newItem, isFullscreen: isFullscreen)
+              Task { await loadInfoIfNeededAndPrepareHierarchy(for: newItem) }
+              Task { await settings.markItemAsSeen(id: newItem.id) }
+              isTogglingFavorite = false
+         }
+    }
+
+    private func handleScenePhaseChange(oldPhase: ScenePhase, newPhase: ScenePhase) {
+         Self.logger.debug("Scene phase: \(String(describing: oldPhase)) -> \(String(describing: newPhase))")
+         if newPhase == .active {
+             settings.transientSessionMuteState = nil
+             if let player = playerManager.player, player.isMuted != settings.isVideoMuted {
+                 player.isMuted = settings.isVideoMuted
+             }
+              if isFullscreen, let player = playerManager.player, player.timeControlStatus != .playing {
+                  player.play()
+              }
+         } else if newPhase == .inactive || newPhase == .background {
+             if !isFullscreen, let player = playerManager.player, player.timeControlStatus == .playing {
+                 player.pause()
+             }
+         }
+    }
+
+    private func handleSortOrderChange(newOrder: CommentSortOrder) {
+         Self.logger.info("Sort order changed to \(newOrder.displayName). Recalculating visible flat lists.")
+         var updatedCache: [Int: CachedItemDetails] = [:]
+         for (id, details) in cachedDetails where details.sortedBy != newOrder {
+              let newFlatList = prepareFlatDisplayComments(from: details.info.comments, sortedBy: newOrder, maxDepth: commentMaxDepth)
+              updatedCache[id] = CachedItemDetails(info: details.info, sortedBy: newOrder, flatDisplayComments: newFlatList)
+         }
+         cachedDetails.merge(updatedCache) { (_, new) in new }
+    }
+
+    private func handleHideSeenChange(newValue: Bool) {
+         Self.logger.info("Hide seen items setting changed to \(newValue).")
+         guard !isCorrectingIndex, newValue, selectedIndex >= 0 && selectedIndex < items.count, settings.seenItemIDs.contains(items[selectedIndex].id) else { return }
+         Self.logger.debug("Current item \(items[selectedIndex].id) became hidden. Navigating away.")
+         isCorrectingIndex = true
+         let targetIndex = findPreviousVisibleIndex(from: selectedIndex, in: items, settings: settings)
+                        ?? findNextVisibleIndex(from: selectedIndex, in: items, settings: settings)
+         DispatchQueue.main.async {
+             if let visibleIndex = targetIndex { self.selectedIndex = visibleIndex }
+             else { Self.logger.warning("No visible items left nearby after hiding.") }
+             self.isCorrectingIndex = false
+         }
+    }
+
+    private func handleEndFullScreen() {
+         self.isFullscreen = false
+         Self.logger.debug("[View] Callback: handleEndFullScreen")
+         if selectedIndex >= 0 && selectedIndex < items.count, items[selectedIndex].isVideo, items[selectedIndex].id == playerManager.playerItemID {
+             Task { @MainActor in
+                 try? await Task.sleep(for: .milliseconds(100))
+                 if !self.isFullscreen && self.playerManager.player?.timeControlStatus != .playing {
+                     self.playerManager.player?.play()
+                 }
+             }
+         }
+    }
+
+    // MARK: - Navigation and Actions
+    private func selectNext() {
+        if let nextIndex = findNextVisibleIndex(from: selectedIndex, in: items, settings: settings) {
+             selectedIndex = nextIndex
+        } else { Self.logger.debug("selectNext: End reached.") }
+    }
+
+    private var canSelectNext: Bool {
+        return findNextVisibleIndex(from: selectedIndex, in: items, settings: settings) != nil
+    }
+
+    private func selectPrevious() {
+        if let prevIndex = findPreviousVisibleIndex(from: selectedIndex, in: items, settings: settings) {
+             selectedIndex = prevIndex
+        } else { Self.logger.debug("selectPrevious: Start reached.") }
+    }
+
+    private var canSelectPrevious: Bool {
+        return findPreviousVisibleIndex(from: selectedIndex, in: items, settings: settings) != nil
+    }
+
     private var currentItemTitle: String {
         guard selectedIndex >= 0 && selectedIndex < items.count else { return "Detail" }
         let currentItem = items[selectedIndex]
         let status = infoLoadingStatus[currentItem.id] ?? .idle
         switch status {
-        case .loaded:
-            let topTag = loadedInfos[currentItem.id]?.tags.first?.tag
-            if let tag = topTag, !tag.isEmpty { return tag }
-            else { return "Post \(currentItem.id)" }
+        case .loaded: return cachedDetails[currentItem.id]?.info.tags.first?.tag ?? "Post \(currentItem.id)"
         case .loading: return "Lade Infos..."
         case .error: return "Fehler"
         case .idle: return "Post \(currentItem.id)"
         }
     }
-
-    // Favoriting Logic - Uses localFavoritedStatus for optimistic UI
     private func toggleFavorite() async {
         let localSettings = self.settings
-        guard !isTogglingFavorite else {
-            Self.logger.debug("Favorite toggle skipped: Already processing.")
-            return
-        }
-        guard selectedIndex >= 0 && selectedIndex < items.count else {
-             Self.logger.error("Cannot toggle favorite: Invalid selectedIndex \(selectedIndex)")
-             return
-        }
-        guard authService.isLoggedIn else {
-             Self.logger.warning("Cannot toggle favorite: User not logged in.")
-             return
-        }
-        guard let nonce = authService.userNonce else {
-             Self.logger.error("Cannot toggle favorite: Nonce is missing.")
-             return
-         }
-        guard let collectionId = authService.favoritesCollectionId else {
-             Self.logger.error("Cannot toggle favorite: Favorites collection ID is missing.")
-             return
-         }
+        guard !isTogglingFavorite else { return }
+        guard selectedIndex >= 0 && selectedIndex < items.count else { return }
+        let currentItem = items[selectedIndex]
+        guard authService.isLoggedIn, let nonce = authService.userNonce, let collectionId = authService.favoritesCollectionId else { return }
 
-        let currentItemIndex = selectedIndex
-        let itemToToggle = items[currentItemIndex]
-        let itemId = itemToToggle.id
-        let currentLocalState = localFavoritedStatus[itemId] ?? itemToToggle.favorited ?? false
-        let targetFavoriteState = !currentLocalState
+        let itemId = currentItem.id
+        let targetFavoriteState = !(localFavoritedStatus[itemId] ?? currentItem.favorited ?? false)
 
-        Self.logger.info("Attempting to set favorite status for item \(itemId) to \(targetFavoriteState). Nonce: \(nonce)")
+        isTogglingFavorite = true; localFavoritedStatus[itemId] = targetFavoriteState
 
-        // Start Processing
-        await MainActor.run {
-             isTogglingFavorite = true
-             localFavoritedStatus[itemId] = targetFavoriteState // Optimistic UI update
-        }
-
-        var success = false
         do {
-            // Perform API Call
-            if targetFavoriteState {
-                try await apiService.addToCollection(itemId: itemId, nonce: nonce)
-                Self.logger.info("API: Successfully added item \(itemId) to collection.")
-            } else {
-                try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
-                Self.logger.info("API: Successfully removed item \(itemId) from collection \(collectionId).")
-            }
-            success = true
-            Self.logger.info("Successfully toggled favorite status for item \(itemId) via API.")
-            await localSettings.clearFavoritesCache()
-            await localSettings.updateCacheSizes()
-
+            if targetFavoriteState { try await apiService.addToCollection(itemId: itemId, nonce: nonce) }
+            else { try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce) }
+            await localSettings.clearFavoritesCache(); await localSettings.updateCacheSizes()
+            Self.logger.info("Favorite toggled successfully for item \(itemId).")
         } catch {
-            success = false
-            Self.logger.error("Failed to toggle favorite status for item \(itemId): \(error.localizedDescription)")
-            // Revert optimistic UI
-            await MainActor.run {
-                 localFavoritedStatus[itemId] = !targetFavoriteState
-            }
+            Self.logger.error("Failed to toggle favorite: \(error.localizedDescription)")
+            localFavoritedStatus[itemId] = !targetFavoriteState
         }
-
-        // Finally Block (Cleanup)
-        await MainActor.run {
-             isTogglingFavorite = false
-             Self.logger.debug("Finished favorite toggle processing for item \(itemId). Success: \(success). isTogglingFavorite = false.")
-        }
+        isTogglingFavorite = false
     }
 }
 
-// Helper extension for safe array access
-extension Collection {
-    subscript(safe index: Index) -> Element? {
-        return indices.contains(index) ? self[index] : nil
-    }
+// MARK: - Global Helper Functions (Marked @MainActor)
+@MainActor fileprivate func findNextVisibleIndex(from currentIndex: Int, in items: [Item], settings: AppSettings) -> Int? {
+    guard currentIndex < items.count - 1 else { return nil }
+    if settings.hideSeenItems {
+        for i in (currentIndex + 1)..<items.count { if !settings.seenItemIDs.contains(items[i].id) { return i } }
+        return nil
+    } else { return currentIndex + 1 }
+}
+@MainActor fileprivate func findPreviousVisibleIndex(from currentIndex: Int, in items: [Item], settings: AppSettings) -> Int? {
+    guard currentIndex > 0 else { return nil }
+    if settings.hideSeenItems {
+        for i in (0..<currentIndex).reversed() { if !settings.seenItemIDs.contains(items[i].id) { return i } }
+        return nil
+    } else { return currentIndex - 1 }
 }
 
+// MARK: - Helper Extension & Wrapper View
+// No longer needed as we use direct index checking
+// extension Collection { /* ... */ }
 
-// Wrapper View for Sheet Preview (Unchanged)
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
     @EnvironmentObject var settings: AppSettings
@@ -534,44 +499,30 @@ struct LinkedItemPreviewWrapperView: View {
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } }
-                }
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } } }
         }
     }
 }
 
-// Preview Provider needs adjustment to pass the PlayerManager
+// MARK: - Preview Provider
 #Preview("Preview") {
-    // --- CORRECTED PREVIEW ---
-    // 1. Create instances needed for the preview
     let previewSettings = AppSettings()
     let previewAuthService = AuthService(appSettings: previewSettings)
     previewAuthService.isLoggedIn = true
-    previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: []) // Added badges: []
+    previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
     previewAuthService.userNonce = "preview_nonce_12345"
     previewAuthService.favoritesCollectionId = 6749
-
-    // 2. Create the PlayerManager instance for the preview
     let previewPlayerManager = VideoPlayerManager()
-
-    // 3. Sample items
-    let sampleItems = [ // Use let for preview data
-        Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false),
-        Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true),
-        Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: Int(Date().timeIntervalSince1970) - 50, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil, favorited: nil)
-    ]
-
-    // 4. Configure the manager within the preview setup
+    let sampleItems = [ Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: 1, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false), Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: 2, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true), Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: 3, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil, favorited: nil), Item(id: 4, promoted: 1004, userId: 3, down: 1, up: 10, created: 4, image: "img3.gif", thumb: "t4.gif", fullsize: nil, preview: nil, width: 500, height: 300, audio: false, source: nil, flags: 1, user: "UserC", mark: 0, repost: nil, variants: nil, favorited: false) ]
+    previewSettings.hideSeenItems = true
+    previewSettings.seenItemIDs = [1, 3]
     Task { @MainActor in await previewPlayerManager.configure(settings: previewSettings) }
 
-    // 5. Return the view hierarchy
     return NavigationStack {
-        // Pass the playerManager to the PagedDetailView initializer
-        PagedDetailView(items: sampleItems, selectedIndex: 1, playerManager: previewPlayerManager)
+        PagedDetailView(items: sampleItems, selectedIndex: 0, playerManager: previewPlayerManager)
     }
     .environmentObject(previewSettings)
     .environmentObject(previewAuthService)
-    // --- END CORRECTION ---
 }
+
 // --- END OF COMPLETE FILE ---
