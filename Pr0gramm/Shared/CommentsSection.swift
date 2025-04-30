@@ -12,30 +12,42 @@ struct FlatCommentDisplayItem: Identifiable {
 }
 
 /// A view that displays a list of comments for an item, handling loading and error states.
-/// Uses a LazyVStack with a flattened comment list for performance with many comments.
+/// Uses a LazyVStack with a flattened comment list and limits the initial number shown for performance.
 struct CommentsSection: View {
     let flatComments: [FlatCommentDisplayItem]
+    let totalCommentCount: Int // Total number of comments available
     let status: InfoLoadingStatus
     @Binding var previewLinkTarget: PreviewLinkTarget?
 
-    // Initializer expecting the pre-flattened list
+    @State private var showAllComments = false
+    private let initialCommentLimit = 50 // Show initially e.g., 50 comments
+
     init(
         flatComments: [FlatCommentDisplayItem],
+        totalCommentCount: Int,
         status: InfoLoadingStatus,
         previewLinkTarget: Binding<PreviewLinkTarget?>
     ) {
         self.flatComments = flatComments
+        self.totalCommentCount = totalCommentCount
         self.status = status
         self._previewLinkTarget = previewLinkTarget
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) { // Use spacing 0 for precise control with Divider
-            Divider().padding(.bottom, 5) // Divider above comments
-            commentContent // The main content area (LazyVStack or status views)
+    // Determine which comments to actually display based on state
+    private var commentsToDisplay: [FlatCommentDisplayItem] {
+        if showAllComments {
+            return flatComments
+        } else {
+            return Array(flatComments.prefix(initialCommentLimit))
         }
-        // Padding applied outside the VStack if needed, e.g., in DetailViewContent
-        // .padding(.horizontal)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider().padding(.bottom, 5)
+            commentContent
+        }
     }
 
     @ViewBuilder
@@ -43,60 +55,51 @@ struct CommentsSection: View {
         switch status {
         case .idle, .loading:
             ProgressView("Lade Kommentare...")
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding() // Add padding around the loading indicator
+                .frame(maxWidth: .infinity, alignment: .center).padding()
         case .error(let message):
-            VStack { // Wrap error in VStack for better centering/padding
+            VStack {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange).font(.title)
-                Text("Fehler beim Laden der Kommentare")
-                    .foregroundColor(.red)
-                    .padding(.top, 2)
+                Text("Fehler beim Laden der Kommentare").foregroundColor(.red).padding(.top, 2)
                 Text(message).font(.caption).foregroundColor(.secondary).padding(.horizontal)
             }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding()
+            .frame(maxWidth: .infinity, alignment: .center).padding()
             .onAppear { print("CommentsSection Error Detail: \(message)") }
         case .loaded:
             if flatComments.isEmpty {
                 Text("Keine Kommentare vorhanden.")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
+                    .foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .center).padding()
             } else {
-                // Use LazyVStack for efficient rendering of potentially long lists
-                LazyVStack(alignment: .leading, spacing: 0) { // spacing: 0, dividers handle spacing
-                    ForEach(flatComments) { flatItem in
-                        // VStack to group CommentView and Divider
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(commentsToDisplay) { flatItem in
                         VStack(alignment: .leading, spacing: 0) {
-                             CommentView(
-                                 comment: flatItem.comment,
-                                 previewLinkTarget: $previewLinkTarget
-                             )
-                             // Apply indentation based on level
-                             .padding(.leading, CGFloat(flatItem.level * 15))
-                             // Add padding around the CommentView content itself
-                             .padding(.horizontal) // Horizontal padding for text content
-                             .padding(.vertical, 6)   // Vertical padding around text
-
-                             Divider() // Visual separator between comments
+                            CommentView(comment: flatItem.comment, previewLinkTarget: $previewLinkTarget)
+                                .padding(.leading, CGFloat(flatItem.level * 15))
+                                .padding(.horizontal)
+                                .padding(.bottom, 4)
+                            Divider()
                          }
-                         .id(flatItem.id) // Stable ID for LazyVStack performance
+                         .id(flatItem.id)
                     }
                 }
-                // No extra padding needed around LazyVStack itself if parent handles it
+                .padding(.vertical, 5)
+
+                if !showAllComments && totalCommentCount > initialCommentLimit {
+                    Button { withAnimation { showAllComments = true } } label: {
+                        Text("Alle \(totalCommentCount) Kommentare anzeigen").font(.footnote.weight(.medium)).frame(maxWidth: .infinity).padding(.vertical, 8)
+                    }
+                    .buttonStyle(.bordered).padding(.horizontal).padding(.top, 10)
+                    Divider().padding(.top, 5)
+                }
             }
         }
     }
 }
 
-// RecursiveCommentView is removed.
+// MARK: - Previews
 
-// MARK: - Previews (Using a local flattening helper for preview data)
-
-// Local helper function for preview data generation ONLY
 @MainActor
 private func createPreviewFlatCommentsHelper(maxDepth: Int = 5) -> [FlatCommentDisplayItem] {
-    // Sample data remains the same...
+    // Sample data...
     let reply_reply_reply = DisplayComment(id: 5, comment: ItemComment(id: 5, parent: 4, content: "Ebene 3", created: Int(Date().timeIntervalSince1970) - 20, up: 1, down: 0, confidence: 0.6, name: "UserE", mark: 1), children: [])
     let reply_reply = DisplayComment(id: 4, comment: ItemComment(id: 4, parent: 2, content: "Antwort auf die Antwort.", created: Int(Date().timeIntervalSince1970) - 50, up: 1, down: 0, confidence: 0.7, name: "UserC", mark: 2), children: [reply_reply_reply])
     let reply1_1 = DisplayComment(id: 2, comment: ItemComment(id: 2, parent: 1, content: "Antwort auf den ersten.", created: Int(Date().timeIntervalSince1970) - 150, up: 2, down: 1, confidence: 0.8, name: "UserB", mark: 7), children: [reply_reply])
@@ -113,6 +116,9 @@ private func createPreviewFlatCommentsHelper(maxDepth: Int = 5) -> [FlatCommentD
         }
     }
     traverse(nodes: displayComments, currentLevel: 0)
+    for i in 6...100 {
+         flatList.append(FlatCommentDisplayItem(id: i, comment: ItemComment(id: i, parent: 0, content: "Simulierter Kommentar \(i)", created: Int(Date().timeIntervalSince1970) - i*10, up: i % 5, down: i % 3, confidence: 0.8, name: "SimUser", mark: 1), level: 0))
+    }
     return flatList
 }
 
@@ -132,49 +138,36 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
 }
 
 
-#Preview("Loaded Flat List (Depth 5)") {
+#Preview("Loaded Limited") {
     CommentsSectionPreviewWrapper { $target in
         ScrollView {
+             let comments = createPreviewFlatCommentsHelper()
             CommentsSection(
-                flatComments: createPreviewFlatCommentsHelper(maxDepth: 5), // Use helper
+                flatComments: comments,
+                totalCommentCount: comments.count, // Pass total count
                 status: .loaded,
                 previewLinkTarget: $target
             )
         }
     }
 }
-
-#Preview("Loaded Flat List (Depth 1)") {
-    CommentsSectionPreviewWrapper { $target in
-        ScrollView {
-            CommentsSection(
-                flatComments: createPreviewFlatCommentsHelper(maxDepth: 1), // Use helper
-                status: .loaded,
-                previewLinkTarget: $target
-            )
-        }
-    }
-}
-
 
 #Preview("Loading") {
     CommentsSectionPreviewWrapper { $target in
-        CommentsSection(flatComments: [], status: .loading, previewLinkTarget: $target)
+        CommentsSection(flatComments: [], totalCommentCount: 0, status: .loading, previewLinkTarget: $target)
     }
 }
 
 #Preview("Error") {
     CommentsSectionPreviewWrapper { $target in
-        CommentsSection(flatComments: [], status: .error("Netzwerkfehler."), previewLinkTarget: $target)
+        CommentsSection(flatComments: [], totalCommentCount: 0, status: .error("Netzwerkfehler."), previewLinkTarget: $target)
     }
 }
 
 #Preview("Empty") {
     CommentsSectionPreviewWrapper { $target in
-        CommentsSection(flatComments: [], status: .loaded, previewLinkTarget: $target)
+        CommentsSection(flatComments: [], totalCommentCount: 0, status: .loaded, previewLinkTarget: $target)
     }
 }
-
-// Flattening function is no longer part of CommentsSection.swift itself.
 
 // --- END OF COMPLETE FILE ---

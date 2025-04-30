@@ -12,7 +12,7 @@ import Kingfisher
 struct DetailImageView: View {
     let item: Item
     let logger: Logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailImageView")
-    let cleanupAction: () -> Void
+    // cleanupAction removed
     let horizontalSizeClass: UserInterfaceSizeClass?
     @Binding var fullscreenImageTarget: FullscreenImageTarget?
 
@@ -45,9 +45,8 @@ struct DetailViewContent: View {
     let totalTagCount: Int
     let showingAllTags: Bool
 
-    // --- MODIFIED: Accept flat comment list ---
-    let flatComments: [FlatCommentDisplayItem] // Changed from 'comments: [DisplayComment]'
-    // --- END MODIFICATION ---
+    let flatComments: [FlatCommentDisplayItem]
+    let totalCommentCount: Int // Receive total count
 
     let infoLoadingStatus: InfoLoadingStatus
     @Binding var previewLinkTarget: PreviewLinkTarget?
@@ -70,7 +69,7 @@ struct DetailViewContent: View {
                     CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler, onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen, horizontalSizeClass: horizontalSizeClass).id(item.id)
                 } else { Rectangle().fill(.black).overlay(ProgressView().tint(.white)) }
             } else {
-                DetailImageView(item: item, cleanupAction: {}, horizontalSizeClass: horizontalSizeClass, fullscreenImageTarget: $fullscreenImageTarget)
+                DetailImageView(item: item, horizontalSizeClass: horizontalSizeClass, fullscreenImageTarget: $fullscreenImageTarget)
             }
         }
     }
@@ -120,9 +119,11 @@ struct DetailViewContent: View {
         var body: some View { Text(displayText).font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.gray.opacity(0.2)).foregroundColor(.primary).clipShape(Capsule()) }
     }
 
+    /// Instantiates CommentsSection, passing the flat list and total count.
     @ViewBuilder private var commentsContent: some View {
-        CommentsSection( // Use the flat list passed down
+        CommentsSection(
             flatComments: flatComments,
+            totalCommentCount: totalCommentCount, // Pass total count
             status: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget
         )
@@ -181,7 +182,7 @@ fileprivate extension UIFont {
     }
 }
 
-// MARK: - Previews (Adapted for flat comments)
+// MARK: - Previews (Adapted for flat comments & totalCommentCount)
 
 @MainActor
 fileprivate func flattenHierarchy(comments: [DisplayComment], previewMaxDepth: Int = 5) -> [FlatCommentDisplayItem] {
@@ -205,6 +206,7 @@ fileprivate func flattenHierarchy(comments: [DisplayComment], previewMaxDepth: I
      let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "TopTag1"), ItemTag(id: 2, confidence: 0.8, tag: "TopTag2"), ItemTag(id: 3, confidence: 0.7, tag: "TopTag3"), ItemTag(id: 4, confidence: 0.6, tag: "beim lesen programmieren gelernt"), ItemTag(id: 5, confidence: 0.5, tag: "OtherTag1"), ItemTag(id: 6, confidence: 0.4, tag: "OtherTag2") ];
      let sampleDisplayComment = DisplayComment(id: 1, comment: ItemComment(id: 1, parent: 0, content: "Kommentar", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), children: [])
      let previewFlatComments = flattenHierarchy(comments: [sampleDisplayComment])
+     let previewTotalCommentCount = previewFlatComments.count
      let previewPlayer: AVPlayer? = nil
      @State var previewLinkTarget: PreviewLinkTarget? = nil
      @State var fullscreenTarget: FullscreenImageTarget? = nil
@@ -217,7 +219,8 @@ fileprivate func flattenHierarchy(comments: [DisplayComment], previewMaxDepth: I
             item: sampleVideoItem, keyboardActionHandler: previewHandler, player: previewPlayer,
             onWillBeginFullScreen: {}, onWillEndFullScreen: {},
             displayedTags: Array(previewTags.prefix(4)), totalTagCount: previewTags.count, showingAllTags: false,
-            flatComments: previewFlatComments, // Pass flat list
+            flatComments: previewFlatComments,
+            totalCommentCount: previewTotalCommentCount, // Pass total count
             infoLoadingStatus: .loaded,
             previewLinkTarget: $previewLinkTarget, fullscreenImageTarget: $fullscreenTarget,
             isFavorited: true, toggleFavoriteAction: {}, showAllTagsAction: {}
