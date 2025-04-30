@@ -5,22 +5,30 @@ import SwiftUI
 import AVKit
 import Combine
 import os
-import Kingfisher
+import Kingfisher // <-- Wieder benötigt
+// import SDWebImageSwiftUI // Wird nicht mehr verwendet
+import UIKit // Für UIFont extension
 
-// MARK: - Subviews
+// MARK: - DetailImageView (Using KFImage with correct modifier order for stable layout)
 @MainActor
 struct DetailImageView: View {
     let item: Item
     let logger: Logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailImageView")
-    // cleanupAction removed
     let horizontalSizeClass: UserInterfaceSizeClass?
     @Binding var fullscreenImageTarget: FullscreenImageTarget?
 
     var body: some View {
         KFImage(item.imageUrl)
+            // KFImage specific modifiers first
             .placeholder { Rectangle().fill(.secondary.opacity(0.1)).overlay(ProgressView()) }
             .onFailure { error in logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)") }
-            .resizable().aspectRatio(contentMode: .fit).background(Color.black)
+            .cancelOnDisappear(true)
+            // Sizing modifiers
+            .resizable()
+            .aspectRatio(contentMode: .fit) // Use ContentMode.fit
+            // General view modifiers last
+            .id(item.id) // Keep ID modifier
+            .background(Color.black)
             .clipped()
             .onTapGesture { if !item.isVideo { logger.info("Image tapped for item \(item.id), setting fullscreen target."); fullscreenImageTarget = FullscreenImageTarget(item: item) } }
             .disabled(item.isVideo)
@@ -28,7 +36,7 @@ struct DetailImageView: View {
 }
 
 
-// InfoLoadingStatus enum
+// InfoLoadingStatus enum (unchanged)
 enum InfoLoadingStatus: Equatable { case idle; case loading; case loaded; case error(String) }
 
 
@@ -69,6 +77,7 @@ struct DetailViewContent: View {
                     CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler, onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen, horizontalSizeClass: horizontalSizeClass).id(item.id)
                 } else { Rectangle().fill(.black).overlay(ProgressView().tint(.white)) }
             } else {
+                // Using DetailImageView with KFImage (layout stable, GIF static)
                 DetailImageView(item: item, horizontalSizeClass: horizontalSizeClass, fullscreenImageTarget: $fullscreenImageTarget)
             }
         }
@@ -108,7 +117,7 @@ struct DetailViewContent: View {
                     } else { Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5) }
                 case .loading: ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .error: Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5) // Placeholder to maintain layout consistency
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -133,16 +142,25 @@ struct DetailViewContent: View {
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
+                 // --- Regular Layout (Side-by-Side) --- (Unchanged)
                 HStack(alignment: .top, spacing: 0) {
-                    GeometryReader { geo in mediaContentInternal.frame(width: geo.size.width, height: geo.size.height) }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    mediaContentInternal
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     Divider()
                     ScrollView { VStack(alignment: .leading, spacing: 15) { infoAndTagsContent.padding([.horizontal, .top]); commentsContent.padding([.horizontal, .bottom]) } }
                     .frame(minWidth: 300, idealWidth: 450, maxWidth: 600).background(Color(.secondarySystemBackground))
                 }
             } else {
+                 // --- Compact Layout (Vertical Stack) --- (Using KFImage, layout should be correct)
                 ScrollView {
                     VStack(spacing: 0) {
-                        GeometryReader { geo in let aspect = guessAspectRatio() ?? 1.0; mediaContentInternal.frame(width: geo.size.width, height: geo.size.width / aspect) }.aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
+                        GeometryReader { geo in
+                            let aspect = guessAspectRatio() ?? 1.0
+                            mediaContentInternal // Contains DetailImageView -> KFImage
+                                .frame(width: geo.size.width, height: geo.size.width / aspect)
+                        }
+                        .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit) // Keep aspectRatio on GeometryReader
+
                         infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
                         commentsContent.padding(.horizontal).padding(.bottom, 10)
                     }
@@ -157,12 +175,12 @@ struct DetailViewContent: View {
 
     // MARK: - Helper Methods
     private func guessAspectRatio() -> CGFloat? {
-        guard item.width > 0, item.height > 0 else { return nil }
+        guard item.width > 0, item.height > 0 else { return 1.0 } // Fallback to 1:1 if data missing
         return CGFloat(item.width) / CGFloat(item.height)
     }
 }
 
-// Helper extension
+// Helper extension (unchanged)
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -182,7 +200,7 @@ fileprivate extension UIFont {
     }
 }
 
-// MARK: - Previews (Adapted for flat comments & totalCommentCount)
+// MARK: - Previews (unchanged)
 
 @MainActor
 fileprivate func flattenHierarchy(comments: [DisplayComment], previewMaxDepth: Int = 5) -> [FlatCommentDisplayItem] {

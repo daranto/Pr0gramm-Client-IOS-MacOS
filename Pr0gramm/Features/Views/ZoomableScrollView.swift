@@ -1,4 +1,4 @@
-// Pr0gramm/Pr0gramm/Features/MediaManagement/ZoomableScrollView.swift
+// Pr0gramm/Pr0gramm/Features/Views/ZoomableScrollView.swift
 // --- START OF COMPLETE FILE ---
 
 import SwiftUI
@@ -48,6 +48,10 @@ struct ZoomableScrollView: UIViewRepresentable {
         // Optional: If the item could change while the view is visible,
         // reload the image here. For a modal sheet, this is less likely.
         // context.coordinator.loadImage(item: item)
+
+        // Ensure minimum zoom scale is updated if the view bounds change (e.g., rotation)
+        context.coordinator.updateMinZoomScaleForSize(uiView.bounds.size)
+        context.coordinator.centerImage() // Re-center after potential bounds change
     }
 
     func makeCoordinator() -> Coordinator {
@@ -73,21 +77,23 @@ struct ZoomableScrollView: UIViewRepresentable {
             return imageView
         }
 
-        /// Called when the zoom level changes. Can be used to center the image.
+        /// Called when the zoom level changes. Used to center the image during/after zoom.
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             centerImage()
         }
 
-        /// Called after the image finishes loading. Configures zoom scale and centers.
-        func imageDidLoad(_ image: UIImage) {
+        /// Called *after* Kingfisher has successfully loaded and set the image on the `imageView`.
+        /// Configures zoom scale and centers the image view.
+        /// **REMOVED** the `image` parameter as Kingfisher handles setting the image directly.
+        func imageDidLoad() {
             guard let imageView = imageView, let scrollView = scrollView else { return }
 
             // Update state on main thread
             DispatchQueue.main.async {
                 self.isLoading = false
                 self.errorMessage = nil
-                imageView.image = image
-                imageView.sizeToFit() // Adjust image view size to the loaded image
+                // imageView.image = image // <-- REMOVED: Kingfisher sets this automatically (static or animated)
+                imageView.sizeToFit() // Adjust image view size based on the image set by Kingfisher
 
                 // Set scroll view content size
                 scrollView.contentSize = imageView.frame.size
@@ -98,7 +104,7 @@ struct ZoomableScrollView: UIViewRepresentable {
 
                 // Center the image initially
                 self.centerImage()
-                print("ZoomableScrollView: Image loaded and initial zoom/centering set.")
+                print("ZoomableScrollView: Image loaded and initial zoom/centering set (via imageDidLoad).")
             }
         }
 
@@ -113,15 +119,26 @@ struct ZoomableScrollView: UIViewRepresentable {
 
         /// Calculates and updates the minimum zoom scale to fit the image within the given size.
         func updateMinZoomScaleForSize(_ size: CGSize) {
-            guard let imageView = imageView, let image = imageView.image, let scrollView = scrollView else { return }
+            guard let imageView = imageView, let image = imageView.image, image.size.width > 0, image.size.height > 0, let scrollView = scrollView else { return }
 
             let widthScale = size.width / image.size.width
             let heightScale = size.height / image.size.height
             let minScale = min(widthScale, heightScale)
 
+            // Check if scales are valid before setting
+             guard minScale.isFinite, minScale > 0 else {
+                  print("ZoomableScrollView: Warning - Invalid minScale calculated (\(minScale)). Skipping zoom scale update.")
+                  return
+             }
+
             scrollView.minimumZoomScale = minScale
-            // Ensure current zoom isn't less than the new minimum
-            scrollView.zoomScale = max(scrollView.zoomScale, minScale)
+            // Ensure current zoom isn't less than the new minimum, only if current zoom is valid
+             if scrollView.zoomScale.isFinite, scrollView.zoomScale > 0 {
+                 scrollView.zoomScale = max(scrollView.zoomScale, minScale)
+             } else {
+                 // If current zoomScale is invalid (e.g., 0), set it to the new minimum
+                 scrollView.zoomScale = minScale
+             }
         }
 
         /// Centers the image view within the scroll view's bounds.
@@ -129,12 +146,20 @@ struct ZoomableScrollView: UIViewRepresentable {
             guard let imageView = imageView, let scrollView = scrollView else { return }
 
             let scrollViewSize = scrollView.bounds.size
+            // Use imageView's frame size which reflects the zoom level
             let imageViewSize = imageView.frame.size
+
+            // Ensure sizes are valid before calculation
+             guard scrollViewSize.width > 0, scrollViewSize.height > 0 else { return }
 
             let horizontalSpace = imageViewSize.width < scrollViewSize.width ? (scrollViewSize.width - imageViewSize.width) / 2 : 0
             let verticalSpace = imageViewSize.height < scrollViewSize.height ? (scrollViewSize.height - imageViewSize.height) / 2 : 0
 
-            scrollView.contentInset = UIEdgeInsets(top: verticalSpace, left: horizontalSpace, bottom: verticalSpace, right: horizontalSpace)
+            // Ensure spaces are non-negative and finite
+             let validHorizontalSpace = max(0, horizontalSpace.isFinite ? horizontalSpace : 0)
+             let validVerticalSpace = max(0, verticalSpace.isFinite ? verticalSpace : 0)
+
+            scrollView.contentInset = UIEdgeInsets(top: validVerticalSpace, left: validHorizontalSpace, bottom: validVerticalSpace, right: validHorizontalSpace)
         }
 
         /// Loads the image using Kingfisher. Prefers fullsize, falls back to image.
@@ -168,8 +193,10 @@ struct ZoomableScrollView: UIViewRepresentable {
             imageView.kf.setImage(with: url, options: [.transition(.fade(0.2))]) { [weak self] result in
                 guard let self = self else { return }
                 switch result {
-                case .success(let value):
-                    self.imageDidLoad(value.image)
+                case .success:
+                    // --- MODIFIED: Call imageDidLoad without passing the image ---
+                    self.imageDidLoad()
+                    // --- END MODIFICATION ---
                 case .failure(let error):
                      // Don't report cancellation errors
                      if !error.isTaskCancelled && !error.isNotCurrentTask {
@@ -186,13 +213,19 @@ struct ZoomableScrollView: UIViewRepresentable {
         /// Handles double-tap gestures to zoom in or reset zoom.
         @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
             guard let scrollView = scrollView else { return }
-            if scrollView.zoomScale > scrollView.minimumZoomScale {
+             // Use a small tolerance to compare zoom scales to avoid floating point issues
+            let tolerance: CGFloat = 0.001
+            if scrollView.zoomScale > scrollView.minimumZoomScale + tolerance {
                 // Zoom out
                 scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
             } else {
                 // Zoom in to a specific point or a fixed scale (e.g., 2x)
-                let zoomRect = zoomRectForScale(scale: scrollView.maximumZoomScale / 2, center: recognizer.location(in: recognizer.view))
-                 scrollView.zoom(to: zoomRect, animated: true)
+                // Calculate a moderate zoom scale, e.g., half way to max zoom
+                let targetScale = max(scrollView.minimumZoomScale * 2.0, min(scrollView.maximumZoomScale, 2.0)) // Zoom to 2x or max/2, whichever is appropriate
+                let zoomRect = zoomRectForScale(scale: targetScale, center: recognizer.location(in: recognizer.view))
+                if zoomRect != .zero { // Ensure zoomRect is valid
+                    scrollView.zoom(to: zoomRect, animated: true)
+                }
                 // Alternative: Zoom to a fixed scale like 2x
                 // scrollView.setZoomScale(2.0, animated: true)
             }
@@ -200,13 +233,45 @@ struct ZoomableScrollView: UIViewRepresentable {
 
         /// Calculates the rectangle to zoom into for a given scale and center point.
         private func zoomRectForScale(scale: CGFloat, center: CGPoint) -> CGRect {
-            guard let imageView = imageView, let scrollView = scrollView else { return CGRect.zero }
+            guard let imageView = imageView, let scrollView = scrollView, scale > 0 else { return CGRect.zero }
+
             var zoomRect = CGRect.zero
+
+            // Ensure imageView has a valid frame size
+            guard imageView.frame.size.width > 0, imageView.frame.size.height > 0 else { return .zero }
+
+            // Calculate the size of the zoom rectangle in the coordinate system of the imageView
+            zoomRect.size.width = imageView.frame.size.width / scale
             zoomRect.size.height = imageView.frame.size.height / scale
-            zoomRect.size.width  = imageView.frame.size.width  / scale
-            let newCenter = imageView.convert(center, from: scrollView)
-            zoomRect.origin.x = newCenter.x - (zoomRect.size.width / 2.0)
-            zoomRect.origin.y = newCenter.y - (zoomRect.size.height / 2.0)
+
+            // Ensure the calculated size is valid
+             guard zoomRect.size.width.isFinite, zoomRect.size.width > 0,
+                   zoomRect.size.height.isFinite, zoomRect.size.height > 0 else { return .zero }
+
+            // Convert the tap location (center) from the scrollView's coordinate system
+            // to the imageView's coordinate system.
+            let centerInImageView = imageView.convert(center, from: scrollView)
+
+            // Calculate the origin of the zoom rectangle
+            zoomRect.origin.x = centerInImageView.x - (zoomRect.size.width / 2.0)
+            zoomRect.origin.y = centerInImageView.y - (zoomRect.size.height / 2.0)
+
+            // Ensure the origin is valid
+             guard zoomRect.origin.x.isFinite, zoomRect.origin.y.isFinite else { return .zero }
+
+
+            // --- Clamp the zoomRect to the bounds of the image ---
+             let imageWidth = imageView.frame.width
+             let imageHeight = imageView.frame.height
+
+             if zoomRect.origin.x < 0 { zoomRect.origin.x = 0 }
+             if zoomRect.origin.y < 0 { zoomRect.origin.y = 0 }
+
+             if zoomRect.maxX > imageWidth { zoomRect.origin.x -= (zoomRect.maxX - imageWidth) }
+             if zoomRect.maxY > imageHeight { zoomRect.origin.y -= (zoomRect.maxY - imageHeight) }
+             // --- End Clamping ---
+
+
             return zoomRect
         }
     }
