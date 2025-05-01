@@ -15,7 +15,9 @@ struct LinkedItemPreviewView: View {
     @Environment(\.dismiss) var dismiss // To close the sheet
 
     @State private var fetchedItem: Item? = nil // Holds the fetched item data
-    @State private var isLoading = true
+    // --- MODIFIED: Initialize isLoading to false, it will be set true during load ---
+    @State private var isLoading = false
+    // --- END MODIFICATION ---
     @State private var errorMessage: String? = nil
 
     // --- ADD PlayerManager StateObject for the preview ---
@@ -62,8 +64,12 @@ struct LinkedItemPreviewView: View {
                 )
                 // Environment objects (settings, authService) are passed down automatically
             } else {
-                // Fallback if not loading, no error, but no item (should ideally not happen)
-                ContentUnavailableView("Inhalt nicht verfügbar", systemImage: "questionmark.diamond")
+                // Fallback if not loading, no error, but no item (initial state or unexpected issue)
+                 // Changed text for clarity during initial state before task runs
+                 Text("Vorschau wird vorbereitet...")
+                     .foregroundColor(.secondary)
+                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+//                ContentUnavailableView("Inhalt nicht verfügbar", systemImage: "questionmark.diamond")
             }
         }
         .task { // Use .task for automatic loading AND manager configuration
@@ -78,22 +84,24 @@ struct LinkedItemPreviewView: View {
     // MARK: - Data Loading
     /// Fetches the item data from the API using the provided `itemID`.
     private func loadItem() async {
-        // Avoid redundant fetches if already loaded or currently loading
-        // Reset loading state only if not already loading
-        if isLoading { return }
-        if fetchedItem != nil {
-            // If item is already fetched, ensure loading is false and return
-            await MainActor.run { isLoading = false }
+        // --- MODIFICATION: Removed initial isLoading check, added check for existing fetched item ---
+        // Prevent re-fetch if already loaded successfully or if a load is currently in progress
+        if fetchedItem != nil || isLoading {
+            // If item is fetched OR a load is already running, do nothing.
+            // (If it was already fetched, isLoading should be false, but check both for safety)
+            LinkedItemPreviewView.logger.trace("loadItem skipped: Already loaded (\(fetchedItem != nil)) or already loading (\(isLoading)).")
              return
         }
+        // --- END MODIFICATION ---
 
-        // Reset state before loading
+        // Reset state and indicate loading
         await MainActor.run {
-            isLoading = true
+            isLoading = true // Set loading true HERE, before the fetch
             errorMessage = nil
         }
         LinkedItemPreviewView.logger.info("Fetching preview item with ID: \(itemID)") // Use explicit type name
 
+        // --- REST OF THE FUNCTION REMAINS THE SAME ---
         do {
             // Use the user's current content filters for the API request
             let currentFlags = settings.apiFlags
@@ -108,6 +116,7 @@ struct LinkedItemPreviewView: View {
                     self.errorMessage = "Post konnte nicht gefunden werden oder entspricht nicht deinen Filtern."
                     LinkedItemPreviewView.logger.warning("Could not fetch preview item \(itemID). API returned nil or filter mismatch.") // Use explicit type name
                 }
+                // Set isLoading false AFTER processing the result
                 isLoading = false
             }
         } catch let error as URLError where error.code == .userAuthenticationRequired {
@@ -115,6 +124,7 @@ struct LinkedItemPreviewView: View {
              LinkedItemPreviewView.logger.error("Failed to fetch preview item \(itemID): Authentication required.") // Use explicit type name
              await MainActor.run {
                  self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."
+                 // Set isLoading false AFTER processing the error
                  isLoading = false
              }
         } catch {
@@ -122,9 +132,11 @@ struct LinkedItemPreviewView: View {
             LinkedItemPreviewView.logger.error("Failed to fetch preview item \(itemID): \(error.localizedDescription)") // Use explicit type name
             await MainActor.run {
                 self.errorMessage = "Netzwerkfehler: \(error.localizedDescription)"
-                isLoading = false
+                 // Set isLoading false AFTER processing the error
+                 isLoading = false
             }
         }
+        // --- END OF UNCHANGED PART ---
     }
 }
 

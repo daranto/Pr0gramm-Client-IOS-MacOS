@@ -6,14 +6,23 @@ import os
 import AVKit
 
 /// Wrapper struct used to identify the item to be shown in the link preview sheet.
-struct PreviewLinkTarget: Identifiable {
+// --- MODIFIED: Add Equatable conformance ---
+struct PreviewLinkTarget: Identifiable, Equatable {
+// --- END MODIFICATION ---
     let id: Int // The item ID to preview
 }
 
 /// Wrapper struct for fullscreen image sheet
-struct FullscreenImageTarget: Identifiable {
+// --- MODIFIED: Add Equatable conformance (using item.id) ---
+struct FullscreenImageTarget: Identifiable, Equatable {
+// --- END MODIFICATION ---
     let item: Item
     var id: Int { item.id } // Use item ID for Identifiable conformance
+
+    // Explicitly define == for Equatable conformance based on the item's ID
+    static func == (lhs: FullscreenImageTarget, rhs: FullscreenImageTarget) -> Bool {
+        lhs.item.id == rhs.item.id
+    }
 }
 
 // MARK: - Cache Structure for Item Details
@@ -126,6 +135,15 @@ struct PagedDetailView: View {
              LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
                  .environmentObject(settings).environmentObject(authService)
         }
+        // --- onChange now works because PreviewLinkTarget is Equatable ---
+        .onChange(of: previewLinkTarget) { oldValue, newValue in
+            if newValue != nil {
+                // Sheet is about to be presented (or target changed)
+                PagedDetailView.logger.info("Link preview requested for item ID \(newValue!.id). Pausing current video (if playing).")
+                playerManager.player?.pause()
+            }
+        }
+        // --- END FIX ---
         .sheet(item: $fullscreenImageTarget) { targetWrapper in
              FullscreenImageView(item: targetWrapper.item)
         }
@@ -151,7 +169,7 @@ struct PagedDetailView: View {
         .onChange(of: scenePhase) { oldPhase, newPhase in
              handleScenePhaseChange(oldPhase: oldPhase, newPhase: newPhase)
         }
-        .onChange(of: settings.commentSortOrder) { newOrder in
+        .onChange(of: settings.commentSortOrder) { oldOrder, newOrder in
              handleSortOrderChange(newOrder: newOrder)
         }
         // No longer reacting to hideSeenItems change *within* this view
@@ -358,9 +376,14 @@ struct PagedDetailView: View {
                   player.play()
               }
          } else if newPhase == .inactive || newPhase == .background {
-             if !isFullscreen, let player = playerManager.player, player.timeControlStatus == .playing {
+             // --- MODIFICATION: Also pause if link preview is visible ---
+             if (!isFullscreen && previewLinkTarget == nil), let player = playerManager.player, player.timeControlStatus == .playing {
+                 Self.logger.debug("Scene became inactive/background. Pausing player (not fullscreen, no link preview).")
                  player.pause()
+             } else {
+                 Self.logger.debug("Scene became inactive/background. NOT pausing player (is fullscreen or link preview is active).")
              }
+             // --- END MODIFICATION ---
          }
     }
 
@@ -382,9 +405,14 @@ struct PagedDetailView: View {
          if selectedIndex >= 0 && selectedIndex < items.count, items[selectedIndex].isVideo, items[selectedIndex].id == playerManager.playerItemID {
              Task { @MainActor in
                  try? await Task.sleep(for: .milliseconds(100))
-                 if !self.isFullscreen && self.playerManager.player?.timeControlStatus != .playing {
+                 // --- MODIFICATION: Check previewLinkTarget before resuming ---
+                 if !self.isFullscreen && self.previewLinkTarget == nil && self.playerManager.player?.timeControlStatus != .playing {
+                     Self.logger.debug("Resuming player after ending fullscreen (preview not active).")
                      self.playerManager.player?.play()
+                 } else {
+                     Self.logger.debug("NOT resuming player after ending fullscreen (preview is active or player already playing).")
                  }
+                 // --- END MODIFICATION ---
              }
          }
     }
@@ -437,8 +465,6 @@ struct PagedDetailView: View {
         isTogglingFavorite = false
     }
 }
-
-// MARK: - Global Helper Functions REMOVED (No longer needed for navigation)
 
 // MARK: - Wrapper View (Corrected Definition)
 struct LinkedItemPreviewWrapperView: View {
