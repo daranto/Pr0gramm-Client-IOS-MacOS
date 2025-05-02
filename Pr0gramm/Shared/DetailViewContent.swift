@@ -5,9 +5,8 @@ import SwiftUI
 import AVKit
 import Combine
 import os
-import Kingfisher // <-- Wieder benötigt
-// import SDWebImageSwiftUI // Wird nicht mehr verwendet
-import UIKit // Für UIFont extension
+import Kingfisher
+import UIKit // <-- Import UIKit for UIPasteboard
 
 // MARK: - DetailImageView (Using KFImage with correct modifier order for stable layout)
 @MainActor
@@ -68,6 +67,7 @@ struct DetailViewContent: View {
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
     @State private var isProcessingFavorite = false
+    @State private var showingShareOptions = false // <-- State for share dialog
 
     // MARK: - Computed View Properties
     @ViewBuilder private var mediaContentInternal: some View {
@@ -97,11 +97,39 @@ struct DetailViewContent: View {
         label: { Image(systemName: isFavorited ? "heart.fill" : "heart").imageScale(.large).foregroundColor(isFavorited ? .pink : .secondary).frame(width: 44, height: 44).contentShape(Rectangle()) }
         .buttonStyle(.plain).disabled(isProcessingFavorite || !authService.isLoggedIn)
     }
+
+    // --- NEW: Share Button ---
+    @ViewBuilder private var shareButton: some View {
+        Button { showingShareOptions = true } // Trigger the dialog
+        label: {
+            Image(systemName: "square.and.arrow.up")
+                .imageScale(.large)
+                .foregroundColor(.secondary) // Consistent styling with favorite button
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // Disable sharing if item data isn't fully loaded? (Optional, maybe not needed)
+        // .disabled(item.imageUrl == nil)
+    }
+    // --- END NEW ---
+
+
     @ViewBuilder private var infoAndTagsContent: some View {
         HStack(alignment: .top, spacing: 15) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 15) { voteCounterView; if authService.isLoggedIn { favoriteButton.padding(.top, 5) }; Spacer() }
-            }.fixedSize(horizontal: true, vertical: false)
+                // HStack for votes and action buttons
+                HStack(alignment: .firstTextBaseline, spacing: 8) { // Reduced spacing a bit
+                    voteCounterView
+                    // --- MODIFIED: Add Share Button ---
+                    if authService.isLoggedIn { favoriteButton.padding(.top, 5) }
+                    shareButton.padding(.top, 5) // Add share button
+                    // --- END MODIFICATION ---
+                    Spacer()
+                }
+            }.fixedSize(horizontal: true, vertical: false) // Keep vote section fixed size
+
+            // Tag section (flexible width)
             Group {
                 switch infoLoadingStatus {
                 case .loaded:
@@ -119,7 +147,7 @@ struct DetailViewContent: View {
                 case .error: Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5) // Placeholder to maintain layout consistency
                 }
-            }.frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(maxWidth: .infinity, alignment: .leading) // Allow tags to take remaining space
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
     struct TagView: View {
@@ -151,7 +179,7 @@ struct DetailViewContent: View {
                     .frame(minWidth: 300, idealWidth: 450, maxWidth: 600).background(Color(.secondarySystemBackground))
                 }
             } else {
-                 // --- Compact Layout (Vertical Stack) --- (Using KFImage, layout should be correct)
+                 // --- Compact Layout (Vertical Stack) --- (Layout should be correct)
                 ScrollView {
                     VStack(spacing: 0) {
                         GeometryReader { geo in
@@ -170,6 +198,32 @@ struct DetailViewContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
         .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
+        // --- NEW: Confirmation Dialog for Sharing ---
+        .confirmationDialog(
+            "Link kopieren",
+            isPresented: $showingShareOptions,
+            titleVisibility: .visible
+        ) {
+            Button("Post-Link (pr0gramm.com)") {
+                let urlString = "https://pr0gramm.com/new/\(item.id)"
+                UIPasteboard.general.string = urlString
+                Self.logger.info("Copied Post-Link to clipboard: \(urlString)")
+            }
+            Button("Direkter Medien-Link") {
+                if let urlString = item.imageUrl?.absoluteString {
+                    UIPasteboard.general.string = urlString
+                    Self.logger.info("Copied Media-Link to clipboard: \(urlString)")
+                } else {
+                    Self.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)")
+                    // Optionally show an error to the user here
+                }
+            }
+            // Cancel button is added automatically on iOS
+            // Button("Abbrechen", role: .cancel) { }
+        } message: {
+             Text("Welchen Link möchtest du in die Zwischenablage kopieren?")
+        }
+        // --- END NEW ---
     }
 
 
