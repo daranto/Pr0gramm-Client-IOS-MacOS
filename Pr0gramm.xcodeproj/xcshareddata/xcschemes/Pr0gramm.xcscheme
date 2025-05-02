@@ -79,7 +79,7 @@
             ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
             <ActionContent
                title = "Run Script"
-               scriptText = ".xcodecloud/scripts/generate_what_to_test.sh&#10;">
+               scriptText = "#!/bin/bash&#10;&#10;# Sicherstellen, dass wir im Projektverzeichnis sind&#10;cd &quot;$CI_WORKSPACE&quot; || exit 1&#10;&#10;# Letzte Commit-Message holen&#10;commit_msg=$(git log -1 --pretty=%B)&#10;&#10;# Datei schreiben&#10;echo &quot;$commit_msg&quot; &gt; what_to_test.txt&#10;&#10;echo &quot;&#x2705; what_to_test.txt erstellt mit Inhalt:&quot;&#10;echo &quot;$commit_msg&quot;&#10;">
             </ActionContent>
          </ExecutionAction>
       </PreActions>
