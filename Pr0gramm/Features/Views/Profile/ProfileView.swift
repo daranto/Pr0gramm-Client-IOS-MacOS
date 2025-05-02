@@ -105,6 +105,34 @@ struct ProfileView: View {
         }
         .headerProminence(.increased) // Make section header slightly more prominent
 
+        // --- NEW SECTION for pr0mium Link ---
+        Section("pr0gramm unterstützen") {
+            VStack(alignment: .leading, spacing: 8) {
+                 // The descriptive text
+                 Text("Wenn dir die App und pr0gramm gefallen, ziehe in Erwägung, die Plattform zu unterstützen. Diese App enthält keine Werbung und ist kostenlos.")
+                     .font(UIConstants.footnoteFont) // Use adaptive footnote font
+                     .foregroundColor(.secondary)
+                     .padding(.bottom, 5) // Add some space below the text
+
+                 // The Link view
+                 if let url = URL(string: "https://pr0mart.com/Nach-Kategorien/Sonstiges/pr0mium/") {
+                     Link(destination: url) {
+                         HStack {
+                             Text("pr0mium über pr0mart erwerben")
+                                .font(UIConstants.bodyFont) // Use adaptive body font
+                                .foregroundColor(.accentColor) // Standard link color
+                             Spacer()
+                             Image(systemName: "arrow.up.right.square") // Indicate external link
+                                .foregroundColor(.secondary)
+                         }
+                     }
+                 }
+            }
+        }
+        .headerProminence(.increased) // Make section header slightly more prominent
+        // --- END NEW SECTION ---
+
+
         Section {
              // Logout button
              Button("Logout", role: .destructive) {
