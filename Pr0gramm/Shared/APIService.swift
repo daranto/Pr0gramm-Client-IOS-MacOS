@@ -150,14 +150,41 @@ class APIService {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
         var queryItems = [ URLQueryItem(name: "flags", value: String(flags)) ]
         var logDescription = "flags=\(flags)"
-        if let user = user { queryItems.append(URLQueryItem(name: "user", value: user)); logDescription += ", user=\(user)" }
-        else if let tags = tags { queryItems.append(URLQueryItem(name: "tags", value: tags)); queryItems.append(URLQueryItem(name: "promoted", value: "0")); logDescription += ", tags='\(tags)', promoted=0" }
-        else if let promoted = promoted { queryItems.append(URLQueryItem(name: "promoted", value: String(promoted))); logDescription += ", promoted=\(promoted)" }
-        if let olderId = olderThanId { queryItems.append(URLQueryItem(name: "older", value: String(olderId))); logDescription += ", older=\(olderId)" }
-        urlComponents.queryItems = queryItems; guard let url = urlComponents.url else { throw URLError(.badURL) }
-        let request = URLRequest(url: url); Self.logger.info("Fetching items from \(endpoint) with params: [\(logDescription)]")
-        do { let (data, response) = try await URLSession.shared.data(for: request); let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "\(endpoint) (\(logDescription))"); Self.logger.info("API fetch completed for [\(logDescription)]: \(apiResponse.items.count) items received. atEnd: \(apiResponse.atEnd ?? false)"); return apiResponse.items }
-        catch { Self.logger.error("Error during \(endpoint) (\(logDescription)): \(error.localizedDescription)"); throw error }
+
+        if let user = user {
+            queryItems.append(URLQueryItem(name: "user", value: user))
+            logDescription += ", user=\(user)"
+        }
+        if let tags = tags {
+            queryItems.append(URLQueryItem(name: "tags", value: tags))
+            logDescription += ", tags='\(tags)'"
+        }
+        // --- MODIFIED: Add 'promoted' parameter if provided, EVEN if user or tags are present ---
+        // According to user request, 'promoted' should now be included alongside 'tags' if desired.
+        if let promoted = promoted {
+            queryItems.append(URLQueryItem(name: "promoted", value: String(promoted)))
+            logDescription += ", promoted=\(promoted)"
+        }
+        // --- END MODIFICATION ---
+        if let olderId = olderThanId {
+            queryItems.append(URLQueryItem(name: "older", value: String(olderId)))
+            logDescription += ", older=\(olderId)"
+        }
+
+        urlComponents.queryItems = queryItems
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        let request = URLRequest(url: url)
+        Self.logger.info("Fetching items from \(endpoint) with params: [\(logDescription)]")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "\(endpoint) (\(logDescription))")
+            Self.logger.info("API fetch completed for [\(logDescription)]: \(apiResponse.items.count) items received. atEnd: \(apiResponse.atEnd ?? false)")
+            return apiResponse.items
+        }
+        catch {
+            Self.logger.error("Error during \(endpoint) (\(logDescription)): \(error.localizedDescription)")
+            throw error
+        }
     }
 
     func fetchItem(id: Int, flags: Int) async throws -> Item? {
@@ -177,7 +204,7 @@ class APIService {
         catch { Self.logger.error("Error during /items/get (favorites) for user \(username): \(error.localizedDescription)"); if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { Self.logger.warning("Fetching favorites failed: User authentication required.") }; throw error }
     }
 
-    @available(*, deprecated, message: "Use fetchItems(tags:flags:olderThanId:) instead")
+    @available(*, deprecated, message: "Use fetchItems(tags:flags:promoted:olderThanId:) instead")
     func searchItems(tags: String, flags: Int) async throws -> [Item] { return try await fetchItems(flags: flags, tags: tags) }
 
     func fetchItemInfo(itemId: Int) async throws -> ItemsInfoResponse {
@@ -213,9 +240,7 @@ class APIService {
     func getProfileInfo(username: String, flags: Int = 31) async throws -> ProfileInfoResponse {
         let endpoint = "/profile/info"; guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
         urlComponents.queryItems = [ URLQueryItem(name: "name", value: username), URLQueryItem(name: "flags", value: String(flags)) ]; guard let url = urlComponents.url else { throw URLError(.badURL) }
-        // --- CORRECTED: Use let ---
-        let request = URLRequest(url: url)
-        // --- END CORRECTION ---
+        let request = URLRequest(url: url) // Use let
         Self.logger.info("Fetching profile info for user: \(username) with flags \(flags)")
         do { let (data, response) = try await URLSession.shared.data(for: request); let profileInfoResponse: ProfileInfoResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint); Self.logger.info("Successfully fetched profile info for: \(profileInfoResponse.user.name) (Badges found: \(profileInfoResponse.badges?.count ?? 0))"); return profileInfoResponse }
         catch { if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { Self.logger.warning("Fetching profile info failed for \(username): Session likely invalid.") } else if error is DecodingError { Self.logger.error("Failed to decode /profile/info response for \(username): \(error.localizedDescription)") } else { Self.logger.error("Error during \(endpoint) for \(username): \(error.localizedDescription)") }; throw error }

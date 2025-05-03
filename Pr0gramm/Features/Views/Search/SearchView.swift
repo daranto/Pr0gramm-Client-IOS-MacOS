@@ -6,9 +6,10 @@ import os
 
 /// View responsible for searching items based on tags entered by the user.
 /// Displays results in a grid and allows navigation to the detail view.
-/// Also handles programmatic search requests initiated from other views (e.g., tapping a tag).
+/// Includes a local toggle to search in "New" or "Promoted" items and a button to adjust content filters.
 struct SearchView: View {
-    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var settings: AppSettings // Needed for content flags (apiFlags) and filter sheet
+    @EnvironmentObject var authService: AuthService // Needed for filter sheet
     @EnvironmentObject var navigationService: NavigationService
     @State private var searchText = ""
     @State private var items: [Item] = []
@@ -17,6 +18,9 @@ struct SearchView: View {
     @State private var hasSearched = false
     @State private var navigationPath = NavigationPath()
     @State private var didPerformInitialPendingSearch = false
+
+    @State private var searchFeedType: FeedType = .promoted // Default to searching 'Promoted'
+    @State private var showingFilterSheet = false
 
     @StateObject private var playerManager = VideoPlayerManager()
 
@@ -32,7 +36,29 @@ struct SearchView: View {
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            searchContentView // Use extracted view
+            VStack(spacing: 0) {
+                HStack {
+                    Picker("Suche in", selection: $searchFeedType) {
+                        ForEach(FeedType.allCases) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Spacer(minLength: 15)
+
+                    Button { showingFilterSheet = true } label: {
+                        Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .labelStyle(.iconOnly)
+                    .padding(.leading, -5)
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+
+                searchContentView // The main content (grid, messages, etc.)
+            }
             .navigationTitle("Suche")
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Tags suchen...")
             .onSubmit(of: .search) { Task { await performSearch() } }
@@ -43,29 +69,33 @@ struct SearchView: View {
              }
             .onAppear { if !didPerformInitialPendingSearch, let tagToSearch = navigationService.pendingSearchTag, !tagToSearch.isEmpty { SearchView.logger.info("SearchView appeared with pending tag: '\(tagToSearch)'"); processPendingTag(tagToSearch); didPerformInitialPendingSearch = true } }
             .task { playerManager.configure(settings: settings) }
+            .sheet(isPresented: $showingFilterSheet) {
+                 FilterView(hideFeedOptions: true) // Pass parameter here
+                     .environmentObject(settings)
+                     .environmentObject(authService)
+             }
             .onChange(of: navigationService.pendingSearchTag) { _, newTag in if let tagToSearch = newTag, !tagToSearch.isEmpty { SearchView.logger.info("Received pending search tag via onChange: '\(tagToSearch)'"); processPendingTag(tagToSearch); didPerformInitialPendingSearch = true } }
-            // --- Line 48 Area ---
-            // This modifier reacts to changes in the @State variable `searchText`.
-            // SwiftUI ensures that the closure provided to .onChange runs on the main actor
-            // because it directly relates to UI state updates.
             .onChange(of: searchText) { oldValue, newValue in
-                // Therefore, modifying other @State variables (`items`, `hasSearched`, etc.)
-                // within this closure is synchronous and safe on the main actor.
-                // No 'await' is needed or allowed here unless you explicitly start a new Task.
                 if hasSearched && newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isLoading {
-                    items = [] // Synchronous State update
-                    hasSearched = false // Synchronous State update
-                    errorMessage = nil // Synchronous State update
-                    didPerformInitialPendingSearch = false // Synchronous State update
+                    items = []
+                    hasSearched = false
+                    errorMessage = nil
+                    didPerformInitialPendingSearch = false
                 }
             }
-            // --- End Line 48 Area ---
             .onDisappear { didPerformInitialPendingSearch = false }
             .onChange(of: settings.seenItemIDs) { _, _ in SearchView.logger.trace("SearchView detected change in seenItemIDs, body will update.") }
+            .onChange(of: searchFeedType) { _, _ in
+                 if hasSearched && !isLoading {
+                      SearchView.logger.info("Local searchFeedType changed, re-running search for '\(searchText)'")
+                      Task { await performSearch() }
+                 }
+            }
+            // Removed onChange modifiers for global settings from previous attempt
         }
     }
 
-    // MARK: - Extracted Content View (Unchanged)
+    // MARK: - Extracted Content View
     @ViewBuilder private var searchContentView: some View {
         if isLoading {
             ProgressView("Suche läuft...")
@@ -81,14 +111,14 @@ struct SearchView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if items.isEmpty {
              ContentUnavailableView { Label("Keine Ergebnisse", systemImage: "magnifyingglass").font(UIConstants.headlineFont) }
-             description: { Text("Keine Posts für '\(searchText)' gefunden.").font(UIConstants.bodyFont) }
+             description: { Text("Keine Posts für '\(searchText)' gefunden (\(searchFeedType.displayName)).").font(UIConstants.bodyFont) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            searchResultsGrid
+            searchResultsGrid // The ScrollView with the LazyVGrid
         }
     }
 
-    // MARK: - ScrollView/Grid (Unchanged)
+    // MARK: - ScrollView/Grid
     private var searchResultsGrid: some View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 3) {
@@ -100,7 +130,7 @@ struct SearchView: View {
         }
     }
 
-    // MARK: - Helper Methods (Unchanged)
+    // MARK: - Helper Methods
     private func processPendingTag(_ tagToSearch: String) {
         self.searchText = tagToSearch;
         Task {
@@ -113,33 +143,56 @@ struct SearchView: View {
 
     private func performSearch() async {
         let trimmedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines);
-        guard !trimmedSearchText.isEmpty else { SearchView.logger.info("Search skipped: search text is empty.");
-            items = []; hasSearched = false; errorMessage = nil; isLoading = false; didPerformInitialPendingSearch = false; return
+        guard !trimmedSearchText.isEmpty else {
+            SearchView.logger.info("Search skipped: search text is empty.");
+            await MainActor.run { items = []; hasSearched = false; errorMessage = nil; isLoading = false; didPerformInitialPendingSearch = false; }
+            return
         }
-        SearchView.logger.info("Performing search for tags: '\(trimmedSearchText)'");
-        isLoading = true; errorMessage = nil; items = []; hasSearched = true;
+        // Read current flags directly from settings here
+        let currentFlags = settings.apiFlags
+        SearchView.logger.info("Performing search for tags: '\(trimmedSearchText)' (FeedType: \(searchFeedType.displayName), Flags: \(currentFlags))");
+        await MainActor.run { isLoading = true; errorMessage = nil; items = []; hasSearched = true; }
         defer { Task { @MainActor in self.isLoading = false } }
+
         do {
-            let fetchedItems = try await apiService.fetchItems(flags: settings.apiFlags, tags: trimmedSearchText)
-            let currentSearchText = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fetchedItems = try await apiService.fetchItems(
+                flags: currentFlags, // Use current flags
+                promoted: searchFeedType.rawValue,
+                tags: trimmedSearchText
+            )
+
+            let currentSearchText = await MainActor.run { self.searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
             if currentSearchText == trimmedSearchText {
-                self.items = fetchedItems
-                SearchView.logger.info("Search successful, found \(fetchedItems.count) items for '\(trimmedSearchText)'.")
+                await MainActor.run {
+                    self.items = fetchedItems
+                    SearchView.logger.info("Search successful, found \(fetchedItems.count) items for '\(trimmedSearchText)' (FeedType: \(searchFeedType.displayName)).")
+                }
+            } else {
+                SearchView.logger.info("Search results for '\(trimmedSearchText)' discarded, search text changed to '\(currentSearchText)' during fetch.")
             }
-            else { SearchView.logger.info("Search results for '\(trimmedSearchText)' discarded, search text changed to '\(currentSearchText)' during fetch.") }
-        }
-        catch {
+        } catch {
             SearchView.logger.error("Search failed for tags '\(trimmedSearchText)': \(error.localizedDescription)");
-            let currentSearchText = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let currentSearchText = await MainActor.run { self.searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
             if currentSearchText == trimmedSearchText {
-                self.errorMessage = "Fehler: \(error.localizedDescription)";
-                self.items = []
+                await MainActor.run {
+                    self.errorMessage = "Fehler: \(error.localizedDescription)";
+                    self.items = []
+                }
+            } else {
+                SearchView.logger.info("Search error for '\(trimmedSearchText)' discarded, search text changed to '\(currentSearchText)' during fetch.")
             }
-            else { SearchView.logger.info("Search error for '\(trimmedSearchText)' discarded, search text changed to '\(currentSearchText)' during fetch.") }
         }
     }
 }
 
-// MARK: - Preview (Unchanged)
-#Preview { let settings = AppSettings(); let authService = AuthService(appSettings: settings); let navigationService = NavigationService(); return SearchView().environmentObject(settings).environmentObject(authService).environmentObject(navigationService) }
+// MARK: - Preview
+#Preview {
+    let settings = AppSettings();
+    let authService = AuthService(appSettings: settings);
+    let navigationService = NavigationService();
+    return SearchView()
+        .environmentObject(settings)
+        .environmentObject(authService)
+        .environmentObject(navigationService)
+}
 // --- END OF COMPLETE FILE ---

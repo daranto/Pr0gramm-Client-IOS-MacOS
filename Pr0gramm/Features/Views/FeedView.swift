@@ -44,18 +44,11 @@ struct FeedView: View {
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "FeedView")
 
-    // --- CORRECTED: Computed property for adaptive columns ---
     private var gridColumns: [GridItem] {
-        // Use ProcessInfo to detect if the iPad app is running ON macOS
         let isRunningOnMac = ProcessInfo.processInfo.isiOSAppOnMac
-        // Deutlich größere Mindestbreite auf dem Mac -> weniger Spalten
-        // Passe den Wert 160 ggf. an, bis es für dich passt.
         let minWidth: CGFloat = isRunningOnMac ? 250 : 100
-        // Optional: Loggen zum Debuggen
-        // FeedView.logger.debug("Grid setup: isRunningOnMac=\(isRunningOnMac), minWidth=\(minWidth)")
         return [GridItem(.adaptive(minimum: minWidth), spacing: 3)]
     }
-    // --- END CORRECTION ---
 
     private var feedCacheKey: String { "feed_\(settings.feedType == .new ? "new" : "promoted")" }
 
@@ -84,20 +77,39 @@ struct FeedView: View {
             .onChange(of: settings.showNSFL) { triggerRefreshTask() }
             .onChange(of: settings.showNSFP) { triggerRefreshTask() }
             .onChange(of: settings.showPOL) { triggerRefreshTask() }
-            .task { playerManager.configure(settings: settings); triggerRefreshTask() }
+            // --- MODIFIED: Add delay to initial task ---
+            .task {
+                 FeedView.logger.debug("FeedView task started, configuring player.")
+                 playerManager.configure(settings: settings)
+                 FeedView.logger.debug("FeedView task: Waiting briefly before triggering initial refresh.")
+                 // Wait for a short period (e.g., 300 milliseconds) before starting the feed load
+                 // Adjust the duration if needed
+                 try? await Task.sleep(for: .milliseconds(300))
+                 // Check if the task was cancelled during sleep
+                 guard !Task.isCancelled else {
+                     FeedView.logger.info("FeedView initial task cancelled during sleep.")
+                     return
+                 }
+                 FeedView.logger.debug("FeedView task: Delay finished, triggering refresh task.")
+                 triggerRefreshTask()
+             }
+             // --- END MODIFICATION ---
             .onDisappear { refreshTask?.cancel(); FeedView.logger.debug("FeedView disappeared, cancelling refresh task if active.") }
             .onChange(of: popToRootTrigger) { if !navigationPath.isEmpty { navigationPath = NavigationPath() } }
             .onChange(of: settings.seenItemIDs) { _, _ in FeedView.logger.trace("FeedView detected change in seenItemIDs, body will update.") }
-            .onChange(of: settings.hideSeenItems) { _, _ in FeedView.logger.trace("FeedView detected change in hideSeenItems, body will update.") }
+            .onChange(of: settings.hideSeenItems) { _, _ in triggerRefreshTask() } // Refresh if hideSeenItems changes
         }
     }
 
-    private func triggerRefreshTask() { /* Unverändert */
+    // --- MODIFIED: Update onChange(of: settings.hideSeenItems) in body ---
+    // It now calls triggerRefreshTask() directly
+
+    private func triggerRefreshTask() {
         refreshTask?.cancel(); FeedView.logger.debug("Cancelling previous refresh task (if any).")
         refreshTask = Task { await refreshItems() }; FeedView.logger.debug("Scheduled new refresh task.")
     }
 
-    @ViewBuilder private var feedContentView: some View { /* Unverändert */
+    @ViewBuilder private var feedContentView: some View {
         if showNoFilterMessage { noFilterContentView }
         else if isLoading && displayedItems.isEmpty { ProgressView("Lade...").frame(maxWidth: .infinity, maxHeight: .infinity) }
         else if displayedItems.isEmpty && !isLoading && errorMessage == nil && !showNoFilterMessage {
@@ -107,7 +119,6 @@ struct FeedView: View {
     }
     private var scrollViewContent: some View {
         ScrollView {
-            // Use computed gridColumns
             LazyVGrid(columns: gridColumns, spacing: 3) {
                 ForEach(displayedItems) { item in
                     NavigationLink(value: item) { FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id)) }.buttonStyle(.plain)
@@ -121,7 +132,7 @@ struct FeedView: View {
         }
         .refreshable { await refreshItems() }
     }
-    @ViewBuilder private var noFilterContentView: some View { /* Unverändert */
+    @ViewBuilder private var noFilterContentView: some View {
         VStack {
              Spacer(); Image(systemName: "line.3.horizontal.decrease.circle").font(.largeTitle).foregroundColor(.secondary).padding(.bottom, 5)
              Text("Keine Inhalte ausgewählt").font(UIConstants.headlineFont); Text("Bitte passe deine Filter an, um Inhalte zu sehen.").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
@@ -130,25 +141,56 @@ struct FeedView: View {
     }
 
     // MARK: - Data Loading Methods (refreshItems, getIdForLoadMore, loadMoreItems bleiben unverändert)
-    func refreshItems() async { /* ... unveränderter Code ... */
+    func refreshItems() async {
         FeedView.logger.info("RefreshItems Task started.")
         guard !Task.isCancelled else { FeedView.logger.info("RefreshItems Task cancelled before starting."); return }
         guard settings.hasActiveContentFilter else { FeedView.logger.warning("Refresh blocked: No active content filter selected."); await MainActor.run { if !self.showNoFilterMessage || !self.items.isEmpty { self.items = []; self.showNoFilterMessage = true; self.canLoadMore = false; self.isLoadingMore = false; self.errorMessage = nil; FeedView.logger.debug("Cleared items and set showNoFilterMessage.") } }; return }
         guard let currentCacheKey = Optional(self.feedCacheKey) else { FeedView.logger.error("Cannot refresh: Cache key generation failed."); await MainActor.run { self.errorMessage = "Interner Cache-Fehler." }; return }
-        var showLoadingIndicator = true; Task { @MainActor in try? await Task.sleep(for: .milliseconds(250)); if showLoadingIndicator { self.isLoading = true } }
-        await MainActor.run { if self.showNoFilterMessage { self.showNoFilterMessage = false }; self.errorMessage = nil }; canLoadMore = true; isLoadingMore = false
-        defer { Task { @MainActor in self.isLoading = false; showLoadingIndicator = false; FeedView.logger.info("Finishing refresh process (isLoading set to false via defer).") } }
+
+        // Use a local variable to manage the showing of the loading indicator
+        // It ensures that the indicator is only shown if the refresh takes a noticeable amount of time
+        var showLoadingIndicatorTask: Task<Void, Never>? = Task { @MainActor in
+             try? await Task.sleep(for: .milliseconds(250)) // Wait 250ms
+             // Only set isLoading to true if the refresh is still ongoing after the delay
+             if !Task.isCancelled {
+                 self.isLoading = true
+                 FeedView.logger.debug("Setting isLoading = true after delay.")
+             } else {
+                  FeedView.logger.debug("isLoading indicator task cancelled before setting true.")
+             }
+        }
+
+        // Initial UI updates on the MainActor
+        await MainActor.run {
+            if self.showNoFilterMessage { self.showNoFilterMessage = false };
+            self.errorMessage = nil
+            // Don't set isLoading=true immediately, let the delayed task handle it
+        }
+        canLoadMore = true; isLoadingMore = false
+
+        // Defer block to ensure cleanup happens, including cancelling the indicator task and resetting isLoading
+        defer {
+             showLoadingIndicatorTask?.cancel() // Cancel the delayed task if refresh finishes quickly
+             Task { @MainActor in
+                 if self.isLoading { // Only reset if it was actually set
+                     self.isLoading = false
+                     FeedView.logger.debug("Resetting isLoading = false in defer.")
+                 }
+                 FeedView.logger.info("Finishing refresh process.")
+             }
+        }
+
         let currentApiFlags = settings.apiFlags; let currentFeedType = settings.feedType; FeedView.logger.info("Starting API fetch for refresh (Feed: \(currentFeedType.displayName), Flags: \(currentApiFlags)). Strategy: REPLACE.")
         do { let fetchedItemsFromAPI = try await apiService.fetchItems(flags: currentApiFlags, promoted: settings.apiPromoted); guard !Task.isCancelled else { FeedView.logger.info("RefreshItems Task cancelled after API fetch."); return }; FeedView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) items received for refresh."); await MainActor.run { let oldItemCount = self.items.count; self.items = fetchedItemsFromAPI; self.canLoadMore = !fetchedItemsFromAPI.isEmpty; FeedView.logger.info("FeedView updated (REPLACED). Old count: \(oldItemCount), New count: \(self.items.count)."); let oldFirstItemId = items.first?.id; let newFirstItemId = fetchedItemsFromAPI.first?.id; if !navigationPath.isEmpty && (oldItemCount != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId) { navigationPath = NavigationPath(); FeedView.logger.info("Popped navigation due to refresh resulting in different list content.") }; self.showNoFilterMessage = false }; await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: currentCacheKey); await settings.updateCacheSizes() }
         catch is CancellationError { FeedView.logger.info("RefreshItems Task API call explicitly cancelled.") }
         catch { FeedView.logger.error("API fetch failed during refresh: \(error.localizedDescription)"); guard !Task.isCancelled else { FeedView.logger.info("RefreshItems Task cancelled after API error."); return }; await MainActor.run { if self.items.isEmpty { self.errorMessage = "Fehler beim Laden: \(error.localizedDescription)" } else { FeedView.logger.warning("Showing potentially stale data because API refresh failed: \(error.localizedDescription)") }; self.canLoadMore = false } }
     }
-    private func getIdForLoadMore() -> Int? { /* ... unveränderter Code ... */
+    private func getIdForLoadMore() -> Int? {
         guard let lastItem = items.last else { FeedView.logger.warning("Cannot load more: No original items to get ID from."); return nil }
         if settings.feedType == .promoted { guard let promotedId = lastItem.promoted else { FeedView.logger.error("Cannot load more: Promoted feed active but last original item (ID: \(lastItem.id)) has no 'promoted' ID."); Task { await MainActor.run { self.canLoadMore = false } }; return nil }; FeedView.logger.info("Using PROMOTED ID \(promotedId) from last original item for 'older' parameter."); return promotedId }
         else { FeedView.logger.info("Using ITEM ID \(lastItem.id) from last original item for 'older' parameter."); return lastItem.id }
     }
-    func loadMoreItems() async { /* ... unveränderter Code ... */
+    func loadMoreItems() async {
         guard settings.hasActiveContentFilter else { FeedView.logger.warning("Skipping loadMoreItems: No active content filter selected."); await MainActor.run { canLoadMore = false }; return }
         guard !isLoadingMore && canLoadMore && !isLoading else { FeedView.logger.debug("Skipping loadMoreItems: State prevents loading"); return }
         guard let olderValue = getIdForLoadMore() else { FeedView.logger.warning("Skipping loadMoreItems: Could not determine 'older' value."); await MainActor.run { canLoadMore = false }; return }
@@ -161,7 +203,7 @@ struct FeedView: View {
 }
 
 // Previews bleiben unverändert...
-#Preview { /* ... unveränderter Code ... */
+#Preview {
     let settings = AppSettings(); let authService = AuthService(appSettings: settings); let navigationService = NavigationService()
     return MainView().environmentObject(settings).environmentObject(authService).environmentObject(navigationService)
 }
