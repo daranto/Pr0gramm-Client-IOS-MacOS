@@ -3,13 +3,20 @@
 
 import SwiftUI
 import Foundation
-import UIKit // <-- Import UIKit für UIFont
+import UIKit // Für UIFont
 
 /// Displays a single comment, including user info, score, relative time, and formatted content with tappable links.
+/// Supports collapsing/expanding if it has children.
 struct CommentView: View {
     let comment: ItemComment
     /// Binding to trigger the preview sheet when a pr0gramm link is tapped.
     @Binding var previewLinkTarget: PreviewLinkTarget?
+    /// Indicates if this comment has replies.
+    let hasChildren: Bool
+    /// Indicates if this comment is currently collapsed.
+    let isCollapsed: Bool
+    /// Action to perform when the collapse toggle is tapped.
+    let onToggleCollapse: () -> Void
 
     /// The user's rank/mark as an enum case.
     private var markEnum: Mark { Mark(rawValue: comment.mark) }
@@ -31,28 +38,19 @@ struct CommentView: View {
     /// The comment content formatted with tappable links.
     private var attributedCommentContent: AttributedString {
         var attributedString = AttributedString(comment.content)
-
-        // --- MODIFIED: Convert SwiftUI Font to UIFont ---
-        let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont) // Use helper
-        attributedString.font = baseUIFont // Set base font using UIFont
-        // --- END MODIFICATION ---
+        let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont)
+        attributedString.font = baseUIFont
 
         do {
-            // Use NSDataDetector to find URLs within the comment text
             let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
             let matches = detector.matches(in: comment.content, options: [], range: NSRange(location: 0, length: comment.content.utf16.count))
-
-            // Apply link styling and URL attribute to detected matches
             for match in matches {
                 guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
-                attributedString[range].link = url // Make it tappable
-                attributedString[range].foregroundColor = .accentColor // Style links
-                // --- MODIFIED: Apply UIFont to links too ---
-                attributedString[range].font = baseUIFont // Ensure link font matches base font
-                // --- END MODIFICATION ---
+                attributedString[range].link = url
+                attributedString[range].foregroundColor = .accentColor
+                attributedString[range].font = baseUIFont
             }
         } catch {
-            // Log error if detector fails (should be rare)
             print("Error creating NSDataDetector: \(error)")
         }
         return attributedString
@@ -60,34 +58,58 @@ struct CommentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Header: User info, score, time
+            // --- MODIFIED: Header is now tappable if it has children ---
             HStack(spacing: 6) {
+                // Collapse/Expand Chevron (only if hasChildren)
+                if hasChildren {
+                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.caption.weight(.bold)) // Make chevron slightly bolder/smaller
+                        .foregroundColor(.secondary)
+                        .frame(width: 12, height: 12) // Give it a consistent frame
+                } else {
+                    // Placeholder to maintain alignment
+                    Spacer().frame(width: 12, height: 12)
+                }
+
                 Circle() // User mark indicator
                     .fill(userMarkColor)
-                    .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5)) // Subtle border
+                    .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
                     .frame(width: 8, height: 8)
                 Text(comment.name)
-                    .font(UIConstants.captionFont.weight(.semibold)) // Use adaptive bold caption
-                Text("•").foregroundColor(.secondary) // Separator
-                // Display score with color coding
+                    .font(UIConstants.captionFont.weight(.semibold))
+                Text("•").foregroundColor(.secondary)
                 Text("\(score)")
-                    .font(UIConstants.captionFont) // Use adaptive caption
+                    .font(UIConstants.captionFont)
                     .foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
-                Text("•").foregroundColor(.secondary) // Separator
+                Text("•").foregroundColor(.secondary)
                 Text(relativeTime)
-                     .font(UIConstants.captionFont) // Use adaptive caption
+                     .font(UIConstants.captionFont)
                     .foregroundColor(.secondary)
                 Spacer() // Push content to the left
             }
-            // Comment Content: Display the attributed string
-            // Font modifier removed, as it's set in attributedCommentContent
-            Text(attributedCommentContent)
-                .foregroundColor(.primary)
-                .lineLimit(nil) // Allow multiple lines
-                .fixedSize(horizontal: false, vertical: true) // Ensure vertical expansion
+            .contentShape(Rectangle()) // Make the entire HStack tappable
+            .onTapGesture {
+                if hasChildren { // Only toggle if it has children
+                    onToggleCollapse()
+                }
+            }
+            // --- END MODIFICATION ---
+
+            // --- MODIFIED: Comment Content only shown if not collapsed ---
+            if !isCollapsed {
+                Text(attributedCommentContent)
+                    .foregroundColor(.primary)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    // Add slight left padding to align with header text after chevron
+                    .padding(.leading, hasChildren ? 18 : 20) // Adjust padding based on chevron presence (approx.)
+            }
+            // --- END MODIFICATION ---
         }
-        .padding(.vertical, 6) // Vertical padding around the comment
-        // Intercept link taps using the .environment modifier
+        .padding(.vertical, 6)
+        // --- MODIFIED: Optionally reduce opacity when collapsed ---
+        .opacity(isCollapsed ? 0.7 : 1.0) // Example: Slightly dim when collapsed
+        // ---------------------------------------------------------
         .environment(\.openURL, OpenURLAction { url in
             if let itemID = parsePr0grammLink(url: url) {
                 print("Pr0gramm link tapped, attempting to preview item ID: \(itemID)")
@@ -100,8 +122,7 @@ struct CommentView: View {
         })
     }
 
-    /// Attempts to parse an item ID from a pr0gramm.com URL.
-    private func parsePr0grammLink(url: URL) -> Int? { /* ... unverändert ... */
+    private func parsePr0grammLink(url: URL) -> Int? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
         let pathComponents = url.pathComponents; for component in pathComponents.reversed() { if let itemID = Int(component) { return itemID } }
         if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems { for item in queryItems { if item.name == "id", let value = item.value, let itemID = Int(value) { return itemID } } }
@@ -109,15 +130,9 @@ struct CommentView: View {
     }
 }
 
-// --- NEU: Helper Extension to convert Font to UIFont ---
-// (Kopiert von DetailViewContent, falls nicht global verfügbar)
+// Helper Extension (unverändert)
 fileprivate extension UIFont {
-    /// Attempts to convert a SwiftUI `Font` to a `UIFont`.
-    /// This is a basic implementation and might not cover all custom fonts.
     static func uiFont(from font: Font) -> UIFont {
-        // Based on the Font type, determine the corresponding UIFont text style
-        // This requires mapping SwiftUI Font types to UIFont.TextStyle
-        // Note: This mapping might not be perfect for all cases.
         switch font {
             case .largeTitle: return UIFont.preferredFont(forTextStyle: .largeTitle)
             case .title: return UIFont.preferredFont(forTextStyle: .title1)
@@ -131,18 +146,65 @@ fileprivate extension UIFont {
             case .caption: return UIFont.preferredFont(forTextStyle: .caption1)
             case .caption2: return UIFont.preferredFont(forTextStyle: .caption2)
             default:
-                // Fallback for system fonts with specific sizes or custom fonts
-                // This part is tricky and might require more complex logic
-                // or potentially using private APIs (which is not recommended).
-                // For standard system sizes, you might try a default:
                 print("Warning: Could not precisely convert SwiftUI Font to UIFont. Using body style as fallback.")
                 return UIFont.preferredFont(forTextStyle: .body)
         }
     }
 }
-// --- ENDE NEU ---
 
 
-// MARK: - Preview (unverändert)
-#Preview { /* ... unveränderter Code ... */ }
+// MARK: - Preview
+#Preview("Normal") {
+    // Use a wrapper to provide the Binding
+    struct PreviewWrapper: View {
+        @State var target: PreviewLinkTarget? = nil
+        var body: some View {
+            CommentView(
+                comment: ItemComment(id: 1, parent: 0, content: "Top comment http://pr0gramm.com/new/12345", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "UserA", mark: 2),
+                previewLinkTarget: $target,
+                hasChildren: true, // Simulate children
+                isCollapsed: false,
+                onToggleCollapse: { print("Toggle tapped") }
+            )
+            .padding()
+        }
+    }
+    return PreviewWrapper()
+}
+
+#Preview("Collapsed") {
+    // Use a wrapper to provide the Binding
+    struct PreviewWrapper: View {
+        @State var target: PreviewLinkTarget? = nil
+        var body: some View {
+            CommentView(
+                comment: ItemComment(id: 2, parent: 0, content: "Collapsed comment", created: Int(Date().timeIntervalSince1970)-200, up: 5, down: 0, confidence: 0.9, name: "UserB", mark: 1),
+                previewLinkTarget: $target,
+                hasChildren: true,
+                isCollapsed: true, // Simulate collapsed
+                onToggleCollapse: { print("Toggle tapped") }
+            )
+            .padding()
+        }
+    }
+    return PreviewWrapper()
+}
+
+#Preview("No Children") {
+    // Use a wrapper to provide the Binding
+    struct PreviewWrapper: View {
+        @State var target: PreviewLinkTarget? = nil
+        var body: some View {
+            CommentView(
+                comment: ItemComment(id: 3, parent: 1, content: "Reply without children", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "UserC", mark: 7),
+                previewLinkTarget: $target,
+                hasChildren: false, // Simulate no children
+                isCollapsed: false,
+                onToggleCollapse: { print("Toggle tapped") }
+            )
+            .padding()
+        }
+    }
+    return PreviewWrapper()
+}
 // --- END OF COMPLETE FILE ---
