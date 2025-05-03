@@ -49,7 +49,7 @@ struct UserUploadsView: View {
                 PagedDetailView(items: items, selectedIndex: index, playerManager: playerManager)
             } else { Text("Fehler: Item nicht in Uploads gefunden.") }
         }
-        .task { await playerManager.configure(settings: settings); await refreshUploads() }
+        .task { playerManager.configure(settings: settings); await refreshUploads() }
         .onChange(of: settings.showSFW) { _, _ in Task { await refreshUploads() } }
         .onChange(of: settings.showNSFW) { _, _ in Task { await refreshUploads() } }
         .onChange(of: settings.showNSFL) { _, _ in Task { await refreshUploads() } }
@@ -116,42 +116,99 @@ struct UserUploadsView: View {
     func refreshUploads() async {
         UserUploadsView.logger.info("Refreshing uploads for user: \(username)")
         let cacheKey = userUploadsCacheKey
-        await MainActor.run { isLoading = true; errorMessage = nil }
+        // Update UI on MainActor
+        self.isLoading = true; self.errorMessage = nil
         defer { Task { @MainActor in self.isLoading = false; UserUploadsView.logger.info("Finished uploads refresh process for \(username).") } }
-        UserUploadsView.logger.info("Starting refresh data fetch for uploads (User: \(username), Flags: \(settings.apiFlags))..."); canLoadMore = true; isLoadingMore = false; var initialItemsFromCache: [Item]? = nil
-        if items.isEmpty { if let cachedItems = await settings.loadItemsFromCache(forKey: cacheKey), !cachedItems.isEmpty { initialItemsFromCache = cachedItems; UserUploadsView.logger.info("Found \(cachedItems.count) uploaded items in cache initially for \(username)."); await MainActor.run { self.items = cachedItems } } else { UserUploadsView.logger.info("No usable data cache found for uploads for \(username).") } }
+        UserUploadsView.logger.info("Starting refresh data fetch for uploads (User: \(username), Flags: \(settings.apiFlags))...");
+        canLoadMore = true; isLoadingMore = false; var initialItemsFromCache: [Item]? = nil
+        // Check cache outside MainActor context
+        if items.isEmpty {
+            initialItemsFromCache = await settings.loadItemsFromCache(forKey: cacheKey)
+            if let cached = initialItemsFromCache, !cached.isEmpty {
+                 UserUploadsView.logger.info("Found \(cached.count) uploaded items in cache initially for \(username).");
+                 // Update UI on MainActor
+                 self.items = cached
+            } else {
+                 UserUploadsView.logger.info("No usable data cache found for uploads for \(username).")
+            }
+        }
         UserUploadsView.logger.info("Performing API fetch for uploads refresh (User: \(username), Flags: \(settings.apiFlags))...");
         do {
             let fetchedItemsFromAPI = try await apiService.fetchItems(flags: settings.apiFlags, user: username)
             UserUploadsView.logger.info("API fetch for uploads completed: \(fetchedItemsFromAPI.count) items for user \(username).")
-            await MainActor.run {
-                self.items = fetchedItemsFromAPI
-                self.canLoadMore = !fetchedItemsFromAPI.isEmpty
-                UserUploadsView.logger.info("UserUploadsView updated with \(fetchedItemsFromAPI.count) items directly from API for \(username).")
-                if !navigationPath.isEmpty && initialItemsFromCache != nil && initialItemsFromCache != fetchedItemsFromAPI { navigationPath = NavigationPath(); UserUploadsView.logger.info("Popped navigation due to uploads refresh overwriting cache.") }
-            }
-            await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey); await settings.updateCacheSizes()
+            // Update UI on MainActor
+            self.items = fetchedItemsFromAPI
+            self.canLoadMore = !fetchedItemsFromAPI.isEmpty
+            UserUploadsView.logger.info("UserUploadsView updated with \(fetchedItemsFromAPI.count) items directly from API for \(username).")
+            if !navigationPath.isEmpty && initialItemsFromCache != nil && initialItemsFromCache != fetchedItemsFromAPI { navigationPath = NavigationPath(); UserUploadsView.logger.info("Popped navigation due to uploads refresh overwriting cache.") }
+            // Save cache outside MainActor context
+            await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
+            await settings.updateCacheSizes()
         }
-        catch let error as URLError where error.code == .userAuthenticationRequired { UserUploadsView.logger.error("API fetch for uploads failed: Authentication required (User: \(username)). Session might be invalid."); await MainActor.run { self.items = []; self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."; self.canLoadMore = false }; await settings.saveItemsToCache([], forKey: cacheKey); await authService.logout() }
-        catch { UserUploadsView.logger.error("API fetch for uploads failed (User: \(username)): \(error.localizedDescription)"); await MainActor.run { if self.items.isEmpty { self.errorMessage = "Fehler beim Laden der Uploads: \(error.localizedDescription)" } else { UserUploadsView.logger.warning("Showing potentially stale cached uploads data because API refresh failed for \(username).") }; self.canLoadMore = false } }
+        catch let error as URLError where error.code == .userAuthenticationRequired {
+            UserUploadsView.logger.error("API fetch for uploads failed: Authentication required (User: \(username)). Session might be invalid.");
+            // Update UI on MainActor
+            self.items = [];
+            self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden.";
+            self.canLoadMore = false
+            // Perform other async operations outside MainActor context
+            await settings.saveItemsToCache([], forKey: cacheKey);
+            Task { await authService.logout() } // Logout needs Task if called from non-async func, but refreshUploads is async
+        }
+        catch {
+            UserUploadsView.logger.error("API fetch for uploads failed (User: \(username)): \(error.localizedDescription)");
+            // Update UI on MainActor
+            if self.items.isEmpty {
+                self.errorMessage = "Fehler beim Laden der Uploads: \(error.localizedDescription)"
+            } else {
+                UserUploadsView.logger.warning("Showing potentially stale cached uploads data because API refresh failed for \(username).")
+            };
+            self.canLoadMore = false
+        }
     }
 
     func loadMoreUploads() async {
         guard !isLoadingMore && canLoadMore && !isLoading else { UserUploadsView.logger.debug("Skipping loadMoreUploads: State prevents loading."); return }
         guard let lastItemId = items.last?.id else { UserUploadsView.logger.warning("Skipping loadMoreUploads: No last item found."); return }
-        let cacheKey = userUploadsCacheKey; UserUploadsView.logger.info("--- Starting loadMoreUploads for user \(username) older than \(lastItemId) ---"); await MainActor.run { isLoadingMore = true }; defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; UserUploadsView.logger.info("--- Finished loadMoreUploads for user \(username) ---") } } }
+        let cacheKey = userUploadsCacheKey; UserUploadsView.logger.info("--- Starting loadMoreUploads for user \(username) older than \(lastItemId) ---");
+        // Update UI on MainActor
+        self.isLoadingMore = true;
+        defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; UserUploadsView.logger.info("--- Finished loadMoreUploads for user \(username) ---") } } }
         do {
             let newItems = try await apiService.fetchItems(flags: settings.apiFlags, user: username, olderThanId: lastItemId)
-            UserUploadsView.logger.info("Loaded \(newItems.count) more uploaded items from API (requesting older than \(lastItemId))."); var appendedItemCount = 0
-            await MainActor.run {
-                guard self.isLoadingMore else { UserUploadsView.logger.info("Load more cancelled before UI update."); return }
-                if newItems.isEmpty { UserUploadsView.logger.info("Reached end of uploads feed for \(username)."); canLoadMore = false }
-                else { let currentIDs = Set(self.items.map { $0.id }); let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }; if uniqueNewItems.isEmpty { UserUploadsView.logger.warning("All loaded uploaded items (older than \(lastItemId)) were duplicates for \(username)."); canLoadMore = false } else { self.items.append(contentsOf: uniqueNewItems); appendedItemCount = uniqueNewItems.count; UserUploadsView.logger.info("Appended \(uniqueNewItems.count) unique uploaded items for \(username). Total items: \(self.items.count)"); self.canLoadMore = true } }
+            UserUploadsView.logger.info("Loaded \(newItems.count) more uploaded items from API (requesting older than \(lastItemId)).");
+            var appendedItemCount = 0
+            // Update UI on MainActor
+            guard self.isLoadingMore else { UserUploadsView.logger.info("Load more cancelled before UI update."); return }
+            if newItems.isEmpty { UserUploadsView.logger.info("Reached end of uploads feed for \(username)."); self.canLoadMore = false }
+            else {
+                let currentIDs = Set(self.items.map { $0.id });
+                let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) };
+                if uniqueNewItems.isEmpty { UserUploadsView.logger.warning("All loaded uploaded items (older than \(lastItemId)) were duplicates for \(username)."); self.canLoadMore = false }
+                else { self.items.append(contentsOf: uniqueNewItems); appendedItemCount = uniqueNewItems.count; UserUploadsView.logger.info("Appended \(uniqueNewItems.count) unique uploaded items for \(username). Total items: \(self.items.count)"); self.canLoadMore = true }
             }
-            if appendedItemCount > 0 { let itemsToSave = await MainActor.run { self.items }; await settings.saveItemsToCache(itemsToSave, forKey: cacheKey); await settings.updateCacheSizes() }
+            // Perform cache saving outside MainActor context if items were appended
+            if appendedItemCount > 0 {
+                let itemsToSave = self.items // Capture current items
+                await settings.saveItemsToCache(itemsToSave, forKey: cacheKey);
+                await settings.updateCacheSizes()
+            }
         }
-        catch let error as URLError where error.code == .userAuthenticationRequired { UserUploadsView.logger.error("API fetch for more uploads failed: Authentication required (User: \(username)). Session might be invalid."); await MainActor.run { self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."; self.canLoadMore = false; Task { await authService.logout() } } }
-        catch { UserUploadsView.logger.error("API fetch failed during loadMoreUploads for \(username): \(error.localizedDescription)"); await MainActor.run { guard self.isLoadingMore else { return }; if items.isEmpty { errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" }; canLoadMore = false } }
+        catch let error as URLError where error.code == .userAuthenticationRequired {
+            UserUploadsView.logger.error("API fetch for more uploads failed: Authentication required (User: \(username)). Session might be invalid.");
+            // Update UI on MainActor
+            self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden.";
+            self.canLoadMore = false;
+            // Perform logout outside MainActor context
+            Task { await authService.logout() }
+        }
+        catch {
+            UserUploadsView.logger.error("API fetch failed during loadMoreUploads for \(username): \(error.localizedDescription)");
+             // Update UI on MainActor
+            guard self.isLoadingMore else { return };
+            if items.isEmpty { errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" };
+            self.canLoadMore = false
+        }
     }
 }
 

@@ -273,32 +273,52 @@ fileprivate func flattenHierarchy(comments: [DisplayComment], previewMaxDepth: I
 
 
 #Preview("Compact - Limited Tags") {
-     let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true);
-     let previewHandler = KeyboardActionHandler();
-     let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "TopTag1"), ItemTag(id: 2, confidence: 0.8, tag: "TopTag2"), ItemTag(id: 3, confidence: 0.7, tag: "TopTag3"), ItemTag(id: 4, confidence: 0.6, tag: "beim lesen programmieren gelernt"), ItemTag(id: 5, confidence: 0.5, tag: "OtherTag1"), ItemTag(id: 6, confidence: 0.4, tag: "OtherTag2") ];
-     let sampleDisplayComment = DisplayComment(id: 1, comment: ItemComment(id: 1, parent: 0, content: "Kommentar", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), children: [])
-     let previewFlatComments = flattenHierarchy(comments: [sampleDisplayComment])
-     let previewTotalCommentCount = previewFlatComments.count
-     let previewPlayer: AVPlayer? = nil
-     @State var previewLinkTarget: PreviewLinkTarget? = nil
-     @State var fullscreenTarget: FullscreenImageTarget? = nil
-     let navService = NavigationService()
-     let settings = AppSettings()
-     let authService = { let auth = AuthService(appSettings: settings); auth.isLoggedIn = true; auth.favoritesCollectionId = 1234; return auth }()
+    DetailViewContentPreviewWrapper()
+}
 
-     return NavigationStack {
-        DetailViewContent(
-            item: sampleVideoItem, keyboardActionHandler: previewHandler, player: previewPlayer,
-            onWillBeginFullScreen: {}, onWillEndFullScreen: {},
-            displayedTags: Array(previewTags.prefix(4)), totalTagCount: previewTags.count, showingAllTags: false,
-            flatComments: previewFlatComments,
-            totalCommentCount: previewTotalCommentCount, // Pass total count
-            infoLoadingStatus: .loaded,
-            previewLinkTarget: $previewLinkTarget, fullscreenImageTarget: $fullscreenTarget,
-            isFavorited: true, toggleFavoriteAction: {}, showAllTagsAction: {}
-        )
-        .environmentObject(navService).environmentObject(settings).environmentObject(authService)
-        .environment(\.horizontalSizeClass, .compact).preferredColorScheme(.dark)
+struct DetailViewContentPreviewWrapper: View {
+    @State var previewLinkTarget: PreviewLinkTarget? = nil
+    @State var fullscreenTarget: FullscreenImageTarget? = nil
+
+    var body: some View {
+        let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true)
+        let previewHandler = KeyboardActionHandler()
+        let previewTags: [ItemTag] = [
+            ItemTag(id: 1, confidence: 0.9, tag: "TopTag1"),
+            ItemTag(id: 2, confidence: 0.8, tag: "TopTag2"),
+            ItemTag(id: 3, confidence: 0.7, tag: "TopTag3"),
+            ItemTag(id: 4, confidence: 0.6, tag: "beim lesen programmieren gelernt")
+        ]
+        let sampleDisplayComment = DisplayComment(id: 1, comment: ItemComment(id: 1, parent: 0, content: "Kommentar", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), children: [])
+        let previewFlatComments = flattenHierarchy(comments: [sampleDisplayComment])
+        let navService = NavigationService()
+        let settings = AppSettings()
+        let authService = { let auth = AuthService(appSettings: settings); auth.isLoggedIn = true; auth.favoritesCollectionId = 1234; return auth }()
+
+        return NavigationStack {
+            DetailViewContent(
+                item: sampleVideoItem,
+                keyboardActionHandler: previewHandler,
+                player: nil,
+                onWillBeginFullScreen: {}, onWillEndFullScreen: {},
+                displayedTags: Array(previewTags.prefix(4)),
+                totalTagCount: previewTags.count,
+                showingAllTags: false,
+                flatComments: previewFlatComments,
+                totalCommentCount: previewFlatComments.count,
+                infoLoadingStatus: .loaded,
+                previewLinkTarget: $previewLinkTarget,
+                fullscreenImageTarget: $fullscreenTarget,
+                isFavorited: true,
+                toggleFavoriteAction: {},
+                showAllTagsAction: {}
+            )
+            .environmentObject(navService)
+            .environmentObject(settings)
+            .environmentObject(authService)
+            .environment(\.horizontalSizeClass, .compact)
+            .preferredColorScheme(.dark)
+        }
     }
 }
 

@@ -57,16 +57,16 @@ class AuthService: ObservableObject {
         }
 
         Self.logger.debug("[LOGIN START] Cookies BEFORE /user/login API call:")
-        logAllCookiesForPr0gramm()
+        await logAllCookiesForPr0gramm() // Use await
 
         do {
             let loginResponse = try await apiService.login(credentials: credentials)
 
             Self.logger.debug("[LOGIN SUCCESS] Cookies AFTER /user/login API call (BEFORE nonce extraction):")
-            logAllCookiesForPr0gramm()
+            await logAllCookiesForPr0gramm() // Use await
 
-            // Nonce aus Cookie lesen (JSON-Parsing + Kürzen)
-            self.userNonce = extractNonceFromCookieStorage()
+            // Nonce aus Cookie lesen (JSON-Parsing + Kürzen) - now async
+            self.userNonce = await extractNonceFromCookieStorage() // Use await
             if self.userNonce == nil {
                  Self.logger.error("CRITICAL: Failed to obtain nonce from Cookie parsing after successful login!")
             } else {
@@ -86,15 +86,18 @@ class AuthService: ObservableObject {
                 // Nonce-Verfügbarkeit ist kritisch für Login-Erfolg!
                 if profileLoaded && collectionLoaded && self.userNonce != nil {
                     Self.logger.debug("[LOGIN SUCCESS] Cookies BEFORE saving to Keychain:")
-                    logAllCookiesForPr0gramm()
-                    let cookieSaved = findAndSaveSessionCookie()
+                    await logAllCookiesForPr0gramm() // Use await
+                    let cookieSaved = await findAndSaveSessionCookie() // Use await
                     let usernameSaved = keychainService.saveUsername(username, forKey: sessionUsernameKey)
                     if cookieSaved && usernameSaved { Self.logger.info("Session cookie and username saved to keychain.") }
                     else { Self.logger.warning("Failed to save session cookie (\(cookieSaved)) or username (\(usernameSaved)) to keychain.") }
 
                     self.isLoggedIn = true
                     self.needsCaptcha = false; self.captchaToken = nil; self.captchaImage = nil
-                    Self.logger.info("User \(self.currentUser!.name) is now logged in. Nonce available: true. Fav Collection ID: \(self.favoritesCollectionId ?? -1). Badges: \(self.currentUser?.badges?.count ?? 0)")
+                    // Use await for logger call as it accesses self.currentUser and self.favoritesCollectionId
+                    await MainActor.run { // Ensure logger access happens on main actor
+                         Self.logger.info("User \(self.currentUser!.name) is now logged in. Nonce available: true. Fav Collection ID: \(self.favoritesCollectionId ?? -1). Badges: \(self.currentUser?.badges?.count ?? 0)")
+                    }
 
                 } else { // Profil, Collection ODER Nonce fehlgeschlagen
                     self.isLoggedIn = false
@@ -106,7 +109,10 @@ class AuthService: ObservableObject {
                         Self.logger.error("fetchUserCollections failed after successful login and profile load.")
                     } else { // userNonce == nil
                         self.loginError = "Login erfolgreich, aber Session-Daten (Nonce) konnten nicht gelesen werden."
-                        Self.logger.error("Login sequence failed after API success. Profile: \(profileLoaded), Collections: \(collectionLoaded), Nonce: \(self.userNonce != nil)")
+                        // Use await for logger call as it accesses self.userNonce
+                        await MainActor.run { // Ensure logger access happens on main actor
+                            Self.logger.error("Login sequence failed after API success. Profile: \(profileLoaded), Collections: \(collectionLoaded), Nonce: \(self.userNonce != nil)")
+                        }
                     }
                     await performLogoutCleanup()
                 }
@@ -115,8 +121,11 @@ class AuthService: ObservableObject {
                      let banReason = loginResponse.ban?.reason ?? "Unbekannter Grund"; let banEnd = loginResponse.ban?.till.map { Date(timeIntervalSince1970: TimeInterval($0)).formatted() } ?? "Unbekannt"
                      self.loginError = "Login fehlgeschlagen: Benutzer ist gebannt. Grund: \(banReason) (Bis: \(banEnd))"; Self.logger.warning("Login failed: User \(username) is banned."); await performLogoutCleanup()
                  } else {
-                     self.loginError = loginResponse.error ?? "Falsche Anmeldedaten oder Captcha."
-                     Self.logger.warning("Login failed (API Error): \(self.loginError!) - User: \(username)")
+                     // Use await for logger call as it accesses self.loginError
+                     await MainActor.run { // Ensure logger access happens on main actor
+                        self.loginError = loginResponse.error ?? "Falsche Anmeldedaten oder Captcha."
+                        Self.logger.warning("Login failed (API Error): \(self.loginError!) - User: \(username)")
+                     }
                      if self.needsCaptcha { Self.logger.info("Fetching new captcha after failed login attempt."); await _fetchCaptcha() }
                      else { await performLogoutCleanup() }
                  }
@@ -136,8 +145,13 @@ class AuthService: ObservableObject {
     }
 
     func logout() async {
-        guard self.isLoggedIn, !isLoading else { Self.logger.warning("Logout skipped: Not logged in or already loading."); return }
-        Self.logger.info("Attempting logout for user: \(self.currentUser?.name ?? "Unknown")"); isLoading = true
+        // Use await for logger call as it accesses self.currentUser
+        await MainActor.run { // Ensure logger access happens on main actor
+             guard self.isLoggedIn, !isLoading else { Self.logger.warning("Logout skipped: Not logged in or already loading."); return }
+             Self.logger.info("Attempting logout for user: \(self.currentUser?.name ?? "Unknown")"); isLoading = true
+        }
+        // Check again after potential async suspension
+        guard self.isLoggedIn, !isLoading else { return }
         do { try await apiService.logout(); Self.logger.info("Logout successful via API.") }
         catch { Self.logger.error("API logout failed: \(error.localizedDescription). Proceeding with local cleanup.") }
         await performLogoutCleanup(); isLoading = false; Self.logger.info("Logout process finished.")
@@ -151,16 +165,16 @@ class AuthService: ObservableObject {
         var nonceAvailable = false // Explizit prüfen
 
         Self.logger.debug("[SESSION RESTORE START] Cookies BEFORE restoring from Keychain:")
-        logAllCookiesForPr0gramm()
+        await logAllCookiesForPr0gramm() // Use await
 
         if loadAndRestoreSessionCookie(), let username = keychainService.loadUsername(forKey: sessionUsernameKey) {
              Self.logger.info("Session cookie and username ('\(username)') restored from keychain.")
 
              Self.logger.debug("[SESSION RESTORE] Cookies AFTER restoring from Keychain (BEFORE nonce extraction):")
-             logAllCookiesForPr0gramm()
+             await logAllCookiesForPr0gramm() // Use await
 
-             // Nonce aus Cookie (JSON + Kürzen) versuchen zu extrahieren
-             self.userNonce = extractNonceFromCookieStorage()
+             // Nonce aus Cookie (JSON + Kürzen) versuchen zu extrahieren - now async
+             self.userNonce = await extractNonceFromCookieStorage() // Use await
              nonceAvailable = (self.userNonce != nil) // Prüfen ob erfolgreich
 
              // Load profile (including badges)
@@ -185,7 +199,10 @@ class AuthService: ObservableObject {
         self.isLoggedIn = sessionValidAndProfileLoaded && collectionLoaded && nonceAvailable
 
         if self.isLoggedIn {
-             Self.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce available: true. Fav Collection ID: \(self.favoritesCollectionId ?? -1). Badges: \(self.currentUser?.badges?.count ?? 0)")
+             // Use await for logger call as it accesses self properties
+             await MainActor.run { // Ensure logger access happens on main actor
+                Self.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce available: true. Fav Collection ID: \(self.favoritesCollectionId ?? -1). Badges: \(self.currentUser?.badges?.count ?? 0)")
+             }
         } else {
             Self.logger.info("Initial check: User is not logged in (or session/profile/collection load/nonce extraction failed).")
         }
@@ -203,17 +220,18 @@ class AuthService: ObservableObject {
             // Use flags=31 to try and get badges
             let profileInfoResponse = try await apiService.getProfileInfo(username: username, flags: 31)
 
-            // --- MODIFIED: Copy badges from response root level ---
             self.currentUser = UserInfo(
                 id: profileInfoResponse.user.id,
                 name: profileInfoResponse.user.name,
                 registered: profileInfoResponse.user.registered,
                 score: profileInfoResponse.user.score,
                 mark: profileInfoResponse.user.mark,
-                badges: profileInfoResponse.badges // <-- Kopiere Badges von der Response, nicht vom user-Objekt
+                badges: profileInfoResponse.badges
             )
-            // --- END MODIFICATION ---
-            Self.logger.info("Successfully created UserInfo for: \(self.currentUser!.name) with \(self.currentUser?.badges?.count ?? 0) badges.")
+             // Use await for logger call as it accesses self.currentUser
+            await MainActor.run { // Ensure logger access happens on main actor
+                Self.logger.info("Successfully created UserInfo for: \(self.currentUser!.name) with \(self.currentUser?.badges?.count ?? 0) badges.")
+            }
             if setLoadingState { isLoading = false }; return true // Erfolg
 
         } catch {
@@ -275,9 +293,10 @@ class AuthService: ObservableObject {
         self.needsCaptcha = false;
         self.captchaToken = nil;
         self.captchaImage = nil;
-        clearCookies()
+        await clearCookies() // Use await
         _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey)
         _ = keychainService.deleteUsername(forKey: sessionUsernameKey)
+        // Accessing appSettings properties is safe as performLogoutCleanup is MainActor isolated
         self.appSettings.showSFW = true
         self.appSettings.showNSFW = false
         self.appSettings.showNSFL = false
@@ -286,40 +305,54 @@ class AuthService: ObservableObject {
         Self.logger.info("Reset content filters to SFW-only.")
     }
 
-    private func clearCookies() {
-        Self.logger.debug("Clearing cookies for pr0gramm.com domain.")
+    // --- MODIFIED: Make async and nonisolated ---
+    private nonisolated func clearCookies() async {
+        // Use await for logger call inside nonisolated func
+        await Self.logger.debug("Clearing cookies for pr0gramm.com domain.")
         guard let url = URL(string: "https://pr0gramm.com"), let cookies = HTTPCookieStorage.shared.cookies(for: url) else { return }
-        Self.logger.debug("Found \(cookies.count) cookies for domain to potentially clear.")
+         // Use await for logger call inside nonisolated func
+        await Self.logger.debug("Found \(cookies.count) cookies for domain to potentially clear.")
         for cookie in cookies {
-            Self.logger.debug("Deleting cookie: Name='\(cookie.name)', Value='\(cookie.value.prefix(50))...', Domain='\(cookie.domain)', Path='\(cookie.path)'")
+             // Use await for logger call inside nonisolated func
+            await Self.logger.debug("Deleting cookie: Name='\(cookie.name)', Value='\(cookie.value.prefix(50))...', Domain='\(cookie.domain)', Path='\(cookie.path)'")
             HTTPCookieStorage.shared.deleteCookie(cookie)
         }
-        Self.logger.info("Finished clearing cookies.")
+         // Use await for logger call inside nonisolated func
+        await Self.logger.info("Finished clearing cookies.")
     }
 
+    // --- MODIFIED: Make async and nonisolated ---
     @discardableResult
-    private func findAndSaveSessionCookie() -> Bool {
-        Self.logger.debug("Attempting to find and save session cookie '\(self.sessionCookieName)'...")
-        guard let url = URL(string: "https://pr0gramm.com"), let cookies = HTTPCookieStorage.shared.cookies(for: url) else { Self.logger.warning("Could not retrieve cookies."); return false }
-        Self.logger.trace("All cookies found in storage for save attempt:")
+    private nonisolated func findAndSaveSessionCookie() async -> Bool {
+         // Use await for logger call inside nonisolated func
+        await Self.logger.debug("Attempting to find and save session cookie '\(self.sessionCookieName)'...")
+        guard let url = URL(string: "https://pr0gramm.com"), let cookies = HTTPCookieStorage.shared.cookies(for: url) else { await Self.logger.warning("Could not retrieve cookies."); return false } // await logger
+         // Use await for logger call inside nonisolated func
+        await Self.logger.trace("All cookies found in storage for save attempt:")
         for cookie in cookies {
-            Self.logger.trace("- Name: \(cookie.name), Value: \(cookie.value.prefix(50))..., Expires: \(cookie.expiresDate?.description ?? "Session"), Path: \(cookie.path)")
+             // Use await for logger call inside nonisolated func
+            await Self.logger.trace("- Name: \(cookie.name), Value: \(cookie.value.prefix(50))..., Expires: \(cookie.expiresDate?.description ?? "Session"), Path: \(cookie.path)")
         }
-        guard let sessionCookie = cookies.first(where: { $0.name == self.sessionCookieName }) else { Self.logger.warning("Session cookie '\(self.sessionCookieName)' not found."); return false }
+        guard let sessionCookie = cookies.first(where: { $0.name == self.sessionCookieName }) else { await Self.logger.warning("Session cookie '\(self.sessionCookieName)' not found."); return false } // await logger
 
         let cookieValue = sessionCookie.value
         let parts = cookieValue.split(separator: ":")
         if parts.count != 2 {
-            Self.logger.warning("Session cookie '\(self.sessionCookieName)' found but value '\(cookieValue.prefix(50))...' does NOT have expected 'id:nonce' format! Saving it anyway to overwrite potential old format in keychain.")
+             // Use await for logger call inside nonisolated func
+            await Self.logger.warning("Session cookie '\(self.sessionCookieName)' found but value '\(cookieValue.prefix(50))...' does NOT have expected 'id:nonce' format! Saving it anyway to overwrite potential old format in keychain.")
         } else {
-             Self.logger.info("Found session cookie '\(self.sessionCookieName)' with expected format. Value: '\(cookieValue.prefix(50))...'.")
+              // Use await for logger call inside nonisolated func
+             await Self.logger.info("Found session cookie '\(self.sessionCookieName)' with expected format. Value: '\(cookieValue.prefix(50))...'.")
         }
 
-        guard let properties = sessionCookie.properties else { Self.logger.warning("Could not get properties from session cookie '\(self.sessionCookieName)'."); return false }
-        Self.logger.info("Saving cookie properties to keychain...")
-        return keychainService.saveCookieProperties(properties, forKey: sessionCookieKey)
+        guard let properties = sessionCookie.properties else { await Self.logger.warning("Could not get properties from session cookie '\(self.sessionCookieName)'."); return false } // await logger
+         // Use await for logger call inside nonisolated func
+        await Self.logger.info("Saving cookie properties to keychain...")
+        // Assuming KeychainService().saveCookieProperties is synchronous or actor-safe
+        return KeychainService().saveCookieProperties(properties, forKey: sessionCookieKey)
     }
 
+    // --- Keep synchronous, accesses KeychainService only ---
     private func loadAndRestoreSessionCookie() -> Bool {
         Self.logger.debug("Attempting to load and restore session cookie from keychain...")
         guard let loadedProperties = keychainService.loadCookieProperties(forKey: sessionCookieKey) else { return false }
@@ -331,69 +364,85 @@ class AuthService: ObservableObject {
     }
 
 
-    // Angepasste Nonce Extraktion (JSON zuerst, dann Kürzen) - Unverändert
-    private func extractNonceFromCookieStorage() -> String? {
-        Self.logger.debug("Attempting to extract nonce from cookie storage (trying JSON format first, then shorten)...")
+    // --- MODIFIED: Make async and nonisolated ---
+    private nonisolated func extractNonceFromCookieStorage() async -> String? {
+         // Use await for logger call inside nonisolated func
+        await Self.logger.debug("Attempting to extract nonce from cookie storage (trying JSON format first, then shorten)...")
         guard let url = URL(string: "https://pr0gramm.com"),
-              let cookies = HTTPCookieStorage.shared.cookies(for: url)
+              let cookies = HTTPCookieStorage.shared.cookies(for: url) // Access potentially blocking storage
         else {
-            Self.logger.warning("Could not find cookies in storage to extract nonce.")
+            // Use await for logger call inside nonisolated func
+            await Self.logger.warning("Could not find cookies in storage to extract nonce.")
             return nil
         }
 
         guard let sessionCookie = cookies.first(where: { $0.name == self.sessionCookieName }) else {
-            Self.logger.warning("Could not find session cookie named '\(self.sessionCookieName)' in storage to extract nonce.")
+             // Use await for logger call inside nonisolated func
+            await Self.logger.warning("Could not find session cookie named '\(self.sessionCookieName)' in storage to extract nonce.")
             return nil
         }
 
         let cookieValue = sessionCookie.value
-        Self.logger.debug("[EXTRACT NONCE] Found session cookie '\(self.sessionCookieName)' with value: \(cookieValue)")
+         // Use await for logger call inside nonisolated func
+        await Self.logger.debug("[EXTRACT NONCE] Found session cookie '\(self.sessionCookieName)' with value: \(cookieValue)")
 
         // VERSUCH 1: Prüfen auf URL-kodiertes JSON-Format
-        Self.logger.debug("[EXTRACT NONCE] Attempting URL-decoded JSON parsing...")
+         // Use await for logger call inside nonisolated func
+        await Self.logger.debug("[EXTRACT NONCE] Attempting URL-decoded JSON parsing...")
         if let decodedValue = cookieValue.removingPercentEncoding, // URL-Dekodieren
            let jsonData = decodedValue.data(using: .utf8) {       // In Data umwandeln
             do {
                 if let jsonDict = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any],
                    let longNonceFromJson = jsonDict["id"] as? String { // Das ist der LANGE Nonce
-                    Self.logger.debug("[EXTRACT NONCE] Found 'id' field in JSON: \(longNonceFromJson)")
+                     // Use await for logger call inside nonisolated func
+                    await Self.logger.debug("[EXTRACT NONCE] Found 'id' field in JSON: \(longNonceFromJson)")
 
                     let expectedNonceLength = 16
                     if longNonceFromJson.count >= expectedNonceLength {
                         let shortNonce = String(longNonceFromJson.prefix(expectedNonceLength))
-                        Self.logger.info("[EXTRACT NONCE] Successfully extracted and shortened nonce from JSON 'id' field: '\(shortNonce)'")
+                         // Use await for logger call inside nonisolated func
+                        await Self.logger.info("[EXTRACT NONCE] Successfully extracted and shortened nonce from JSON 'id' field: '\(shortNonce)'")
                         return shortNonce
                     } else {
-                         Self.logger.warning("[EXTRACT NONCE] Nonce from JSON 'id' field is shorter than expected length (\(expectedNonceLength)): '\(longNonceFromJson)'")
+                          // Use await for logger call inside nonisolated func
+                         await Self.logger.warning("[EXTRACT NONCE] Nonce from JSON 'id' field is shorter than expected length (\(expectedNonceLength)): '\(longNonceFromJson)'")
                          return nil
                     }
 
                 } else {
-                    Self.logger.warning("[EXTRACT NONCE] Failed to parse URL-decoded cookie value as JSON Dictionary or find 'id' key.")
+                     // Use await for logger call inside nonisolated func
+                    await Self.logger.warning("[EXTRACT NONCE] Failed to parse URL-decoded cookie value as JSON Dictionary or find 'id' key.")
                     return nil
                 }
             } catch {
-                Self.logger.warning("[EXTRACT NONCE] Error parsing URL-decoded cookie value as JSON: \(error.localizedDescription)")
+                 // Use await for logger call inside nonisolated func
+                await Self.logger.warning("[EXTRACT NONCE] Error parsing URL-decoded cookie value as JSON: \(error.localizedDescription)")
                 return nil
             }
         } else {
-            Self.logger.warning("[EXTRACT NONCE] Failed to URL-decode cookie value or convert to Data.")
+             // Use await for logger call inside nonisolated func
+            await Self.logger.warning("[EXTRACT NONCE] Failed to URL-decode cookie value or convert to Data.")
             return nil
         }
     }
 
-    // Logging Helfer Funktion - Unverändert
-    private func logAllCookiesForPr0gramm() {
+    // --- MODIFIED: Make async and nonisolated ---
+    private nonisolated func logAllCookiesForPr0gramm() async {
         guard let url = URL(string: "https://pr0gramm.com") else { return }
-        Self.logger.debug("--- Current Cookies for \(url.host ?? "pr0gramm.com") ---")
+         // Use await for logger call inside nonisolated func
+        await Self.logger.debug("--- Current Cookies for \(url.host ?? "pr0gramm.com") ---")
+        // Access potentially blocking storage
         if let cookies = HTTPCookieStorage.shared.cookies(for: url), !cookies.isEmpty {
             for cookie in cookies {
-                 Self.logger.debug("- Name: \(cookie.name), Value: \(cookie.value.prefix(60))..., Expires: \(cookie.expiresDate?.description ?? "Session"), Path: \(cookie.path), Secure: \(cookie.isSecure), HTTPOnly: \(cookie.isHTTPOnly)")
+                  // Use await for logger call inside nonisolated func
+                 await Self.logger.debug("- Name: \(cookie.name), Value: \(cookie.value.prefix(60))..., Expires: \(cookie.expiresDate?.description ?? "Session"), Path: \(cookie.path), Secure: \(cookie.isSecure), HTTPOnly: \(cookie.isHTTPOnly)")
             }
         } else {
-            Self.logger.debug("(No cookies found for domain)")
+             // Use await for logger call inside nonisolated func
+            await Self.logger.debug("(No cookies found for domain)")
         }
-        Self.logger.debug("--- End Cookie List ---")
+         // Use await for logger call inside nonisolated func
+        await Self.logger.debug("--- End Cookie List ---")
     }
 }
 // --- END OF COMPLETE FILE ---

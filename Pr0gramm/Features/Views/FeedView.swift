@@ -84,7 +84,7 @@ struct FeedView: View {
             .onChange(of: settings.showNSFL) { triggerRefreshTask() }
             .onChange(of: settings.showNSFP) { triggerRefreshTask() }
             .onChange(of: settings.showPOL) { triggerRefreshTask() }
-            .task { await playerManager.configure(settings: settings); triggerRefreshTask() }
+            .task { playerManager.configure(settings: settings); triggerRefreshTask() }
             .onDisappear { refreshTask?.cancel(); FeedView.logger.debug("FeedView disappeared, cancelling refresh task if active.") }
             .onChange(of: popToRootTrigger) { if !navigationPath.isEmpty { navigationPath = NavigationPath() } }
             .onChange(of: settings.seenItemIDs) { _, _ in FeedView.logger.trace("FeedView detected change in seenItemIDs, body will update.") }

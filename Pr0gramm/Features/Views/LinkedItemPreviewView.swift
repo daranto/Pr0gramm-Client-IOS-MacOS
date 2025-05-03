@@ -74,7 +74,7 @@ struct LinkedItemPreviewView: View {
         }
         .task { // Use .task for automatic loading AND manager configuration
              // Configure the local player manager when the task starts
-             await playerManager.configure(settings: settings)
+             playerManager.configure(settings: settings)
              // Load the item data
              await loadItem()
          }

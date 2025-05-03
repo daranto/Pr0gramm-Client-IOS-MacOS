@@ -73,9 +73,7 @@ struct ApiBadge: Codable, Identifiable, Hashable {
 
     /// Computed property to construct the full image URL.
     var fullImageUrl: URL? {
-        // --- MODIFIED: Use the correct base URL ---
         return URL(string: "https://pr0gramm.com/media/badges/")?.appendingPathComponent(image)
-        // --- END MODIFICATION ---
     }
 }
 // --- END Badge Structure ---
@@ -134,7 +132,7 @@ struct UserSyncResponse: Codable {
 }
 
 
-// MARK: - APIService Class Definition (Rest bleibt gleich)
+// MARK: - APIService Class Definition
 
 /// Handles communication with the pr0gramm API.
 class APIService {
@@ -145,7 +143,7 @@ class APIService {
     private let baseURL = URL(string: "https://pr0gramm.com/api")!
     private let decoder = JSONDecoder()
 
-    // MARK: - API Methods (unverändert)
+    // MARK: - API Methods
 
     func fetchItems(flags: Int, promoted: Int? = nil, user: String? = nil, tags: String? = nil, olderThanId: Int? = nil) async throws -> [Item] {
         let endpoint = "/items/get"
@@ -207,7 +205,7 @@ class APIService {
     }
 
     func fetchCaptcha() async throws -> CaptchaResponse {
-        let endpoint = "/user/captcha"; let url = baseURL.appendingPathComponent(endpoint); var request = URLRequest(url: url); Self.logger.info("Fetching new captcha...")
+        let endpoint = "/user/captcha"; let url = baseURL.appendingPathComponent(endpoint); let request = URLRequest(url: url); Self.logger.info("Fetching new captcha...") // Use let for request
         do { let (data, response) = try await URLSession.shared.data(for: request); let captchaResponse: CaptchaResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint); Self.logger.info("Successfully fetched captcha with token: \(captchaResponse.token)"); return captchaResponse }
         catch { Self.logger.error("Error fetching or decoding captcha: \(error.localizedDescription)"); throw error }
     }
@@ -215,20 +213,23 @@ class APIService {
     func getProfileInfo(username: String, flags: Int = 31) async throws -> ProfileInfoResponse {
         let endpoint = "/profile/info"; guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
         urlComponents.queryItems = [ URLQueryItem(name: "name", value: username), URLQueryItem(name: "flags", value: String(flags)) ]; guard let url = urlComponents.url else { throw URLError(.badURL) }
-        var request = URLRequest(url: url); request.httpMethod = "GET"; Self.logger.info("Fetching profile info for user: \(username) with flags \(flags)")
+        // --- CORRECTED: Use let ---
+        let request = URLRequest(url: url)
+        // --- END CORRECTION ---
+        Self.logger.info("Fetching profile info for user: \(username) with flags \(flags)")
         do { let (data, response) = try await URLSession.shared.data(for: request); let profileInfoResponse: ProfileInfoResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint); Self.logger.info("Successfully fetched profile info for: \(profileInfoResponse.user.name) (Badges found: \(profileInfoResponse.badges?.count ?? 0))"); return profileInfoResponse }
         catch { if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { Self.logger.warning("Fetching profile info failed for \(username): Session likely invalid.") } else if error is DecodingError { Self.logger.error("Failed to decode /profile/info response for \(username): \(error.localizedDescription)") } else { Self.logger.error("Error during \(endpoint) for \(username): \(error.localizedDescription)") }; throw error }
     }
 
     func getUserCollections() async throws -> CollectionsResponse {
-        let endpoint = "/collections/get"; Self.logger.info("Fetching user collections..."); let url = baseURL.appendingPathComponent(endpoint); var request = URLRequest(url: url); request.httpMethod = "GET"
+        let endpoint = "/collections/get"; Self.logger.info("Fetching user collections..."); let url = baseURL.appendingPathComponent(endpoint); let request = URLRequest(url: url); // Use let for request
         do { let (data, response) = try await URLSession.shared.data(for: request); return try handleApiResponse(data: data, response: response, endpoint: endpoint) }
         catch { Self.logger.error("Failed to fetch user collections: \(error.localizedDescription)"); throw error }
     }
 
     func syncUser(offset: Int = 0) async throws -> UserSyncResponse {
         let endpoint = "/user/sync"; Self.logger.info("Performing user sync with offset \(offset)..."); guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
-        urlComponents.queryItems = [ URLQueryItem(name: "offset", value: String(offset)) ]; guard let url = urlComponents.url else { throw URLError(.badURL) }; var request = URLRequest(url: url); request.httpMethod = "GET"
+        urlComponents.queryItems = [ URLQueryItem(name: "offset", value: String(offset)) ]; guard let url = urlComponents.url else { throw URLError(.badURL) }; let request = URLRequest(url: url); // Use let for request
         logRequestDetails(request, for: endpoint)
         do { let (data, response) = try await URLSession.shared.data(for: request); return try handleApiResponse(data: data, response: response, endpoint: endpoint + " (offset: \(offset))") }
         catch { Self.logger.error("Failed to sync user (offset \(offset)): \(error.localizedDescription)"); throw error }
@@ -250,7 +251,7 @@ class APIService {
         catch { Self.logger.error("Failed to remove item \(itemId) from collection \(collectionId): \(error.localizedDescription)"); throw error }
     }
 
-    // MARK: - Helper Methods (unverändert)
+    // MARK: - Helper Methods
 
     private func handleApiResponse<T: Decodable>(data: Data, response: URLResponse, endpoint: String) throws -> T {
         guard let httpResponse = response as? HTTPURLResponse else { Self.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }
