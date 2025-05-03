@@ -1,6 +1,3 @@
-// Pr0gramm/Pr0gramm/Features/Views/Settings/SettingsView.swift
-// --- START OF COMPLETE FILE ---
-
 import SwiftUI
 import os
 
@@ -105,6 +102,16 @@ struct SettingsView: View {
                  // Optional: Make header slightly more prominent on Mac
                  .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
+                // --- NEW: Info Section with License & Dependencies Link ---
+                Section {
+                    NavigationLink(destination: LicenseAndDependenciesView()) {
+                        Text("Lizenzen & Abhängigkeiten")
+                            .font(UIConstants.bodyFont)
+                    }
+                } header: {
+                    Text("Info")
+                }
+                // --- END NEW SECTION ---
             }
             .navigationTitle("Einstellungen")
             .alert("Gesamten App-Cache leeren?", isPresented: $showingClearAllCacheAlert) {
@@ -132,10 +139,58 @@ struct SettingsView: View {
     }
 }
 
+
 // MARK: - Preview
 
 #Preview {
     // Provide AppSettings for the preview environment
     SettingsView().environmentObject(AppSettings())
 }
+// --- NEW: Placeholder for LicenseAndDependenciesView ---
+struct LicenseAndDependenciesView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("""
+                MIT License
+
+                Copyright (c) 2025 Pr0gramm App Team
+
+                Permission is hereby granted, free of charge, to any person obtaining a copy
+                of this software and associated documentation files (the "Software"), to deal
+                in the Software without restriction, including without limitation the rights
+                to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+                copies of the Software, and to permit persons to whom the Software is
+                furnished to do so, subject to the following conditions:
+
+                The above copyright notice and this permission notice shall be included in
+                all copies or substantial portions of the Software.
+
+                THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+                IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+                FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+                AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+                LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+                OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+                THE SOFTWARE.
+                """)
+                .font(.footnote)
+                .textSelection(.enabled)
+
+                Divider()
+
+                Text("Verwendete Swift Packages")
+                    .font(.title2).bold()
+                VStack(alignment: .leading, spacing: 8) {
+                    Link("Kingfisher", destination: URL(string: "https://github.com/onevcat/Kingfisher")!)
+                }
+
+                Spacer()
+            }
+            .padding()
+        }
+        .navigationTitle("Lizenzen")
+    }
+}
+// --- END NEW LicenseAndDependenciesView ---
 // --- END OF COMPLETE FILE ---
