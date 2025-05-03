@@ -14,7 +14,6 @@ Eine in SwiftUI geschriebene iOS-App / Mac (M-Macs) für den Zugriff auf pr0gram
 ## ⚙️ Verwendete Swift Packages
 
 - [Kingfisher](https://github.com/onevcat/Kingfisher) – für performantes Bild-Caching
-- [SwiftUI Introspect](https://github.com/siteline/SwiftUI-Introspect) – für UIKit-Backdoor-Konfigurationen
 
 ## 📄 Lizenz
 
