@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Features/Views/Settings/SettingsView.swift
+// --- START OF COMPLETE FILE ---
+
 import SwiftUI
 import os
 
@@ -6,6 +9,8 @@ struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
     /// State to control the presentation of the cache clearing confirmation alert.
     @State private var showingClearAllCacheAlert = false
+    /// State for seen items alert
+    @State private var showingClearSeenItemsAlert = false
 
     /// Predefined options for the maximum image cache size picker.
     let cacheSizeOptions = [50, 100, 250, 500, 1000] // In MB
@@ -17,9 +22,7 @@ struct SettingsView: View {
                 // Section for Video Settings
                 Section("Video") {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
-                        // --- MODIFIED: Use adaptive font ---
                         .font(UIConstants.bodyFont)
-                        // --- END MODIFICATION ---
                 }
 
                 // Section for Comment Settings
@@ -27,40 +30,45 @@ struct SettingsView: View {
                     Picker("Sortierung", selection: $settings.commentSortOrder) {
                         ForEach(CommentSortOrder.allCases) { order in
                             Text(order.displayName).tag(order)
-                                // Apply font inside ForEach if needed, though Picker might handle it
-                                .font(UIConstants.bodyFont) // Apply here too
+                                .font(UIConstants.bodyFont)
                         }
                     }
-                     // --- MODIFIED: Use adaptive font ---
-                    .font(UIConstants.bodyFont) // Apply to Picker label
-                     // --- END MODIFICATION ---
+                    .font(UIConstants.bodyFont)
                 }
+
+                // Section for Clearing Seen Items
+                Section {
+                    Button("Gesehene Posts zurücksetzen", role: .destructive) {
+                        showingClearSeenItemsAlert = true // Trigger specific alert
+                    }
+                    .font(UIConstants.bodyFont)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                } header: {
+                     Text("Anzeige-Verlauf")
+                } footer: {
+                     Text("Entfernt die Markierungen für bereits angesehene Posts. Die Bilder selbst bleiben im Cache erhalten.")
+                        .font(UIConstants.footnoteFont)
+                }
+                .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+
 
                 // Section for Cache Settings
                 Section {
                     // Display current cache sizes (read-only)
                     HStack {
                         Text("Bild-Cache Größe")
-                             // --- MODIFIED: Use adaptive font ---
                             .font(UIConstants.bodyFont)
-                             // --- END MODIFICATION ---
                         Spacer()
                         Text(String(format: "%.1f MB", settings.currentImageDataCacheSizeMB))
-                             // --- MODIFIED: Use adaptive font ---
                             .font(UIConstants.bodyFont)
-                             // --- END MODIFICATION ---
                             .foregroundColor(.secondary)
                     }
                     HStack {
                         Text("Daten-Cache Größe")
-                             // --- MODIFIED: Use adaptive font ---
                             .font(UIConstants.bodyFont)
-                             // --- END MODIFICATION ---
                         Spacer()
                         Text(String(format: "%.1f MB", settings.currentDataCacheSizeMB))
-                             // --- MODIFIED: Use adaptive font ---
                             .font(UIConstants.bodyFont)
-                             // --- END MODIFICATION ---
                             .foregroundColor(.secondary)
                     }
 
@@ -68,69 +76,76 @@ struct SettingsView: View {
                     Picker("Max. Bild-Cache Größe", selection: $settings.maxImageCacheSizeMB) {
                         ForEach(cacheSizeOptions, id: \.self) { size in
                             Text("\(size) MB").tag(size)
-                                .font(UIConstants.bodyFont) // Apply font to picker options
+                                .font(UIConstants.bodyFont)
                         }
                     }
-                     // --- MODIFIED: Use adaptive font ---
-                    .font(UIConstants.bodyFont) // Apply to Picker label
-                     // --- END MODIFICATION ---
+                    .font(UIConstants.bodyFont)
                     .onChange(of: settings.maxImageCacheSizeMB) { _, _ in
                         Self.logger.info("Max image cache size setting changed.")
                     }
 
-                    // Button to clear all caches
+                    // Button to clear all caches (remains here)
                     Button("Gesamten App-Cache leeren", role: .destructive) {
                         showingClearAllCacheAlert = true // Trigger confirmation alert
                     }
-                     // --- MODIFIED: Use adaptive font ---
                     .font(UIConstants.bodyFont)
-                    .frame(maxWidth: .infinity, alignment: .center) // Center button text
-                     // --- END MODIFICATION ---
+                    .frame(maxWidth: .infinity, alignment: .center)
 
                 } header: {
-                    // Use standard header for the section title
                     Text("Cache")
-                        // Optional: Adjust header font if needed
-                        // .font(UIConstants.headlineFont)
                 } footer: {
-                    // Provide explanatory text about cache limits
-                    Text("Der Bild-Cache (Kingfisher) wird automatisch auf die gewählte Maximalgröße begrenzt. Der Daten-Cache (Feeds etc.) hat ein festes Limit von 50 MB und löscht die ältesten Einträge bei Überschreitung (LRU).")
-                         // --- MODIFIED: Use adaptive font ---
-                        .font(UIConstants.footnoteFont) // Use footnote font for footer
-                         // --- END MODIFICATION ---
+                    Text("Der Bild-Cache (Kingfisher) wird automatisch auf die gewählte Maximalgröße begrenzt. Der Daten-Cache (Feeds etc.) hat ein festes Limit von 50 MB und löscht die ältesten Einträge bei Überschreitung (LRU). 'Gesamten App-Cache leeren' löscht Bilder, Daten und auch die Gesehen-Markierungen.")
+                        .font(UIConstants.footnoteFont)
                 }
-                 // Optional: Make header slightly more prominent on Mac
                  .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
-                // --- NEW: Info Section with License & Dependencies Link ---
+                // --- MODIFIED: Info Section ---
                 Section {
+                    // Link to Licenses view
                     NavigationLink(destination: LicenseAndDependenciesView()) {
                         Text("Lizenzen & Abhängigkeiten")
                             .font(UIConstants.bodyFont)
                     }
+
+                    // Link to GitHub Repository
+                    if let url = URL(string: "https://github.com/daranto/Pr0gramm-Client-IOS-MacOS") {
+                        Link(destination: url) {
+                            // Use Label for icon and text
+                            Label("Projekt auf GitHub", systemImage: "link")
+                                .font(UIConstants.bodyFont)
+                        }
+                        // Optional: Tint the link to make it stand out
+                        .tint(.accentColor)
+                    }
+
                 } header: {
-                    Text("Info")
+                    Text("Info & Projekt") // Header text updated
                 }
-                // --- END NEW SECTION ---
+                // --- END MODIFICATION ---
+                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
             }
             .navigationTitle("Einstellungen")
+            .alert("Gesehene Posts zurücksetzen?", isPresented: $showingClearSeenItemsAlert) {
+                Button("Abbrechen", role: .cancel) { }
+                Button("Zurücksetzen", role: .destructive) {
+                    Task {
+                        await settings.clearSeenItemsCache()
+                    }
+                }
+            } message: {
+                Text("Dadurch werden alle Markierungen für gesehene Bilder und Videos entfernt. Die Posts erscheinen wieder als 'neu'.")
+            }
             .alert("Gesamten App-Cache leeren?", isPresented: $showingClearAllCacheAlert) {
-                // Confirmation alert buttons
                 Button("Abbrechen", role: .cancel) { }
                 Button("Leeren", role: .destructive) {
-                    // Perform cache clearing asynchronously
                     Task {
                         await settings.clearAllAppCache()
                     }
                 }
             } message: {
-                // Confirmation alert message
-                Text("Möchtest du wirklich alle zwischengespeicherten Daten (Feeds, Favoriten, Bilder etc.) löschen? Dies kann nicht rückgängig gemacht werden.")
-                    // Optional: Apply font to alert message if needed
-                    // .font(UIConstants.bodyFont)
+                Text("Möchtest du wirklich alle zwischengespeicherten Daten (Feeds, Favoriten, Bilder, Gesehen-Markierungen etc.) löschen? Dies kann nicht rückgängig gemacht werden.")
             }
             .onAppear {
-                // Update displayed cache sizes when the view appears
                 Task {
                     await settings.updateCacheSizes()
                 }
@@ -143,10 +158,9 @@ struct SettingsView: View {
 // MARK: - Preview
 
 #Preview {
-    // Provide AppSettings for the preview environment
     SettingsView().environmentObject(AppSettings())
 }
-// --- NEW: Placeholder for LicenseAndDependenciesView ---
+// LicenseAndDependenciesView (unverändert)
 struct LicenseAndDependenciesView: View {
     var body: some View {
         ScrollView {
@@ -183,6 +197,7 @@ struct LicenseAndDependenciesView: View {
                     .font(.title2).bold()
                 VStack(alignment: .leading, spacing: 8) {
                     Link("Kingfisher", destination: URL(string: "https://github.com/onevcat/Kingfisher")!)
+                        .font(UIConstants.bodyFont)
                 }
 
                 Spacer()
@@ -190,7 +205,9 @@ struct LicenseAndDependenciesView: View {
             .padding()
         }
         .navigationTitle("Lizenzen")
+         #if os(iOS)
+         .navigationBarTitleDisplayMode(.inline)
+         #endif
     }
 }
-// --- END NEW LicenseAndDependenciesView ---
 // --- END OF COMPLETE FILE ---
