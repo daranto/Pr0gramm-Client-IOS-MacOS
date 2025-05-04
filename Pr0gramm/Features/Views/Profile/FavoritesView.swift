@@ -46,40 +46,74 @@ struct FavoritesView: View {
 
     // No displayedItems computed property, uses 'items' directly
 
-    var body: some View {
-        NavigationStack(path: $navigationPath) {
-            favoritesContentView // Use extracted view
-            .toolbar {
-                 ToolbarItem(placement: .navigationBarLeading) { Text("Favoriten").font(.title3).fontWeight(.bold) }
-                 ToolbarItem(placement: .primaryAction) { Button { showingFilterSheet = true } label: { Label("Filter", systemImage: "line.3.horizontal.decrease.circle") } }
-            }
-            .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) { Button("OK") { errorMessage = nil } } message: { Text(errorMessage ?? "Unbekannter Fehler") }
-            .sheet(isPresented: $showingFilterSheet) { FilterView().environmentObject(settings).environmentObject(authService) }
-            .navigationDestination(for: Item.self) { destinationItem in
-                // --- PASS PlayerManager to PagedDetailView ---
-                if let index = items.firstIndex(where: { $0.id == destinationItem.id }) {
-                    PagedDetailView(items: items, selectedIndex: index, playerManager: playerManager) // Pass manager
-                } else {
-                    Text("Fehler: Item nicht in Favoriten gefunden.")
-                }
-                // ---------------------------------------------
-            }
-            .task(id: authService.isLoggedIn) { // Use .task(id:) for login/logout changes and initial setup
-                 // Configure manager whenever login status might change
-                 playerManager.configure(settings: settings)
-                 await handleLoginOrFilterChange()
-             }
-            .onChange(of: settings.showSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
-            .onChange(of: settings.showNSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
-            .onChange(of: settings.showNSFL) { _, _ in Task { await handleLoginOrFilterChange() } }
-            .onChange(of: settings.showNSFP) { _, _ in Task { await handleLoginOrFilterChange() } }
-            .onChange(of: settings.showPOL) { _, _ in Task { await handleLoginOrFilterChange() } }
-             .onChange(of: settings.seenItemIDs) { _, _ in
-                 FavoritesView.logger.trace("FavoritesView detected change in seenItemIDs, body will update.")
-             }
-             // No onChange needed for hideSeenItems as it doesn't affect this view's filtering
-        }
+var body: some View {
+    // Base view under navigation
+    let base = NavigationStack(path: $navigationPath) {
+        favoritesContentView
     }
+    // Attach toolbar
+    let withToolbar = base
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Text("Favoriten")
+                    .font(.title3)
+                    .fontWeight(.bold)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingFilterSheet = true
+                } label: {
+                    Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                }
+            }
+        }
+    // Attach alert
+    let withAlert = withToolbar
+        .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "Unbekannter Fehler")
+        }
+    // Attach sheet
+    let withSheet = withAlert
+        .sheet(isPresented: $showingFilterSheet) {
+            FilterView()
+                .environmentObject(settings)
+                .environmentObject(authService)
+        }
+    // Attach navigation destination
+    let withNavDest = withSheet
+        .navigationDestination(for: Item.self) { destinationItem in
+            if let index = items.firstIndex(where: { $0.id == destinationItem.id }) {
+                PagedDetailView(
+                    items: $items,
+                    selectedIndex: index,
+                    playerManager: playerManager,
+                    loadMoreAction: {
+                        Task { await loadMoreFavorites() }
+                    }
+                )
+            } else {
+                Text("Fehler: Item nicht in Favoriten gefunden.")
+            }
+        }
+    // Attach task
+    let withTask = withNavDest
+        .task(id: authService.isLoggedIn) {
+            playerManager.configure(settings: settings)
+            await handleLoginOrFilterChange()
+        }
+    // Chain onChange modifiers individually
+    let afterSFW = withTask.onChange(of: settings.showSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
+    let afterNSFW = afterSFW.onChange(of: settings.showNSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
+    let afterNSFL = afterNSFW.onChange(of: settings.showNSFL) { _, _ in Task { await handleLoginOrFilterChange() } }
+    let afterNSFP = afterNSFL.onChange(of: settings.showNSFP) { _, _ in Task { await handleLoginOrFilterChange() } }
+    let afterPOL = afterNSFP.onChange(of: settings.showPOL) { _, _ in Task { await handleLoginOrFilterChange() } }
+    let afterSeen = afterPOL.onChange(of: settings.seenItemIDs) { _, _ in
+        FavoritesView.logger.trace("FavoritesView detected change in seenItemIDs, body will update.")
+    }
+    return afterSeen
+}
 
     // MARK: - Extracted Content Views
 
