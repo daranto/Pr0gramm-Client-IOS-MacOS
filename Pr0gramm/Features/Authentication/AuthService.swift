@@ -443,7 +443,7 @@ class AuthService: ObservableObject {
     }
 
 
-    // --- Keep async, runs parts on MainActor ---
+    // --- Keep async, runs parts on MainActor  ---
     private func extractNonceFromCookieStorage() async -> String? {
         AuthService.logger.debug("Attempting to extract nonce from cookie storage (trying JSON format first, then shorten)...")
          guard let url = URL(string: "https://pr0gramm.com") else { return nil }
