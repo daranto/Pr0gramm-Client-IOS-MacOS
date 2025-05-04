@@ -2,8 +2,8 @@
 // --- START OF COMPLETE FILE ---
 
 import SwiftUI
-import AVFoundation // <-- Add this import for AVAudioSession
-import os         // <-- Add this import for Logger
+import AVFoundation // <-- Import ist bereits vorhanden
+import os         // <-- Import ist bereits vorhanden
 
 /// The main entry point for the Pr0gramm SwiftUI application.
 @main
@@ -15,7 +15,7 @@ struct Pr0grammApp: App {
     /// Manages the currently selected tab and navigation requests.
     @StateObject private var navigationService = NavigationService()
 
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Pr0grammApp") // <-- Add logger
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Pr0grammApp") // <-- Logger ist bereits vorhanden
 
     init() {
         // Initialize services, ensuring AuthService has access to AppSettings
@@ -41,28 +41,40 @@ struct Pr0grammApp: App {
         }
     }
 
-    // --- Add this private function ---
-    /// Configures the shared AVAudioSession to allow audio playback even when the silent switch is on.
+    /// Configures the shared AVAudioSession to:
+    /// 1. Allow audio playback even when the silent switch is on (`.playback`).
+    /// 2. Attempt to mix with other audio playing on the system (`.mixWithOthers`).
+    /// 3. Force audio output to the device's built-in speaker (`overrideOutputAudioPort(.speaker)`).
     private func configureAudioSession() {
         Self.logger.info("Configuring AVAudioSession...")
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            // Set the category to .playback. This category allows audio playback
-            // to ignore the device's silent switch (ringer mute).
-            // It also allows mixing with audio from other apps by default.
-            try audioSession.setCategory(.playback, mode: .default) // .default mode is usually sufficient
+            // Set category to playback (ignores mute switch) and allow mixing
+            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            Self.logger.info("AVAudioSession category set to '.playback' with options '[.mixWithOthers]'.")
 
-            // Optionally, activate the audio session here. While AVPlayer often handles
-            // activation implicitly, activating it explicitly can sometimes prevent
-            // minor delays or issues, especially if other audio features were planned.
+            // Activate the session BEFORE overriding the port
             try audioSession.setActive(true)
+            Self.logger.info("AVAudioSession activated.")
 
-            Self.logger.info("AVAudioSession configured successfully with category '.playback' and activated.")
+            // --- NEW: Force output to built-in speaker ---
+            // This overrides the default routing (e.g., AirPlay, Bluetooth)
+            // and sends the app's audio specifically to the device speaker.
+            do {
+                try audioSession.overrideOutputAudioPort(.speaker)
+                Self.logger.info("AVAudioSession output successfully overridden to force speaker.")
+            } catch let error as NSError {
+                // Log specific errors, e.g., if the category doesn't support override
+                Self.logger.error("Failed to override output port to speaker: \(error.localizedDescription) (Code: \(error.code))")
+                // Consider specific error codes if necessary, e.g., cannotBeOverridden = 560161140
+            }
+            // --- END NEW ---
+
+            Self.logger.info("AVAudioSession configuration complete.")
 
         } catch {
-            Self.logger.error("Failed to configure or activate AVAudioSession: \(error.localizedDescription)")
+            Self.logger.error("Failed during AVAudioSession configuration (setCategory or setActive): \(error.localizedDescription)")
         }
     }
-    // ------------------------------
 }
 // --- END OF COMPLETE FILE ---
