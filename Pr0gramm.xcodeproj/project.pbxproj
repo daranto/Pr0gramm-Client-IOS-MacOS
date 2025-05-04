@@ -73,6 +73,7 @@
 				0051133C2DB5899600C48DF1 /* Sources */,
 				0051133D2DB5899600C48DF1 /* Frameworks */,
 				0051133E2DB5899600C48DF1 /* Resources */,
+				0060A0492DC78D4800C07166 /* ShellScript */,
 			);
 			buildRules = (
 			);
@@ -135,6 +136,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		0060A0492DC78D4800C07166 /* ShellScript */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "./xcodecloud-prepare.sh\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		0051133C2DB5899600C48DF1 /* Sources */ = {
