@@ -8,7 +8,7 @@ import os
 import Kingfisher
 import UIKit // Für UIPasteboard
 
-// MARK: - DetailImageView (Using KFImage with correct modifier order for stable layout)
+// MARK: - DetailImageView (Unverändert)
 @MainActor
 struct DetailImageView: View {
     let item: Item
@@ -48,7 +48,7 @@ struct DetailViewContent: View {
     let totalTagCount: Int
     let showingAllTags: Bool
 
-    let flatComments: [FlatCommentDisplayItem] // Receives the filtered list
+    let flatComments: [FlatCommentDisplayItem]
     let totalCommentCount: Int
 
     let infoLoadingStatus: InfoLoadingStatus
@@ -58,13 +58,14 @@ struct DetailViewContent: View {
     let toggleFavoriteAction: () async -> Void
     let showAllTagsAction: () -> Void
 
-    // --- NEW: Receive state/action for comments ---
-    let isCommentCollapsed: (Int) -> Bool // Function to check collapse state
-    let toggleCollapseAction: (Int) -> Void // Action to toggle
-    // --- END NEW ---
+    let isCommentCollapsed: (Int) -> Bool
+    let toggleCollapseAction: (Int) -> Void
 
     @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var authService: AuthService
+    // --- NEW: Access AppSettings ---
+    @EnvironmentObject var settings: AppSettings
+    // --- END NEW ---
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
     @State private var isProcessingFavorite = false
@@ -81,6 +82,19 @@ struct DetailViewContent: View {
                 DetailImageView(item: item, horizontalSizeClass: horizontalSizeClass, fullscreenImageTarget: $fullscreenImageTarget)
             }
         }
+        // --- NEW: Overlay for Seen Checkmark ---
+        .overlay(alignment: .topTrailing) { // Align to top trailing corner
+            if settings.seenItemIDs.contains(item.id) {
+                Image(systemName: "checkmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, Color.accentColor)
+                    .font(.title2) // Slightly larger font for detail view
+                    .padding(8) // Add some padding
+                    // Optional: Add a semi-transparent background for better visibility
+                    .padding(8) // Padding outside the background/clipShape
+            }
+        }
+        // --- END NEW ---
     }
     @ViewBuilder private var voteCounterView: some View { /* ... unverändert ... */
         let benis = item.up - item.down
@@ -98,14 +112,8 @@ struct DetailViewContent: View {
         .buttonStyle(.plain).disabled(isProcessingFavorite || !authService.isLoggedIn)
     }
     @ViewBuilder private var shareButton: some View { /* ... unverändert ... */
-        Button { showingShareOptions = true } // Trigger the dialog
-        label: {
-            Image(systemName: "square.and.arrow.up")
-                .imageScale(.large)
-                .foregroundColor(.secondary) // Consistent styling with favorite button
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-        }
+        Button { showingShareOptions = true }
+        label: { Image(systemName: "square.and.arrow.up").imageScale(.large).foregroundColor(.secondary).frame(width: 44, height: 44).contentShape(Rectangle()) }
         .buttonStyle(.plain)
     }
 
@@ -146,52 +154,44 @@ struct DetailViewContent: View {
         var body: some View { Text(displayText).font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.gray.opacity(0.2)).foregroundColor(.primary).clipShape(Capsule()) }
     }
 
-    /// Instantiates CommentsSection, passing the flat list and total count.
-    @ViewBuilder private var commentsContent: some View {
-        // --- MODIFIED: Pass down collapse info/action ---
+    @ViewBuilder private var commentsContent: some View { /* ... unverändert ... */
         CommentsSection(
-            flatComments: flatComments, // Pass the already filtered list
+            flatComments: flatComments,
             totalCommentCount: totalCommentCount,
             status: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget,
-            isCommentCollapsed: isCommentCollapsed, // Pass down function
-            toggleCollapseAction: toggleCollapseAction // Pass down action
+            isCommentCollapsed: isCommentCollapsed,
+            toggleCollapseAction: toggleCollapseAction
         )
-        // --- END MODIFICATION ---
     }
 
     // MARK: - Body
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
-                 // --- Regular Layout (Side-by-Side) ---
                 HStack(alignment: .top, spacing: 0) {
-                    mediaContentInternal
+                    mediaContentInternal // Contains the overlay now
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     Divider()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 15) {
                             infoAndTagsContent.padding([.horizontal, .top]);
-                            // Ensure commentsContent is correctly placed
-                            commentsContent.padding([.horizontal, .bottom]) // Pass collapse info here too
+                            commentsContent.padding([.horizontal, .bottom])
                         }
                     }
                     .frame(minWidth: 300, idealWidth: 450, maxWidth: 600).background(Color(.secondarySystemBackground))
                 }
             } else {
-                 // --- Compact Layout (Vertical Stack) ---
                 ScrollView {
                     VStack(spacing: 0) {
                         GeometryReader { geo in
                             let aspect = guessAspectRatio() ?? 1.0
-                            mediaContentInternal
+                            mediaContentInternal // Contains the overlay now
                                 .frame(width: geo.size.width, height: geo.size.width / aspect)
                         }
                         .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
-
                         infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
-                        // Ensure commentsContent is correctly placed
-                        commentsContent.padding(.horizontal).padding(.bottom, 10) // Pass collapse info here too
+                        commentsContent.padding(.horizontal).padding(.bottom, 10)
                     }
                 }
             }
@@ -199,40 +199,25 @@ struct DetailViewContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
         .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
-        .confirmationDialog(
-            "Link kopieren",
-            isPresented: $showingShareOptions,
-            titleVisibility: .visible
+        .confirmationDialog( /* ... unverändert ... */
+            "Link kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
         ) {
-            Button("Post-Link (pr0gramm.com)") {
-                let urlString = "https://pr0gramm.com/new/\(item.id)"
-                UIPasteboard.general.string = urlString
-                Self.logger.info("Copied Post-Link to clipboard: \(urlString)")
-            }
-            Button("Direkter Medien-Link") {
-                if let urlString = item.imageUrl?.absoluteString {
-                    UIPasteboard.general.string = urlString
-                    Self.logger.info("Copied Media-Link to clipboard: \(urlString)")
-                } else {
-                    Self.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)")
-                }
-            }
-        } message: {
-             Text("Welchen Link möchtest du in die Zwischenablage kopieren?")
-        }
+            Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; Self.logger.info("Copied Post-Link to clipboard: \(urlString)") }
+            Button("Direkter Medien-Link") { if let urlString = item.imageUrl?.absoluteString { UIPasteboard.general.string = urlString; Self.logger.info("Copied Media-Link to clipboard: \(urlString)") } else { Self.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)") } }
+        } message: { Text("Welchen Link möchtest du in die Zwischenablage kopieren?") }
     }
 
 
     // MARK: - Helper Methods
     private func guessAspectRatio() -> CGFloat? { /* ... unverändert ... */
-        guard item.width > 0, item.height > 0 else { return 1.0 } // Fallback to 1:1 if data missing
+        guard item.width > 0, item.height > 0 else { return 1.0 }
         return CGFloat(item.width) / CGFloat(item.height)
     }
 }
 
-// --- MODIFIED: Font helper extension needs to be here or globally available ---
+// Helper Extension (unverändert)
 fileprivate extension UIFont {
-    static func uiFont(from font: Font) -> UIFont {
+    static func uiFont(from font: Font) -> UIFont { /* ... unverändert ... */
         switch font {
             case .largeTitle: return UIFont.preferredFont(forTextStyle: .largeTitle)
             case .title: return UIFont.preferredFont(forTextStyle: .title1)
@@ -249,67 +234,37 @@ fileprivate extension UIFont {
         }
     }
 }
-// --- END MODIFICATION ---
 
 
-// MARK: - Previews (Angepasst)
-
-// Helper function for preview data (using FlatCommentDisplayItem)
-@MainActor
-private func flattenHierarchyForPreview(comments: [ItemComment], maxDepth: Int = 5) -> [FlatCommentDisplayItem] {
-    var flatList: [FlatCommentDisplayItem] = []
-    let childrenByParentId = Dictionary(grouping: comments.filter { $0.parent != nil && $0.parent != 0 }, by: { $0.parent! })
-    let commentDict = Dictionary(uniqueKeysWithValues: comments.map { ($0.id, $0) })
-
-    func traverse(commentId: Int, currentLevel: Int) {
-        guard currentLevel <= maxDepth, let comment = commentDict[commentId] else { return }
-        let children = childrenByParentId[commentId] ?? []
-        let hasChildren = !children.isEmpty
-        flatList.append(FlatCommentDisplayItem(id: comment.id, comment: comment, level: currentLevel, hasChildren: hasChildren)) // Include hasChildren
-        guard currentLevel < maxDepth else { return }
-        // Preview doesn't need sorting, just traverse
-        children.forEach { traverse(commentId: $0.id, currentLevel: currentLevel + 1) }
-    }
-    let topLevelComments = comments.filter { $0.parent == nil || $0.parent == 0 }
-    topLevelComments.forEach { traverse(commentId: $0.id, currentLevel: 0) }
-    return flatList
-}
-
-
+// MARK: - Previews (Angepasst, benötigt AppSettings)
 #Preview("Compact - Limited Tags") {
-    // --- MODIFIED: Use State wrapper for preview state ---
+    // --- Wrapper View für Preview Setup ---
     struct PreviewWrapper: View {
         @State var previewLinkTarget: PreviewLinkTarget? = nil
         @State var fullscreenTarget: FullscreenImageTarget? = nil
-        // --- NEW: Add state for collapsed comments ---
         @State var collapsedIDs: Set<Int> = []
-        // --- END NEW ---
+        // --- StateObjects für die Preview Instanzen ---
+        @StateObject var settings = AppSettings()
+        // Initialize AuthService with a temporary AppSettings instance, will be replaced in .task
+        @StateObject var authService = AuthService(appSettings: AppSettings())
+        @StateObject var navService = NavigationService()
 
-        // --- NEW: Toggle function for preview ---
-        func toggleCollapse(_ id: Int) {
-            if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) }
-        }
-        // --- END NEW ---
-        // --- NEW: isCollapsed function for preview ---
-        func isCollapsed(_ id: Int) -> Bool {
-            collapsedIDs.contains(id)
-        }
-        // --- END NEW ---
+        func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
+        func isCollapsed(_ id: Int) -> Bool { collapsedIDs.contains(id) }
 
+        // --- Moved Sample Data inside body or task ---
 
         var body: some View {
+            // --- Define Sample Data Here ---
             let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true)
             let previewHandler = KeyboardActionHandler()
             let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "TopTag1"), ItemTag(id: 2, confidence: 0.8, tag: "TopTag2"), ItemTag(id: 3, confidence: 0.7, tag: "TopTag3"), ItemTag(id: 4, confidence: 0.6, tag: "beim lesen programmieren gelernt") ]
-            // --- MODIFIED: Use ItemComment and flattenHierarchyForPreview ---
+            // Calculate flat comments based on sample comments
             let sampleComments = [ ItemComment(id: 1, parent: 0, content: "Kommentar 1 http://pr0gramm.com/new/54321", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), ItemComment(id: 2, parent: 1, content: "Antwort 1.1", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "User2", mark: 2) ]
             let previewFlatComments = flattenHierarchyForPreview(comments: sampleComments)
-            // --- END MODIFICATION ---
-            let navService = NavigationService()
-            let settings = AppSettings()
-            let authService = { let auth = AuthService(appSettings: settings); auth.isLoggedIn = true; auth.favoritesCollectionId = 1234; return auth }()
+            // --- End Sample Data ---
 
-            return NavigationStack {
+            NavigationStack {
                 DetailViewContent(
                     item: sampleVideoItem,
                     keyboardActionHandler: previewHandler,
@@ -318,7 +273,7 @@ private func flattenHierarchyForPreview(comments: [ItemComment], maxDepth: Int =
                     displayedTags: Array(previewTags.prefix(4)),
                     totalTagCount: previewTags.count,
                     showingAllTags: false,
-                    flatComments: previewFlatComments, // Pass flat list
+                    flatComments: previewFlatComments, // Use calculated value
                     totalCommentCount: previewFlatComments.count,
                     infoLoadingStatus: .loaded,
                     previewLinkTarget: $previewLinkTarget,
@@ -326,21 +281,51 @@ private func flattenHierarchyForPreview(comments: [ItemComment], maxDepth: Int =
                     isFavorited: true,
                     toggleFavoriteAction: {},
                     showAllTagsAction: {},
-                    // --- NEW: Pass preview functions ---
                     isCommentCollapsed: isCollapsed,
                     toggleCollapseAction: toggleCollapse
-                    // --- END NEW ---
                 )
+                // Umgebungsobjekte übergeben
                 .environmentObject(navService)
                 .environmentObject(settings)
-                .environmentObject(authService)
+                .environmentObject(authService) // Pass the @StateObject instance
                 .environment(\.horizontalSizeClass, .compact)
                 .preferredColorScheme(.dark)
+                .task {
+                    // --- MODIFIED: Configure AuthService and mark item AFTER init ---
+                    // Ensure AuthService uses the correct AppSettings instance from the environment
+                    // (This assumes AuthService can handle reconfiguration or is simple enough)
+                    // A better approach might involve passing AppSettings via init if possible,
+                    // but for Preview, direct modification in .task often works.
+                    if authService.currentUser == nil { // Prevent re-running setup if already done
+                         authService.isLoggedIn = true
+                         authService.favoritesCollectionId = 1234
+                         authService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil) // Example user
+                         // Mark item 2 as seen using the public method
+                         await settings.markItemAsSeen(id: 2)
+                         print("Preview Task: AuthService configured and item marked as seen.")
+                    }
+                    // --- END MODIFICATION ---
+                }
             }
         }
     }
-    return PreviewWrapper() // Return the wrapper
-    // --- END MODIFICATION ---
-}
 
-// --- END OF COMPLETE FILE ---
+    // Helper function remains the same
+    @MainActor func flattenHierarchyForPreview(comments: [ItemComment], maxDepth: Int = 5) -> [FlatCommentDisplayItem] {
+        var flatList: [FlatCommentDisplayItem] = []
+        let childrenByParentId = Dictionary(grouping: comments.filter { $0.parent != nil && $0.parent != 0 }, by: { $0.parent! })
+        let commentDict = Dictionary(uniqueKeysWithValues: comments.map { ($0.id, $0) })
+        func traverse(commentId: Int, currentLevel: Int) {
+            guard currentLevel <= maxDepth, let comment = commentDict[commentId] else { return }
+            let children = childrenByParentId[commentId] ?? []
+            let hasChildren = !children.isEmpty
+            flatList.append(FlatCommentDisplayItem(id: comment.id, comment: comment, level: currentLevel, hasChildren: hasChildren))
+            guard currentLevel < maxDepth else { return }
+            children.forEach { traverse(commentId: $0.id, currentLevel: currentLevel + 1) }
+        }
+        let topLevelComments = comments.filter { $0.parent == nil || $0.parent == 0 }
+        topLevelComments.forEach { traverse(commentId: $0.id, currentLevel: 0) }
+        return flatList
+    }
+    return PreviewWrapper() // Return the wrapper
+}
