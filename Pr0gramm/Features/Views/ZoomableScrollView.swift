@@ -4,12 +4,17 @@
 import SwiftUI
 import UIKit
 import Kingfisher // Import Kingfisher
+import os // Import os for logging
 
 /// A UIViewRepresentable that wraps a UIScrollView to enable zooming and panning of an image.
 struct ZoomableScrollView: UIViewRepresentable {
     let item: Item // Pass the item to get the image URL
     @Binding var isLoading: Bool // Indicate loading state
     @Binding var errorMessage: String? // Report errors
+
+    // --- Add Logger ---
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ZoomableScrollView")
+    // -----------------
 
     func makeUIView(context: Context) -> UIScrollView {
         // Configure the UIScrollView
@@ -30,11 +35,10 @@ struct ZoomableScrollView: UIViewRepresentable {
         scrollView.addSubview(imageView)
         context.coordinator.imageView = imageView // Store image view in coordinator
 
-        // --- Add Double Tap Gesture Recognizer ---
+        // Add Double Tap Gesture Recognizer
         let doubleTapRecognizer = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
         doubleTapRecognizer.numberOfTapsRequired = 2
         imageView.addGestureRecognizer(doubleTapRecognizer)
-        // -----------------------------------------
 
         context.coordinator.scrollView = scrollView // Store scroll view
 
@@ -55,7 +59,7 @@ struct ZoomableScrollView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(self, isLoading: $isLoading, errorMessage: $errorMessage)
+        Coordinator(self, isLoading: $isLoading, errorMessage: $errorMessage, logger: Self.logger)
     }
 
     // MARK: - Coordinator
@@ -65,12 +69,16 @@ struct ZoomableScrollView: UIViewRepresentable {
         weak var scrollView: UIScrollView?
         @Binding var isLoading: Bool
         @Binding var errorMessage: String?
+        let logger: Logger // Add logger instance
 
-        init(_ parent: ZoomableScrollView, isLoading: Binding<Bool>, errorMessage: Binding<String?>) {
+        // --- Modified Init ---
+        init(_ parent: ZoomableScrollView, isLoading: Binding<Bool>, errorMessage: Binding<String?>, logger: Logger) {
             self.parent = parent
             self._isLoading = isLoading
             self._errorMessage = errorMessage
+            self.logger = logger // Store logger
         }
+        // ---------------------
 
         /// Tells the delegate which view to zoom in or out.
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {
@@ -84,7 +92,6 @@ struct ZoomableScrollView: UIViewRepresentable {
 
         /// Called *after* Kingfisher has successfully loaded and set the image on the `imageView`.
         /// Configures zoom scale and centers the image view.
-        /// **REMOVED** the `image` parameter as Kingfisher handles setting the image directly.
         func imageDidLoad() {
             guard let imageView = imageView, let scrollView = scrollView else { return }
 
@@ -92,7 +99,7 @@ struct ZoomableScrollView: UIViewRepresentable {
             DispatchQueue.main.async {
                 self.isLoading = false
                 self.errorMessage = nil
-                // imageView.image = image // <-- REMOVED: Kingfisher sets this automatically (static or animated)
+                // imageView.image = image // Kingfisher sets this
                 imageView.sizeToFit() // Adjust image view size based on the image set by Kingfisher
 
                 // Set scroll view content size
@@ -104,16 +111,16 @@ struct ZoomableScrollView: UIViewRepresentable {
 
                 // Center the image initially
                 self.centerImage()
-                print("ZoomableScrollView: Image loaded and initial zoom/centering set (via imageDidLoad).")
+                self.logger.info("Image loaded and initial zoom/centering set.")
             }
         }
 
-        /// Called if image loading fails.
-        func imageLoadFailed(_ error: Error) {
+        /// Called if image loading fails (after potential fallback).
+        func finalImageLoadFailed(_ error: Error) {
              DispatchQueue.main.async {
                 self.isLoading = false
                 self.errorMessage = "Bild konnte nicht geladen werden: \(error.localizedDescription)"
-                print("ZoomableScrollView: Image load failed - \(error.localizedDescription)")
+                self.logger.error("Final image load failed: \(error.localizedDescription)")
             }
         }
 
@@ -125,18 +132,15 @@ struct ZoomableScrollView: UIViewRepresentable {
             let heightScale = size.height / image.size.height
             let minScale = min(widthScale, heightScale)
 
-            // Check if scales are valid before setting
              guard minScale.isFinite, minScale > 0 else {
-                  print("ZoomableScrollView: Warning - Invalid minScale calculated (\(minScale)). Skipping zoom scale update.")
+                  logger.warning("Warning - Invalid minScale calculated (\(minScale)). Skipping zoom scale update.")
                   return
              }
 
             scrollView.minimumZoomScale = minScale
-            // Ensure current zoom isn't less than the new minimum, only if current zoom is valid
              if scrollView.zoomScale.isFinite, scrollView.zoomScale > 0 {
                  scrollView.zoomScale = max(scrollView.zoomScale, minScale)
              } else {
-                 // If current zoomScale is invalid (e.g., 0), set it to the new minimum
                  scrollView.zoomScale = minScale
              }
         }
@@ -146,131 +150,134 @@ struct ZoomableScrollView: UIViewRepresentable {
             guard let imageView = imageView, let scrollView = scrollView else { return }
 
             let scrollViewSize = scrollView.bounds.size
-            // Use imageView's frame size which reflects the zoom level
             let imageViewSize = imageView.frame.size
 
-            // Ensure sizes are valid before calculation
              guard scrollViewSize.width > 0, scrollViewSize.height > 0 else { return }
 
             let horizontalSpace = imageViewSize.width < scrollViewSize.width ? (scrollViewSize.width - imageViewSize.width) / 2 : 0
             let verticalSpace = imageViewSize.height < scrollViewSize.height ? (scrollViewSize.height - imageViewSize.height) / 2 : 0
 
-            // Ensure spaces are non-negative and finite
              let validHorizontalSpace = max(0, horizontalSpace.isFinite ? horizontalSpace : 0)
              let validVerticalSpace = max(0, verticalSpace.isFinite ? verticalSpace : 0)
 
             scrollView.contentInset = UIEdgeInsets(top: validVerticalSpace, left: validHorizontalSpace, bottom: validVerticalSpace, right: validHorizontalSpace)
         }
 
-        /// Loads the image using Kingfisher. Prefers fullsize, falls back to image.
+        // --- MODIFIED: loadImage function with Fallback Logic ---
+        /// Loads the image using Kingfisher. Prefers fullsize, falls back to image on failure.
         func loadImage(item: Item) {
-            guard let imageView = imageView else { return }
+            guard let imageView = imageView else {
+                 logger.error("loadImage called but imageView is nil.")
+                 return
+             }
 
-            // Determine the best URL
-            var targetUrl: URL?
+            // 1. Determine URLs
+            let fullsizeUrl: URL?
             if let fullsizeFilename = item.fullsize, !fullsizeFilename.isEmpty {
-                // Assume fullsize images are on the main image domain
-                targetUrl = URL(string: "https://img.pr0gramm.com/")?.appendingPathComponent(fullsizeFilename)
-                print("ZoomableScrollView: Attempting to load fullsize image: \(targetUrl?.absoluteString ?? "nil")")
+                fullsizeUrl = URL(string: "https://img.pr0gramm.com/")?.appendingPathComponent(fullsizeFilename)
             } else {
-                targetUrl = item.imageUrl // Fallback to regular image URL
-                 print("ZoomableScrollView: Fullsize missing, attempting to load regular image: \(targetUrl?.absoluteString ?? "nil")")
+                fullsizeUrl = nil // Explicitly nil if not available
             }
+            let regularImageUrl = item.imageUrl // Always have the regular URL as fallback
 
-            guard let url = targetUrl else {
-                imageLoadFailed(NSError(domain: "ZoomableScrollView", code: 0, userInfo: [NSLocalizedDescriptionKey: "Keine gültige Bild-URL gefunden."]))
-                return
-            }
-
-             // Update state on main thread
+            // 2. Set initial loading state
             DispatchQueue.main.async {
                 self.isLoading = true
                 self.errorMessage = nil
+                imageView.kf.indicatorType = .activity // Show loading indicator
             }
 
-            // Use Kingfisher to download and set the image
-            imageView.kf.indicatorType = .activity // Show loading indicator
-            imageView.kf.setImage(with: url, options: [.transition(.fade(0.2))]) { [weak self] result in
-                guard let self = self else { return }
-                switch result {
-                case .success:
-                    // --- MODIFIED: Call imageDidLoad without passing the image ---
-                    self.imageDidLoad()
-                    // --- END MODIFICATION ---
-                case .failure(let error):
-                     // Don't report cancellation errors
-                     if !error.isTaskCancelled && !error.isNotCurrentTask {
-                        self.imageLoadFailed(error)
-                     } else {
-                          print("ZoomableScrollView: Image loading cancelled.")
-                          // Reset loading state if cancelled
-                           DispatchQueue.main.async { self.isLoading = false }
-                     }
+            // 3. Define the load function (to avoid repetition)
+            func performLoad(url: URL?, isFallback: Bool) {
+                guard let targetUrl = url else {
+                    // If even the regular URL is nil, fail immediately
+                    logger.error("Cannot load image for item \(item.id): Target URL is nil (isFallback: \(isFallback)).")
+                    self.finalImageLoadFailed(NSError(domain: "ZoomableScrollView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Bild-URL ungültig."]))
+                    return
+                }
+
+                logger.info("Attempting to load image [isFallback=\(isFallback)] from: \(targetUrl.absoluteString)")
+
+                imageView.kf.setImage(with: targetUrl, options: [.transition(.fade(0.2))]) { [weak self] result in
+                    guard let self = self else { return }
+
+                    switch result {
+                    case .success:
+                        self.logger.info("Successfully loaded image [isFallback=\(isFallback)].")
+                        self.imageDidLoad() // Call common setup function
+
+                    case .failure(let error):
+                        // Ignore cancellation errors
+                        if error.isTaskCancelled || error.isNotCurrentTask {
+                            self.logger.info("Image loading cancelled [isFallback=\(isFallback)].")
+                            // Optionally reset loading state if needed, depends on flow
+                            // DispatchQueue.main.async { self.isLoading = false }
+                            return
+                        }
+
+                        self.logger.warning("Failed to load image [isFallback=\(isFallback)] from \(targetUrl.absoluteString): \(error.localizedDescription)")
+
+                        if !isFallback, let fallbackUrl = regularImageUrl {
+                            // If the primary (fullsize) load failed, try the fallback (regular)
+                            self.logger.info("Fullsize failed, attempting fallback to regular image.")
+                            performLoad(url: fallbackUrl, isFallback: true)
+                        } else {
+                            // If this was already the fallback, or fallback URL is nil, then it's a final failure
+                            self.finalImageLoadFailed(error)
+                        }
+                    }
                 }
             }
+
+            // 4. Start the loading process
+            if let primaryUrl = fullsizeUrl {
+                 // Try fullsize first
+                 performLoad(url: primaryUrl, isFallback: false)
+            } else {
+                 // If no fullsize, go directly to regular image
+                 logger.info("No fullsize URL available, loading regular image directly.")
+                 performLoad(url: regularImageUrl, isFallback: true) // Treat as fallback for logic, though it's the primary attempt here
+            }
         }
+        // --- END MODIFIED loadImage ---
+
 
         /// Handles double-tap gestures to zoom in or reset zoom.
         @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
             guard let scrollView = scrollView else { return }
-             // Use a small tolerance to compare zoom scales to avoid floating point issues
             let tolerance: CGFloat = 0.001
             if scrollView.zoomScale > scrollView.minimumZoomScale + tolerance {
-                // Zoom out
                 scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
             } else {
-                // Zoom in to a specific point or a fixed scale (e.g., 2x)
-                // Calculate a moderate zoom scale, e.g., half way to max zoom
-                let targetScale = max(scrollView.minimumZoomScale * 2.0, min(scrollView.maximumZoomScale, 2.0)) // Zoom to 2x or max/2, whichever is appropriate
+                let targetScale = max(scrollView.minimumZoomScale * 2.0, min(scrollView.maximumZoomScale, 2.0))
                 let zoomRect = zoomRectForScale(scale: targetScale, center: recognizer.location(in: recognizer.view))
-                if zoomRect != .zero { // Ensure zoomRect is valid
+                if zoomRect != .zero {
                     scrollView.zoom(to: zoomRect, animated: true)
                 }
-                // Alternative: Zoom to a fixed scale like 2x
-                // scrollView.setZoomScale(2.0, animated: true)
             }
         }
 
         /// Calculates the rectangle to zoom into for a given scale and center point.
         private func zoomRectForScale(scale: CGFloat, center: CGPoint) -> CGRect {
             guard let imageView = imageView, let scrollView = scrollView, scale > 0 else { return CGRect.zero }
-
             var zoomRect = CGRect.zero
-
-            // Ensure imageView has a valid frame size
             guard imageView.frame.size.width > 0, imageView.frame.size.height > 0 else { return .zero }
-
-            // Calculate the size of the zoom rectangle in the coordinate system of the imageView
             zoomRect.size.width = imageView.frame.size.width / scale
             zoomRect.size.height = imageView.frame.size.height / scale
-
-            // Ensure the calculated size is valid
              guard zoomRect.size.width.isFinite, zoomRect.size.width > 0,
                    zoomRect.size.height.isFinite, zoomRect.size.height > 0 else { return .zero }
-
-            // Convert the tap location (center) from the scrollView's coordinate system
-            // to the imageView's coordinate system.
             let centerInImageView = imageView.convert(center, from: scrollView)
-
-            // Calculate the origin of the zoom rectangle
             zoomRect.origin.x = centerInImageView.x - (zoomRect.size.width / 2.0)
             zoomRect.origin.y = centerInImageView.y - (zoomRect.size.height / 2.0)
-
-            // Ensure the origin is valid
              guard zoomRect.origin.x.isFinite, zoomRect.origin.y.isFinite else { return .zero }
 
-
-            // --- Clamp the zoomRect to the bounds of the image ---
+             // Clamp the zoomRect to the bounds of the image
              let imageWidth = imageView.frame.width
              let imageHeight = imageView.frame.height
-
              if zoomRect.origin.x < 0 { zoomRect.origin.x = 0 }
              if zoomRect.origin.y < 0 { zoomRect.origin.y = 0 }
-
              if zoomRect.maxX > imageWidth { zoomRect.origin.x -= (zoomRect.maxX - imageWidth) }
              if zoomRect.maxY > imageHeight { zoomRect.origin.y -= (zoomRect.maxY - imageHeight) }
-             // --- End Clamping ---
-
 
             return zoomRect
         }
