@@ -21,16 +21,13 @@ struct CachedItemDetails {
 }
 
 
-// MARK: - PagedDetailTabViewItem (angepasst)
-
+// MARK: - PagedDetailTabViewItem (unverändert gegenüber letzter Version)
 @MainActor
 struct PagedDetailTabViewItem: View {
     let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
     let player: AVPlayer?
-    // --- MODIFIED: Takes the already filtered list ---
     let visibleFlatComments: [FlatCommentDisplayItem]
-    // --- END MODIFICATION ---
     let totalCommentCount: Int
     let displayedTags: [ItemTag]
     let totalTagCount: Int
@@ -47,37 +44,28 @@ struct PagedDetailTabViewItem: View {
     let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
     let showAllTagsAction: () -> Void
-    // --- NEW: Callback and collapsed set ---
     let collapsedCommentIDs: Set<Int>
     let toggleCollapseAction: (Int) -> Void
-    // --- END NEW ---
 
     @EnvironmentObject private var settings: AppSettings
 
-    // --- NEW: Helper to pass down to CommentView ---
     private func isCommentCollapsed(_ commentID: Int) -> Bool {
         collapsedCommentIDs.contains(commentID)
     }
-    // --- END NEW ---
 
     var body: some View {
-        // Pass the filtered list directly to DetailViewContent
         DetailViewContent(
             item: item, keyboardActionHandler: keyboardActionHandler, player: player,
             onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen,
             displayedTags: displayedTags, totalTagCount: totalTagCount, showingAllTags: showingAllTags,
-            // --- MODIFIED: Pass filtered comments ---
             flatComments: visibleFlatComments,
-            // --- END MODIFICATION ---
             totalCommentCount: totalCommentCount,
             infoLoadingStatus: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget, fullscreenImageTarget: $fullscreenImageTarget,
             isFavorited: isFavorited, toggleFavoriteAction: toggleFavoriteAction,
             showAllTagsAction: showAllTagsAction,
-            // --- NEW: Pass state and action down ---
-            isCommentCollapsed: isCommentCollapsed, // Pass function
-            toggleCollapseAction: toggleCollapseAction // Pass callback
-            // --- END NEW ---
+            isCommentCollapsed: isCommentCollapsed,
+            toggleCollapseAction: toggleCollapseAction
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -91,7 +79,6 @@ struct PagedDetailTabViewItem: View {
 
 
 // MARK: - PagedDetailView (angepasst)
-
 @MainActor
 struct PagedDetailView: View {
     let items: [Item]
@@ -103,7 +90,7 @@ struct PagedDetailView: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
     @StateObject private var keyboardActionHandler = KeyboardActionHandler()
-    @ObservedObject var playerManager: VideoPlayerManager
+    @ObservedObject var playerManager: VideoPlayerManager // PlayerManager wird jetzt übergeben
     @State private var isFullscreen = false
     @State private var cachedDetails: [Int: CachedItemDetails] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
@@ -114,24 +101,18 @@ struct PagedDetailView: View {
     @State private var fullscreenImageTarget: FullscreenImageTarget? = nil
     @State private var localFavoritedStatus: [Int: Bool] = [:]
     @State private var visitedItemIDsThisSession: Set<Int> = []
-
-    // --- NEW: State for collapsed comments ---
     @State private var collapsedCommentIDs: Set<Int> = []
-    // --- END NEW ---
 
     let commentMaxDepth = 5
 
     init(items: [Item], selectedIndex: Int, playerManager: VideoPlayerManager) {
         self.items = items
-        // Start directly at the selected index from the parent view
         self._selectedIndex = State(initialValue: selectedIndex)
-        self.playerManager = playerManager
-        // Initialize favorite status based on passed items
+        self.playerManager = playerManager // Store the passed manager
         var initialFavStatus: [Int: Bool] = [:]; for item in items { initialFavStatus[item.id] = item.favorited ?? false }; self._localFavoritedStatus = State(initialValue: initialFavStatus)
         Self.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex)")
     }
 
-    /// Checks the local favorite status for the currently selected item.
     private var isCurrentItemFavorited: Bool {
         guard selectedIndex >= 0 && selectedIndex < items.count else { return false }
         return localFavoritedStatus[items[selectedIndex].id] ?? items[selectedIndex].favorited ?? false
@@ -140,20 +121,17 @@ struct PagedDetailView: View {
     // MARK: - Body
     var body: some View {
         Group { tabViewContent }
-        .background(KeyCommandView(handler: keyboardActionHandler))
+        .background(KeyCommandView(handler: keyboardActionHandler)) // Use the handler
         .sheet(item: $previewLinkTarget) { targetWrapper in
              LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
                  .environmentObject(settings).environmentObject(authService)
         }
-        // --- onChange now works because PreviewLinkTarget is Equatable ---
         .onChange(of: previewLinkTarget) { oldValue, newValue in
             if newValue != nil {
-                // Sheet is about to be presented (or target changed)
                 PagedDetailView.logger.info("Link preview requested for item ID \(newValue!.id). Pausing current video (if playing).")
                 playerManager.player?.pause()
             }
         }
-        // --- END FIX ---
         .sheet(item: $fullscreenImageTarget) { targetWrapper in
              FullscreenImageView(item: targetWrapper.item)
         }
@@ -163,7 +141,7 @@ struct PagedDetailView: View {
     private var tabViewContent: some View {
         TabView(selection: $selectedIndex) {
             ForEach(items.indices, id: \.self) { index in
-                 tabViewPage(for: index) // Always render the page structure
+                 tabViewPage(for: index)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
@@ -174,32 +152,27 @@ struct PagedDetailView: View {
         .onChange(of: selectedIndex) { oldValue, newValue in
             handleIndexChange(oldValue: oldValue, newValue: newValue)
         }
-        .onAppear { setupView() }
-        .onDisappear { cleanupViewAndMarkVisited() } // Mark visited on disappear
+        .onAppear { setupView() } // Call setupView on appear
+        .onDisappear { cleanupViewAndMarkVisited() }
         .onChange(of: scenePhase) { oldPhase, newPhase in
              handleScenePhaseChange(oldPhase: oldPhase, newPhase: newPhase)
         }
         .onChange(of: settings.commentSortOrder) { oldOrder, newOrder in
              handleSortOrderChange(newOrder: newOrder)
         }
-        // No longer reacting to hideSeenItems change *within* this view
     }
 
-    /// Generates the content view for a single tab page.
     @ViewBuilder
     private func tabViewPage(for index: Int) -> some View {
-        // Prepare data, including filtering comments
         if let pageData = preparePageData(for: index) {
             PagedDetailTabViewItem(
                 item: pageData.currentItem,
-                keyboardActionHandler: keyboardActionHandler,
+                keyboardActionHandler: keyboardActionHandler, // Pass handler down
                 player: pageData.currentItem.id == playerManager.playerItemID ? playerManager.player : nil,
-                // --- MODIFIED: Pass filtered comments ---
                 visibleFlatComments: pageData.visibleFlatComments,
-                // --- END MODIFICATION ---
                 totalCommentCount: pageData.totalCommentCount,
                 displayedTags: pageData.displayedTags,
-                totalTagCount: pageData.totalTagCount, // Note: Renamed for clarity if needed (tagCount)
+                totalTagCount: pageData.totalTagCount,
                 showingAllTags: pageData.showingAllTags,
                 infoLoadingStatus: pageData.status,
                 loadInfoAction: loadInfoIfNeededAndPrepareHierarchy,
@@ -213,37 +186,23 @@ struct PagedDetailView: View {
                 isFavorited: localFavoritedStatus[pageData.currentItem.id] ?? pageData.currentItem.favorited ?? false,
                 toggleFavoriteAction: toggleFavorite,
                 showAllTagsAction: { showAllTagsForItem.insert(pageData.currentItem.id) },
-                // --- NEW: Pass collapsed state and toggle action ---
                 collapsedCommentIDs: collapsedCommentIDs,
                 toggleCollapseAction: toggleCollapse
-                // --- END NEW ---
             )
             .tag(index)
         } else {
-            // Render an EmptyView if data preparation fails
             EmptyView().tag(index)
         }
     }
 
 
     // MARK: - Data Preparation and Loading
-
-    /// Prepares data needed for a specific page index, returning the VISIBLE flat list.
-    private func preparePageData(for index: Int) -> (
-        currentItem: Item, status: InfoLoadingStatus,
-        // --- MODIFIED: Return visibleFlatComments ---
-        visibleFlatComments: [FlatCommentDisplayItem],
-        // --- END MODIFICATION ---
-        totalCommentCount: Int,
-        displayedTags: [ItemTag], totalTagCount: Int, showingAllTags: Bool
-    )? {
+    private func preparePageData(for index: Int) -> ( currentItem: Item, status: InfoLoadingStatus, visibleFlatComments: [FlatCommentDisplayItem], totalCommentCount: Int, displayedTags: [ItemTag], totalTagCount: Int, showingAllTags: Bool )? {
         guard index >= 0 && index < items.count else { return nil }
         let currentItem = items[index]
         let itemId = currentItem.id
         let statusForItem = infoLoadingStatus[itemId] ?? .idle
-        // --- MODIFIED: Calculate visible comments here ---
         let visibleComments = calculateVisibleComments(for: itemId)
-        // --- END MODIFICATION ---
         var finalTotalCommentCount = 0
         var finalSortedTags: [ItemTag] = []
 
@@ -258,41 +217,33 @@ struct PagedDetailView: View {
         let shouldShowAll = showAllTagsForItem.contains(itemId)
         let tagsToDisplay = shouldShowAll ? finalSortedTags : Array(finalSortedTags.prefix(4))
 
-        // --- MODIFIED: Return visibleComments ---
         return (currentItem, statusForItem, visibleComments, finalTotalCommentCount, tagsToDisplay, totalTagCount, shouldShowAll)
-        // --- END MODIFICATION ---
     }
 
-    /// Loads item info (if needed) and prepares/caches the FULL FLAT comment list & total count.
     private func loadInfoIfNeededAndPrepareHierarchy(for item: Item) async {
          let itemId = item.id
          let currentStatus = infoLoadingStatus[itemId]
          if let cached = cachedDetails[itemId], currentStatus == .loaded {
-             if cached.sortedBy == settings.commentSortOrder { return } // Already cached and sorted correctly
+             if cached.sortedBy == settings.commentSortOrder { return }
              else {
-                  // Re-sort and re-flatten the existing raw comments
                   Self.logger.info("loadInfoIfNeeded: Recalculating flat list for cached item \(itemId) due to sort order change.")
                   let newFlatList = prepareFlatDisplayComments(from: cached.info.comments, sortedBy: settings.commentSortOrder, maxDepth: commentMaxDepth)
-                  // Update cache with new flat list and correct sort order
                   cachedDetails[itemId] = CachedItemDetails(info: cached.info, sortedBy: settings.commentSortOrder, flatDisplayComments: newFlatList, totalCommentCount: cached.totalCommentCount)
                   return
              }
          }
-         // Prevent redundant loading
          guard !(currentStatus == .loading) else { return }
          if case .error = currentStatus { Self.logger.debug("Retrying info load for item \(itemId).") }
-
          Self.logger.debug("Starting info load & FULL FLAT prep for item \(itemId)...")
          infoLoadingStatus[itemId] = .loading
          do {
              let fetchedInfoResponse = try await apiService.fetchItemInfo(itemId: itemId)
              let sortedTags = fetchedInfoResponse.tags.sorted { $0.confidence > $1.confidence }
              let infoWithSortedTags = ItemsInfoResponse(tags: sortedTags, comments: fetchedInfoResponse.comments)
-             // Prepare the FULL flat list, including hasChildren flag
              let flatDisplayComments = prepareFlatDisplayComments(from: fetchedInfoResponse.comments, sortedBy: settings.commentSortOrder, maxDepth: commentMaxDepth)
              let totalCommentCount = fetchedInfoResponse.comments.count
              let detailsToCache = CachedItemDetails(info: infoWithSortedTags, sortedBy: settings.commentSortOrder, flatDisplayComments: flatDisplayComments, totalCommentCount: totalCommentCount)
-             cachedDetails[itemId] = detailsToCache // Cache the full list
+             cachedDetails[itemId] = detailsToCache
              infoLoadingStatus[itemId] = .loaded
              Self.logger.info("Successfully loaded/prepared FULL FLAT hierarchy (\(flatDisplayComments.count) items shown initially) for item \(itemId). Total raw: \(totalCommentCount).")
          } catch {
@@ -301,7 +252,6 @@ struct PagedDetailView: View {
          }
     }
 
-    /// Helper function to build the FULL FLAT comment list, including `hasChildren`.
     private func prepareFlatDisplayComments(from comments: [ItemComment], sortedBy sortOrder: CommentSortOrder, maxDepth: Int) -> [FlatCommentDisplayItem] {
         Self.logger.debug("Preparing FULL FLAT display comments (\(comments.count) raw), sort: \(sortOrder.displayName), depth: \(maxDepth).")
         let startTime = Date()
@@ -311,23 +261,18 @@ struct PagedDetailView: View {
 
         func traverse(commentId: Int, currentLevel: Int) {
             guard currentLevel <= maxDepth, let comment = commentDict[commentId] else { return }
-            // --- MODIFIED: Check for children ---
             let children = childrenByParentId[commentId] ?? []
             let hasChildren = !children.isEmpty
             flatList.append(FlatCommentDisplayItem(id: comment.id, comment: comment, level: currentLevel, hasChildren: hasChildren))
-            // --- END MODIFICATION ---
             guard currentLevel < maxDepth else { return }
-            // Sort children based on the selected order
             let sortedChildren: [ItemComment]
             switch sortOrder {
             case .date: sortedChildren = children.sorted { $0.created < $1.created }
             case .score: sortedChildren = children.sorted { ($0.up - $0.down) > ($1.up - $1.down) }
             }
-            // Recursively traverse children
             sortedChildren.forEach { traverse(commentId: $0.id, currentLevel: currentLevel + 1) }
         }
 
-        // Process top-level comments
         let topLevelComments = comments.filter { $0.parent == nil || $0.parent == 0 }
         let sortedTopLevelComments: [ItemComment]
         switch sortOrder {
@@ -341,63 +286,48 @@ struct PagedDetailView: View {
         return flatList
     }
 
-    // --- MODIFIED: Function to calculate visible comments (Alternative Cleanup Logic) ---
-    /// Filters the full flat comment list based on the current collapsed state.
     private func calculateVisibleComments(for itemID: Int) -> [FlatCommentDisplayItem] {
         guard let details = cachedDetails[itemID] else { return [] }
         let fullList = details.flatDisplayComments
-        guard !collapsedCommentIDs.isEmpty else { return fullList } // No filtering needed if nothing is collapsed
+        guard !collapsedCommentIDs.isEmpty else { return fullList }
 
         var visibleList: [FlatCommentDisplayItem] = []
-        // --- Store level of the nearest collapsed ancestor ---
-        // Key: Level, Value: ID of the collapsed comment at that level causing the collapse
         var nearestCollapsedAncestorLevel: [Int: Int] = [:]
 
         for item in fullList {
             let currentLevel = item.level
             var isHiddenByAncestor = false
 
-            // Check if any ancestor *up to the parent level* is collapsed
             if currentLevel > 0 {
                 for ancestorLevel in 0..<currentLevel {
                     if nearestCollapsedAncestorLevel[ancestorLevel] != nil {
                         isHiddenByAncestor = true
-                        // Mark this level as hidden for its children
                         nearestCollapsedAncestorLevel[currentLevel] = nearestCollapsedAncestorLevel[ancestorLevel]
-                        break // Found a collapsed ancestor, no need to check further up
+                        break
                     }
                 }
             }
 
-            // If hidden by an ancestor, skip adding and continue tracking collapse state
             if isHiddenByAncestor {
-                 // nearestCollapsedAncestorLevel[currentLevel] was already set above
                 continue
             }
 
-            // Add the item if it's not hidden by an ancestor
             visibleList.append(item)
 
-            // --- Update collapse tracking for the *current* level ---
             if collapsedCommentIDs.contains(item.id) {
-                // This item itself is collapsed, track it for its children
                 nearestCollapsedAncestorLevel[currentLevel] = item.id
             } else {
-                // This item is NOT collapsed, clear the tracker for this level
                 nearestCollapsedAncestorLevel.removeValue(forKey: currentLevel)
             }
 
-            // --- Simpler Cleanup: Remove tracking for levels deeper than current ---
-            // Iterate through existing keys and remove those deeper than currentLevel
             let keysToRemove = nearestCollapsedAncestorLevel.keys.filter { $0 > currentLevel }
             for key in keysToRemove {
                 nearestCollapsedAncestorLevel.removeValue(forKey: key)
             }
-            // --- End Cleanup ---
         }
         return visibleList
     }
-    // --- END MODIFIED ---
+
 
     // MARK: - View Lifecycle and State Handling Helpers
     private func setupView() {
@@ -406,46 +336,46 @@ struct PagedDetailView: View {
         isTogglingFavorite = false
         keyboardActionHandler.selectNextAction = self.selectNext
         keyboardActionHandler.selectPreviousAction = self.selectPrevious
+        keyboardActionHandler.seekForwardAction = playerManager.seekForward
+        keyboardActionHandler.seekBackwardAction = playerManager.seekBackward
         if selectedIndex >= 0 && selectedIndex < items.count {
             let initialItem = items[selectedIndex]
             playerManager.setupPlayerIfNeeded(for: initialItem, isFullscreen: isFullscreen)
             Task { await loadInfoIfNeededAndPrepareHierarchy(for: initialItem) }
-            visitedItemIDsThisSession.insert(initialItem.id) // Add initial item to visited
+            visitedItemIDsThisSession.insert(initialItem.id)
             Self.logger.debug("Added initial item \(initialItem.id) to visited set.")
         } else { Self.logger.warning("onAppear: Invalid selectedIndex \(selectedIndex).") }
     }
 
-    /// Cleans up AND marks visited items as seen when the view disappears.
     private func cleanupViewAndMarkVisited() {
         Self.logger.info("PagedDetailView disappearing.")
-        keyboardActionHandler.selectNextAction = nil; keyboardActionHandler.selectPreviousAction = nil
+        keyboardActionHandler.selectNextAction = nil
+        keyboardActionHandler.selectPreviousAction = nil
+        keyboardActionHandler.seekForwardAction = nil
+        keyboardActionHandler.seekBackwardAction = nil
         if !isFullscreen { playerManager.cleanupPlayer() }
         else { Self.logger.info("Skipping player cleanup (fullscreen).") }
         showAllTagsForItem = []
 
         let visitedIDs = self.visitedItemIDsThisSession
         if !visitedIDs.isEmpty {
-            Task { // Mark as seen asynchronously
+            Task {
                 Self.logger.info("Marking \(visitedIDs.count) visited items as seen...")
-                for id in visitedIDs {
-                    await settings.markItemAsSeen(id: id)
-                }
+                for id in visitedIDs { await settings.markItemAsSeen(id: id) }
                 Self.logger.info("Finished marking visited items.")
             }
         }
-        visitedItemIDsThisSession = [] // Clear the set for the next time the view appears
+        visitedItemIDsThisSession = []
     }
 
-    /// Handles index changes, loads data, adds item to visited set. NO filtering logic here.
     private func handleIndexChange(oldValue: Int, newValue: Int) {
         Self.logger.info("Selected index changed from \(oldValue) to \(newValue)")
         guard newValue >= 0 && newValue < items.count else { return }
         let newItem = items[newValue]
-
         Self.logger.debug("Index changed to \(newValue). Performing actions.")
         playerManager.setupPlayerIfNeeded(for: newItem, isFullscreen: isFullscreen)
         Task { await loadInfoIfNeededAndPrepareHierarchy(for: newItem) }
-        visitedItemIDsThisSession.insert(newItem.id) // Add newly viewed item to set
+        visitedItemIDsThisSession.insert(newItem.id)
         Self.logger.debug("Added item \(newItem.id) to visited set.")
         isTogglingFavorite = false
         // Optionally reset collapsed state when swiping
@@ -480,16 +410,10 @@ struct PagedDetailView: View {
               updatedCache[id] = CachedItemDetails(info: details.info, sortedBy: newOrder, flatDisplayComments: newFlatList, totalCommentCount: details.totalCommentCount)
          }
          cachedDetails.merge(updatedCache) { (_, new) in new }
-          // Important: Force a refresh of the currently visible comments after resorting
-          // This is needed because the displayed comments depend on the cached flat list
-          // which has just been updated. Simply updating the cache doesn't trigger a view update
-          // for the *filtered* list automatically in this setup.
-          let currentVisibleItemId = items[selectedIndex].id
-          // Trigger a re-calculation by slightly modifying a state property the view depends on,
-          // or ideally, by having calculateVisibleComments be part of the view's body logic
-          // For now, just force an update by resetting the same index (less ideal but functional)
+          // Force a refresh of the currently visible comments after resorting
+         _ = items[selectedIndex].id
           let tempIndex = selectedIndex
-          selectedIndex = -1 // Force TabView to redraw
+          selectedIndex = -1 // Force TabView to redraw by changing selection temporarily
           DispatchQueue.main.async { // Ensure update happens after state reset
               self.selectedIndex = tempIndex
           }
@@ -559,7 +483,6 @@ struct PagedDetailView: View {
         isTogglingFavorite = false
     }
 
-    // --- NEW: Action to toggle comment collapse state ---
     private func toggleCollapse(commentID: Int) {
         if collapsedCommentIDs.contains(commentID) {
             collapsedCommentIDs.remove(commentID)
@@ -568,10 +491,7 @@ struct PagedDetailView: View {
             collapsedCommentIDs.insert(commentID)
             Self.logger.trace("Collapsing comment \(commentID)")
         }
-        // The view will automatically update because `preparePageData` reads `collapsedCommentIDs` indirectly
-        // via `calculateVisibleComments`. SwiftUI's state management handles the redraw.
     }
-    // --- END NEW ---
 }
 
 // MARK: - Wrapper View (unverändert)
@@ -581,7 +501,7 @@ struct LinkedItemPreviewWrapperView: View {
     @EnvironmentObject var authService: AuthService
     @Environment(\.dismiss) var dismiss
 
-    var body: some View { // Explicit return type
+    var body: some View {
         NavigationStack {
             LinkedItemPreviewView(itemID: itemID)
                 .environmentObject(settings).environmentObject(authService)
@@ -596,7 +516,6 @@ struct LinkedItemPreviewWrapperView: View {
 
 // MARK: - Preview Provider (unverändert)
 #Preview("Preview") {
-    // Setup remains the same...
     let previewSettings = AppSettings()
     let previewAuthService = AuthService(appSettings: previewSettings)
     previewAuthService.isLoggedIn = true
@@ -609,7 +528,7 @@ struct LinkedItemPreviewWrapperView: View {
     previewSettings.seenItemIDs = [1, 3]
     previewPlayerManager.configure(settings: previewSettings)
 
-    return NavigationStack { // Return directly
+    return NavigationStack {
         PagedDetailView(items: sampleItems, selectedIndex: 0, playerManager: previewPlayerManager)
     }
     .environmentObject(previewSettings)

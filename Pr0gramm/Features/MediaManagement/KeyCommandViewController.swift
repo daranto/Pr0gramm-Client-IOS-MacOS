@@ -1,22 +1,28 @@
+// Pr0gramm/Pr0gramm/Features/MediaManagement/KeyCommandViewController.swift
+// --- START OF COMPLETE FILE ---
+
 import UIKit
+import os // Import os
 
 /// A simple `UIViewController` designed to become the first responder
 /// and capture keyboard events (specifically arrow keys) using the `pressesBegan` method.
 /// It then forwards these events to a `KeyboardActionHandler`.
 class KeyCommandViewController: UIViewController {
 
+    // --- NEW: Add logger ---
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "KeyCommandVC")
+    // --- END NEW ---
+
     var actionHandler: KeyboardActionHandler?
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        print("KeyCommandViewController: viewDidAppear - Attempting to become first responder...")
-        // Crucial: Explicitly request to become the first responder to receive key events.
+        Self.logger.debug("viewDidAppear - Attempting to become first responder...") // Use logger
         becomeFirstResponder()
     }
 
-    /// Must return `true` to allow this view controller to become the first responder.
     override var canBecomeFirstResponder: Bool {
-        // print("KeyCommandViewController: canBecomeFirstResponder called - Returning true")
+        // Self.logger.trace("canBecomeFirstResponder called - Returning true") // Use logger (optional trace)
         return true
     }
 
@@ -26,34 +32,41 @@ class KeyCommandViewController: UIViewController {
         for press in presses {
             guard let key = press.key else { continue }
 
-            print("KeyCommandViewController: Key Pressed - HIDUsage: \(key.keyCode.rawValue), Modifiers: \(key.modifierFlags)")
+            // --- MODIFIED: Use .rawValue for modifierFlags ---
+            Self.logger.debug("Key Pressed - HIDUsage: \(key.keyCode.rawValue), Modifiers: \(key.modifierFlags.rawValue)") // Use logger and rawValue
+            // --- END MODIFICATION ---
 
-            // Check for specific arrow key codes
-            // Note: Modifier flags could be checked here if needed (e.g., key.modifierFlags.isEmpty)
             switch key.keyCode {
             case .keyboardLeftArrow:
-                print("KeyCommandViewController: Left arrow detected via pressesBegan.")
-                actionHandler?.selectPreviousAction?() // Trigger the assigned action
+                Self.logger.debug("Left arrow detected via pressesBegan.") // Use logger
+                actionHandler?.selectPreviousAction?()
                 didHandleEvent = true
             case .keyboardRightArrow:
-                print("KeyCommandViewController: Right arrow detected via pressesBegan.")
-                actionHandler?.selectNextAction?() // Trigger the assigned action
+                Self.logger.debug("Right arrow detected via pressesBegan.") // Use logger
+                actionHandler?.selectNextAction?()
+                didHandleEvent = true
+             // Handle Up/Down arrows
+            case .keyboardUpArrow:
+                Self.logger.debug("Up arrow detected, calling seek forward action.") // Use logger
+                actionHandler?.seekForwardAction?() // Trigger seek forward
+                didHandleEvent = true
+            case .keyboardDownArrow:
+                Self.logger.debug("Down arrow detected, calling seek backward action.") // Use logger
+                actionHandler?.seekBackwardAction?() // Trigger seek backward
                 didHandleEvent = true
             default:
                 break // Ignore other keys
             }
 
-            if didHandleEvent { break } // Stop processing if handled
+            if didHandleEvent { break }
         }
 
-        // Only call the superclass implementation if *we did not* handle the event.
-        // This prevents the event from propagating further up the responder chain if we consumed it.
         if !didHandleEvent {
-            print("KeyCommandViewController: Event not handled by us, calling super.pressesBegan.")
+            Self.logger.debug("Event not handled by us, calling super.pressesBegan.") // Use logger
             super.pressesBegan(presses, with: event)
         } else {
-             print("KeyCommandViewController: Arrow key handled by us, NOT calling super.pressesBegan.")
-             // Event processing stops here.
+             Self.logger.debug("Arrow key handled by us, NOT calling super.pressesBegan.") // Use logger
         }
     }
 }
+// --- END OF COMPLETE FILE ---

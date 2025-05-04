@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Features/MediaManagement/CustomAVPlayerViewController.swift
+// --- START OF COMPLETE FILE ---
+
 import AVKit
 import UIKit
 import os
@@ -34,6 +37,9 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
             }
             return true // Keep commands without specific input defined
         }
+         // --- MODIFIED: Log filtered commands ---
+         Self.logger.trace("Filtered KeyCommands: \(nonArrowCommands.compactMap { $0.input })")
+         // --- END MODIFICATION ---
         return nonArrowCommands
     }
 
@@ -44,7 +50,7 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
             guard let key = press.key else { continue }
             Self.logger.debug("Key Pressed - HIDUsage: \(key.keyCode.rawValue), Modifiers: \(key.modifierFlags.rawValue)")
 
-            // Handle left/right arrow keys specifically
+            // Handle arrow keys specifically
             switch key.keyCode {
             case .keyboardLeftArrow:
                 Self.logger.debug("Left arrow detected, calling previous action.")
@@ -54,6 +60,16 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
                 Self.logger.debug("Right arrow detected, calling next action.")
                 actionHandler?.selectNextAction?() // Trigger custom action
                 didHandleEvent = true
+            // --- NEW: Handle Up/Down arrows ---
+            case .keyboardUpArrow:
+                Self.logger.debug("Up arrow detected, calling seek forward action.")
+                actionHandler?.seekForwardAction?() // Trigger seek forward
+                didHandleEvent = true
+            case .keyboardDownArrow:
+                Self.logger.debug("Down arrow detected, calling seek backward action.")
+                actionHandler?.seekBackwardAction?() // Trigger seek backward
+                didHandleEvent = true
+            // --- END NEW ---
             default:
                 break // Ignore other keys
             }
@@ -83,25 +99,19 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
 
     // MARK: - AVPlayerViewControllerDelegate Methods
 
-    /// Delegate method called *before* the player begins transitioning to fullscreen.
     func playerViewController(_ playerViewController: AVPlayerViewController,
                               willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
         Self.logger.debug("Delegate: willBeginFullScreenPresentation - Calling Callback")
-        willBeginFullScreen?() // Trigger the provided callback
+        willBeginFullScreen?()
     }
 
-    /// Delegate method called *before* the player begins transitioning *out* of fullscreen.
-    /// The callback (`willEndFullScreen`) is triggered *after* the transition animation completes.
     func playerViewController(_ playerViewController: AVPlayerViewController,
                               willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
         Self.logger.debug("Delegate: willEndFullScreenPresentation - Calling Callback after animation")
-
-        // Use the coordinator's completion block to ensure the callback runs
-        // only after the fullscreen exit animation finishes.
         coordinator.animate(
-            alongsideTransition: nil, // No parallel animations needed
+            alongsideTransition: nil,
             completion: { (context: UIViewControllerTransitionCoordinatorContext) in
-                self.willEndFullScreen?() // Trigger the callback in the completion handler
+                self.willEndFullScreen?()
             }
         )
     }
@@ -110,3 +120,4 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
          Self.logger.debug("deinit")
     }
 }
+// --- END OF COMPLETE FILE ---

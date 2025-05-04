@@ -23,15 +23,19 @@ class VideoPlayerManager: ObservableObject {
     // MARK: - Dependencies
     private weak var settings: AppSettings?
 
+    // Seek time constants
+    private let seekForwardSeconds: Double = 10.0
+    private let seekBackwardSeconds: Double = 5.0
+
     /// Configures the manager with necessary dependencies after initialization.
     @MainActor
     func configure(settings: AppSettings) {
         guard self.settings !== settings else {
-             Self.logger.trace("VideoPlayerManager already configured with this AppSettings instance.")
+             VideoPlayerManager.logger.trace("VideoPlayerManager already configured with this AppSettings instance.")
              return
         }
         self.settings = settings
-        Self.logger.debug("VideoPlayerManager configured with AppSettings.")
+        VideoPlayerManager.logger.debug("VideoPlayerManager configured with AppSettings.")
     }
 
     /// Creates a new AVPlayer for the given video item or ensures the existing one plays if it's for the same item.
@@ -39,34 +43,34 @@ class VideoPlayerManager: ObservableObject {
     @MainActor
     func setupPlayerIfNeeded(for item: Item, isFullscreen: Bool) {
         guard let settings = self.settings else {
-            Self.logger.error("[Manager] Cannot setup player: AppSettings not configured.")
+            VideoPlayerManager.logger.error("[Manager] Cannot setup player: AppSettings not configured.")
             return
         }
 
         guard item.isVideo else {
             if player != nil {
-                Self.logger.debug("[Manager] New item \(item.id) is not video. Cleaning up existing player (if any).")
+                VideoPlayerManager.logger.debug("[Manager] New item \(item.id) is not video. Cleaning up existing player (if any).")
                 cleanupPlayer()
             } else {
-                Self.logger.trace("[Manager] New item \(item.id) is not video. No existing player to clean up.")
+                VideoPlayerManager.logger.trace("[Manager] New item \(item.id) is not video. No existing player to clean up.")
             }
             return
         }
 
         // If player exists for the same item, ensure playback state and mute state are correct.
         if playerItemID == item.id, let existingPlayer = player {
-            Self.logger.debug("[Manager] Player already exists for video item \(item.id). Ensuring state.")
+            VideoPlayerManager.logger.debug("[Manager] Player already exists for video item \(item.id). Ensuring state.")
 
-            // --- Playback State ---
+            // Playback State
             if !isFullscreen && existingPlayer.timeControlStatus != .playing {
                  existingPlayer.play()
-                 Self.logger.trace("[Manager] Started play() for existing player \(item.id) (was not playing).")
+                 VideoPlayerManager.logger.trace("[Manager] Started play() for existing player \(item.id) (was not playing).")
             }
 
-            // --- Mute State ---
+            // Mute State
             let targetMuteState = settings.transientSessionMuteState ?? settings.isVideoMuted
             if existingPlayer.isMuted != targetMuteState {
-                Self.logger.trace("[Manager] Applying mute state (\(targetMuteState)) to existing player for item \(item.id).")
+                VideoPlayerManager.logger.trace("[Manager] Applying mute state (\(targetMuteState)) to existing player for item \(item.id).")
                 existingPlayer.isMuted = targetMuteState
             }
             return // Nothing more to do if player already exists
@@ -74,10 +78,10 @@ class VideoPlayerManager: ObservableObject {
 
         // If item changed or player doesn't exist, cleanup old player first
         cleanupPlayer() // Already ensures main thread
-        Self.logger.debug("[Manager] Setting up NEW player for video item \(item.id)...")
+        VideoPlayerManager.logger.debug("[Manager] Setting up NEW player for video item \(item.id)...")
 
         guard let url = item.imageUrl else {
-            Self.logger.error("[Manager] Cannot setup player for item \(item.id): Invalid URL.")
+            VideoPlayerManager.logger.error("[Manager] Cannot setup player for item \(item.id): Invalid URL.")
             return
         }
 
@@ -86,11 +90,11 @@ class VideoPlayerManager: ObservableObject {
         let initialMute: Bool
         if let transientMute = settings.transientSessionMuteState {
             initialMute = transientMute
-            Self.logger.info("[Manager] Player initial mute state for item \(item.id) set from TRANSIENT session state: \(initialMute)")
+            VideoPlayerManager.logger.info("[Manager] Player initial mute state for item \(item.id) set from TRANSIENT session state: \(initialMute)")
         } else {
             initialMute = settings.isVideoMuted
             settings.transientSessionMuteState = initialMute // Initialize transient state
-            Self.logger.info("[Manager] Player initial mute state for item \(item.id) set from PERSISTED setting: \(initialMute). Transient session state initialized.")
+            VideoPlayerManager.logger.info("[Manager] Player initial mute state for item \(item.id) set from PERSISTED setting: \(initialMute). Transient session state initialized.")
         }
         newPlayer.isMuted = initialMute
 
@@ -103,9 +107,9 @@ class VideoPlayerManager: ObservableObject {
         // Only auto-play if NOT initially entering fullscreen
         if !isFullscreen {
             newPlayer.play()
-            Self.logger.debug("[Manager] Player started (Autoplay) for item \(item.id)")
+            VideoPlayerManager.logger.debug("[Manager] Player started (Autoplay) for item \(item.id)")
         } else {
-             Self.logger.debug("[Manager] Skipping initial play because isFullscreen is true.")
+             VideoPlayerManager.logger.debug("[Manager] Skipping initial play because isFullscreen is true.")
         }
     }
 
@@ -113,126 +117,124 @@ class VideoPlayerManager: ObservableObject {
     @MainActor
     private func setupObservers(for player: AVPlayer, item: Item) {
         guard let settings = self.settings else {
-             Self.logger.error("[Manager] Cannot setup observers: AppSettings not configured.")
+             VideoPlayerManager.logger.error("[Manager] Cannot setup observers: AppSettings not configured.")
              return
         }
 
-        // Remove existing observers before adding new ones (safety check)
         removeObservers() // Ensures we don't double-observe
 
-        // --- Mute State Observer (KVO) ---
-        // Capture `settings` weakly. Use '_' for unused observedPlayer.
-        self.muteObserver = player.observe(\.isMuted, options: [.new]) { [weak settings] _, change in // Use _
-            Task { @MainActor [weak settings] in // Removed weak observedPlayer capture
+        // Mute State Observer (KVO)
+        self.muteObserver = player.observe(\.isMuted, options: [.new]) { [weak settings] _, change in
+            Task { @MainActor [weak settings] in
                 guard let settings = settings,
                       let newMutedState = change.newValue
                 else { return }
-
                 if settings.transientSessionMuteState != newMutedState {
                      settings.transientSessionMuteState = newMutedState
                      VideoPlayerManager.logger.info("[Manager] User changed mute via player controls. New state: \(newMutedState). Transient session state updated.")
                 }
             }
         }
-        Self.logger.debug("[Manager] Added mute KVO observer for item \(item.id).")
+        VideoPlayerManager.logger.debug("[Manager] Added mute KVO observer for item \(item.id).")
 
-        // --- Playback End Observer (Notification Center) ---
+        // Playback End Observer (Notification Center)
         guard let playerItem = player.currentItem else {
-            Self.logger.error("[Manager] Player has no currentItem for item \(item.id). Cannot add loop observer.")
+            VideoPlayerManager.logger.error("[Manager] Player has no currentItem for item \(item.id). Cannot add loop observer.")
             return
         }
 
-        // Wrap handler in Task @MainActor
         self.loopObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
-            queue: nil // Let the Task handle the actor context
-        ) { [weak self] notification in // Keep weak self capture here
-             // Capture self weakly again inside the Task to address the Sendable warning
+            queue: nil
+        ) { [weak self] notification in
              Task { @MainActor [weak self, weak playerItem] in
-                 guard let strongSelf = self, // Check if self still exists
+                 guard let strongSelf = self,
                        let playerItem = playerItem,
-                       let currentPlayer = strongSelf.player, // Access properties via strongSelf
+                       let currentPlayer = strongSelf.player,
                        (notification.object as? AVPlayerItem) == playerItem,
                        currentPlayer.currentItem == playerItem,
                        let currentItemID = strongSelf.playerItemID,
                        currentItemID == item.id
                  else { return }
-
                  VideoPlayerManager.logger.debug("[Manager] Video did play to end time for item \(item.id). Seeking to zero and replaying.")
                  currentPlayer.seek(to: .zero)
                  currentPlayer.play()
              }
          }
-        Self.logger.debug("[Manager] Added loop observer for item \(item.id).")
+        VideoPlayerManager.logger.debug("[Manager] Added loop observer for item \(item.id).")
     }
 
     /// Stops playback, removes observers, and releases references to the current AVPlayer instance.
     /// Ensures cleanup happens on the main thread.
     @MainActor
     func cleanupPlayer() {
-        let cleanupItemID = self.playerItemID ?? -1 // Capture ID before niling
+        let cleanupItemID = self.playerItemID ?? -1
         let hadPlayer = self.player != nil
 
-        // Only log cleanup start if there's actually something to clean
         if hadPlayer || muteObserver != nil || loopObserver != nil {
-             Self.logger.debug("[Manager] Cleaning up player state for item \(cleanupItemID)...")
+             VideoPlayerManager.logger.debug("[Manager] Cleaning up player state for item \(cleanupItemID)...")
         } else {
-             Self.logger.trace("[Manager] CleanupPlayer called, but nothing to clean up.")
-             return // Nothing to do
+             VideoPlayerManager.logger.trace("[Manager] CleanupPlayer called, but nothing to clean up.")
+             return
         }
 
-        // --- Remove Observers FIRST ---
-        removeObservers() // Calls invalidate/removeObserver internally
+        removeObservers()
 
-        // -----------------------------
-
-        // Pause and release player instance *after* removing observers
         if let playerToCleanup = self.player {
             playerToCleanup.pause()
-            self.player = nil // Release reference
-            Self.logger.debug("[Manager] Player paused and released for item \(cleanupItemID).")
+            self.player = nil
+            VideoPlayerManager.logger.debug("[Manager] Player paused and released for item \(cleanupItemID).")
         }
-
-        // Reset the item ID tracker
         self.playerItemID = nil
-
-        Self.logger.debug("[Manager] Player state cleanup finished for item \(cleanupItemID).")
+        VideoPlayerManager.logger.debug("[Manager] Player state cleanup finished for item \(cleanupItemID).")
     }
 
     /// Removes observers without stopping the player. Used internally if needed.
     @MainActor
     private func removeObservers() {
-        // Invalidate KVO observer
         if muteObserver != nil {
              muteObserver?.invalidate()
              muteObserver = nil
-             Self.logger.trace("[Manager] Invalidated mute observer internally.")
+             VideoPlayerManager.logger.trace("[Manager] Invalidated mute observer internally.")
         }
-        // Remove Notification Center observer
         if let observer = loopObserver {
             NotificationCenter.default.removeObserver(observer)
             self.loopObserver = nil
-            Self.logger.trace("[Manager] Removed loop observer internally.")
+            VideoPlayerManager.logger.trace("[Manager] Removed loop observer internally.")
         }
     }
 
+    // --- NEW: Seek Methods ---
+
+    /// Seeks the current player forward by a defined amount.
+    @MainActor
+    func seekForward() {
+        guard let player = player else { return }
+        let currentTime = player.currentTime()
+        let targetTime = CMTimeAdd(currentTime, CMTime(seconds: seekForwardSeconds, preferredTimescale: 600))
+        VideoPlayerManager.logger.debug("Seeking forward to \(CMTimeGetSeconds(targetTime))s")
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    /// Seeks the current player backward by a defined amount.
+    @MainActor
+    func seekBackward() {
+        guard let player = player else { return }
+        let currentTime = player.currentTime()
+        let targetTime = CMTimeSubtract(currentTime, CMTime(seconds: seekBackwardSeconds, preferredTimescale: 600))
+        VideoPlayerManager.logger.debug("Seeking backward to \(CMTimeGetSeconds(targetTime))s")
+        player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+    // --- END NEW ---
 
     deinit {
-        // Capture observers BEFORE the Task/Dispatch
         let kvoObserver = self.muteObserver
         let ncObserver = self.loopObserver
-
-        // Use Task @MainActor for cleanup to ensure thread safety with UIKit/AVKit components
         Task { @MainActor in
-            if kvoObserver != nil {
-                kvoObserver?.invalidate()
-            }
-            if let ncObserver = ncObserver {
-                NotificationCenter.default.removeObserver(ncObserver)
-            }
+            if kvoObserver != nil { kvoObserver?.invalidate() }
+            if let ncObserver = ncObserver { NotificationCenter.default.removeObserver(ncObserver) }
         }
-        // Log directly using static logger (safe outside Task if logger is nonisolated)
          VideoPlayerManager.logger.debug("VideoPlayerManager deinit.")
     }
 }

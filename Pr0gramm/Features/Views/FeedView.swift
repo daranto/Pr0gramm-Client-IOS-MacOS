@@ -149,7 +149,7 @@ struct FeedView: View {
 
         // Use a local variable to manage the showing of the loading indicator
         // It ensures that the indicator is only shown if the refresh takes a noticeable amount of time
-        var showLoadingIndicatorTask: Task<Void, Never>? = Task { @MainActor in
+        let showLoadingIndicatorTask: Task<Void, Never>? = Task { @MainActor in
              try? await Task.sleep(for: .milliseconds(250)) // Wait 250ms
              // Only set isLoading to true if the refresh is still ongoing after the delay
              if !Task.isCancelled {
