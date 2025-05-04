@@ -4,5 +4,5 @@
 	if [[ -d "$CI_APP_STORE_SIGNED_APP_PATH" ]]; then
 	    TESTFLIGHT_DIR_PATH=../TestFlight
 	    mkdir $TESTFLIGHT_DIR_PATH
-	    git fetch --deepen 3 && git log -3 --pretty=format:"%s" | cat > $TESTFLIGHT_DIR_PATH/WhatToTest.en-US.txt
+	    git fetch --deepen 10 && git log -10 --pretty=format:"%s" | cat > $TESTFLIGHT_DIR_PATH/WhatToTest.en-US.txt
 	fi

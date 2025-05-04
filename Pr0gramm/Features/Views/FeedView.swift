@@ -142,7 +142,7 @@ struct FeedView: View {
             ProgressView("Lade...").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if displayedItems.isEmpty && !isLoading && errorMessage == nil && !showNoFilterMessage {
              // Simplified empty state message
-             let message = settings.hideSeenItems ? "Keine neuen Medien für aktuelle Filter gefunden oder alle wurden bereits gesehen." : "Keine Medien für aktuelle Filter gefunden."
+             let message = settings.hideSeenItems ? "Übersicht wird geladen..." : "Übersicht wird geladen..."
              Text(message).foregroundColor(.secondary).multilineTextAlignment(.center).padding().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else { scrollViewContent }
     }

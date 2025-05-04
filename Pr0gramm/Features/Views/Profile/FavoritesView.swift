@@ -4,7 +4,6 @@
 import SwiftUI
 import os
 import Kingfisher
-// import UIKit // Nicht mehr benötigt
 
 /// Displays the user's favorited items in a grid.
 /// Requires the user to be logged in. Handles loading, pagination, filtering, and navigation.
@@ -12,7 +11,7 @@ struct FavoritesView: View {
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
-    @State private var items: [Item] = []
+    @State private var items: [Item] = [] // Keep non-private for binding
     @State private var errorMessage: String?
     @State private var isLoading = false
     @State private var canLoadMore = true
@@ -29,15 +28,11 @@ struct FavoritesView: View {
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "FavoritesView")
 
-    // --- MODIFIED: Computed property for adaptive columns ---
     private var gridColumns: [GridItem] {
-        // Use ProcessInfo to detect if the iPad app is running ON macOS
         let isRunningOnMac = ProcessInfo.processInfo.isiOSAppOnMac
-        // Deutlich größere Mindestbreite auf dem Mac -> weniger Spalten
-        let minWidth: CGFloat = isRunningOnMac ? 250 : 100 // Set to 250 for Mac
+        let minWidth: CGFloat = isRunningOnMac ? 250 : 100
         return [GridItem(.adaptive(minimum: minWidth), spacing: 3)]
     }
-    // --- END MODIFICATION ---
 
     private var favoritesCacheKey: String? {
         guard let username = authService.currentUser?.name.lowercased() else { return nil }
@@ -46,76 +41,79 @@ struct FavoritesView: View {
 
     // No displayedItems computed property, uses 'items' directly
 
-var body: some View {
-    // Base view under navigation
-    let base = NavigationStack(path: $navigationPath) {
-        favoritesContentView
-    }
-    // Attach toolbar
-    let withToolbar = base
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Text("Favoriten")
-                    .font(.title3)
-                    .fontWeight(.bold)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showingFilterSheet = true
-                } label: {
-                    Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+    // --- MODIFIED: Apply modifiers directly to NavigationStack, ensuring destination is inside ---
+    var body: some View {
+        NavigationStack(path: $navigationPath) {
+            favoritesContentView // The main content view defined below
+                // Apply navigationDestination *inside* the stack's content view builder
+                .navigationDestination(for: Item.self) { destinationItem in
+                    // The logic for creating the destination view
+                    if let index = items.firstIndex(where: { $0.id == destinationItem.id }) {
+                        PagedDetailView(
+                            items: $items, // Pass the binding correctly
+                            selectedIndex: index,
+                            playerManager: playerManager,
+                            loadMoreAction: {
+                                Task { await loadMoreFavorites() }
+                            }
+                        )
+                        // Environment objects should be inherited automatically
+                    } else {
+                        Text("Fehler: Item nicht in Favoriten gefunden.")
+                             .onAppear {
+                                 FavoritesView.logger.warning("Navigation destination item \(destinationItem.id) not found in current items list.")
+                             }
+                    }
                 }
-            }
+                // Apply toolbar *inside* the stack's content view builder
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        // Use Text here if needed for layout, or leave empty if title is sufficient
+                        // Text("Favoriten").font(.title3).fontWeight(.bold)
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            showingFilterSheet = true
+                        } label: {
+                            Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                        }
+                    }
+                }
+                // Apply navigation title *inside* the stack's content view builder
+                 .navigationTitle("Favoriten")
+                 #if os(iOS)
+                 .navigationBarTitleDisplayMode(.inline)
+                 #endif
         }
-    // Attach alert
-    let withAlert = withToolbar
+        // Modifiers applied to the NavigationStack itself (outside the content closure)
         .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
             Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "Unbekannter Fehler")
         }
-    // Attach sheet
-    let withSheet = withAlert
         .sheet(isPresented: $showingFilterSheet) {
-            FilterView()
+            FilterView() // Assuming standard filter view here
                 .environmentObject(settings)
                 .environmentObject(authService)
         }
-    // Attach navigation destination
-    let withNavDest = withSheet
-        .navigationDestination(for: Item.self) { destinationItem in
-            if let index = items.firstIndex(where: { $0.id == destinationItem.id }) {
-                PagedDetailView(
-                    items: $items,
-                    selectedIndex: index,
-                    playerManager: playerManager,
-                    loadMoreAction: {
-                        Task { await loadMoreFavorites() }
-                    }
-                )
-            } else {
-                Text("Fehler: Item nicht in Favoriten gefunden.")
-            }
-        }
-    // Attach task
-    let withTask = withNavDest
+        // Lifecycle and state observers attached last to the NavigationStack
         .task(id: authService.isLoggedIn) {
             playerManager.configure(settings: settings)
             await handleLoginOrFilterChange()
         }
-    // Chain onChange modifiers individually
-    let afterSFW = withTask.onChange(of: settings.showSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
-    let afterNSFW = afterSFW.onChange(of: settings.showNSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
-    let afterNSFL = afterNSFW.onChange(of: settings.showNSFL) { _, _ in Task { await handleLoginOrFilterChange() } }
-    let afterNSFP = afterNSFL.onChange(of: settings.showNSFP) { _, _ in Task { await handleLoginOrFilterChange() } }
-    let afterPOL = afterNSFP.onChange(of: settings.showPOL) { _, _ in Task { await handleLoginOrFilterChange() } }
-    let afterSeen = afterPOL.onChange(of: settings.seenItemIDs) { _, _ in
-        FavoritesView.logger.trace("FavoritesView detected change in seenItemIDs, body will update.")
+        .onChange(of: settings.showSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
+        .onChange(of: settings.showNSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
+        .onChange(of: settings.showNSFL) { _, _ in Task { await handleLoginOrFilterChange() } }
+        .onChange(of: settings.showNSFP) { _, _ in Task { await handleLoginOrFilterChange() } }
+        .onChange(of: settings.showPOL) { _, _ in Task { await handleLoginOrFilterChange() } }
+        .onChange(of: settings.seenItemIDs) { _, _ in
+            FavoritesView.logger.trace("FavoritesView detected change in seenItemIDs, body will update.")
+        }
     }
-    return afterSeen
-}
+    // --- END MODIFICATION ---
 
-    // MARK: - Extracted Content Views
+
+    // MARK: - Extracted Content Views (unchanged)
 
     @ViewBuilder
     private var favoritesContentView: some View {
@@ -138,34 +136,45 @@ var body: some View {
                 loggedOutContentView
             }
         }
+        // Modifiers specific to the content (like title, toolbar) are now applied *inside* the NavigationStack closure
     }
 
     private var scrollViewContent: some View {
         ScrollView {
-            // --- MODIFIED: Use computed gridColumns ---
-            LazyVGrid(columns: gridColumns, spacing: 3) {
+            LazyVGrid(columns: gridColumns, spacing: 3) { // Uses computed gridColumns
                 ForEach(items) { item in
-                    NavigationLink(value: item) {
+                    NavigationLink(value: item) { // Ensures the Item is the value for navigation
                         FeedItemThumbnail(
                             item: item,
                             isSeen: settings.seenItemIDs.contains(item.id)
                         )
                     }
-                        .buttonStyle(.plain)
+                    .buttonStyle(.plain) // Ensure the link covers the whole item visually
                 }
+                // Pagination Trigger
                 if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
                     Color.clear.frame(height: 1)
-                        .onAppear { FavoritesView.logger.info("Favorites: End trigger appeared."); Task { await loadMoreFavorites() } }
+                        .onAppear {
+                             // Add a small delay before triggering load more
+                             Task {
+                                 try? await Task.sleep(for: .milliseconds(150)) // Slightly increased delay
+                                 // Check state again after delay
+                                 guard !isLoadingMore && canLoadMore && !isLoading else { return }
+                                 FavoritesView.logger.info("Favorites: End trigger appeared (after delay).")
+                                 await loadMoreFavorites()
+                             }
+                         }
                 }
-                if isLoadingMore { ProgressView("Lade mehr...").padding() }
+                // Loading Indicator for pagination
+                if isLoadingMore { ProgressView("Lade mehr...").padding().gridCellColumns(gridColumns.count) } // Span across columns
             }
-            // --- END MODIFICATION ---
             .padding(.horizontal, 5)
             .padding(.bottom)
         }
-        .refreshable { await refreshFavorites() }
+        .refreshable { await refreshFavorites() } // Keep refreshable
     }
 
+    // noFilterContentView remains unchanged
     private var noFilterContentView: some View {
         VStack {
             Spacer()
@@ -182,6 +191,7 @@ var body: some View {
         .refreshable { await refreshFavorites() }
     }
 
+    // loggedOutContentView remains unchanged
     private var loggedOutContentView: some View {
         VStack {
             Spacer()
@@ -195,7 +205,7 @@ var body: some View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Logic Methods
+    // MARK: - Logic Methods (unchanged)
 
     private func handleLoginOrFilterChange() async {
         if authService.isLoggedIn {
@@ -208,6 +218,7 @@ var body: some View {
         }
     }
 
+    @MainActor
     func refreshFavorites() async {
         FavoritesView.logger.info("Pull-to-Refresh triggered or refreshFavorites called.")
         guard authService.isLoggedIn, let username = authService.currentUser?.name else {
@@ -249,15 +260,27 @@ var body: some View {
              }
         }
 
+        let oldFirstItemId = items.first?.id // Capture ID before potential modification
+
         FavoritesView.logger.info("Performing API fetch for favorites refresh with flags: \(settings.apiFlags)...")
         do {
             let fetchedItemsFromAPI = try await apiService.fetchFavorites(username: username, flags: settings.apiFlags);
             FavoritesView.logger.info("API fetch for favorites completed: \(fetchedItemsFromAPI.count) fresh items.");
+
+            // Check for cancellation before updating UI
+             guard !Task.isCancelled else { FavoritesView.logger.info("Refresh task cancelled after API fetch."); return }
+
             // Update UI state directly (on MainActor)
+            let newFirstItemId = fetchedItemsFromAPI.first?.id // Capture new ID
+            let contentChanged = initialItemsFromCache == nil || initialItemsFromCache?.count != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId
             self.items = fetchedItemsFromAPI;
             self.canLoadMore = !fetchedItemsFromAPI.isEmpty;
             FavoritesView.logger.info("FavoritesView updated with \(fetchedItemsFromAPI.count) items directly from API.");
-            if !navigationPath.isEmpty && initialItemsFromCache != nil { navigationPath = NavigationPath(); FavoritesView.logger.info("Popped navigation due to refresh overwriting cache.") }
+            // Pop navigation only if content actually changed compared to cache or initial state
+            if !navigationPath.isEmpty && contentChanged {
+                navigationPath = NavigationPath();
+                FavoritesView.logger.info("Popped navigation due to refresh resulting in different list content.")
+            }
 
             // Save to cache outside MainActor context
             await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
@@ -273,6 +296,9 @@ var body: some View {
             await settings.saveItemsToCache([], forKey: cacheKey);
             await authService.logout()
         }
+        catch is CancellationError {
+            FavoritesView.logger.info("Favorites refresh API call cancelled.")
+        }
         catch {
             FavoritesView.logger.error("API fetch for favorites failed: \(error.localizedDescription)");
             // Update UI state directly (on MainActor)
@@ -285,6 +311,7 @@ var body: some View {
         }
     }
 
+    @MainActor // Ensure MainActor context as it modifies @State variables
     func loadMoreFavorites() async {
         guard settings.hasActiveContentFilter else { FavoritesView.logger.warning("Skipping loadMoreFavorites: No active content filter selected."); self.canLoadMore = false; return } // Update state directly
         guard authService.isLoggedIn, let username = authService.currentUser?.name else { FavoritesView.logger.warning("Cannot load more favorites: User not logged in."); return }
@@ -302,7 +329,9 @@ var body: some View {
             var appendedItemCount = 0;
 
             // Check cancellation before UI update
-            guard self.isLoadingMore else { FavoritesView.logger.info("Load more cancelled before UI update."); return };
+             guard !Task.isCancelled else { FavoritesView.logger.info("Load more task cancelled after API fetch."); return }
+             // Already on MainActor, update state directly
+             guard self.isLoadingMore else { FavoritesView.logger.info("Load more cancelled before UI update (isLoadingMore became false)."); return };
 
             // Update UI state directly (on MainActor)
             if newItems.isEmpty { FavoritesView.logger.info("Reached end of favorites feed (API returned empty list for older than \(lastItemId))."); self.canLoadMore = false }
@@ -328,10 +357,15 @@ var body: some View {
             // Perform logout outside MainActor context
             Task { await authService.logout() }
         }
+        catch is CancellationError {
+             FavoritesView.logger.info("Load more favorites API call cancelled.")
+        }
         catch {
             FavoritesView.logger.error("API fetch failed during loadMoreFavorites: \(error.localizedDescription)");
             // Check cancellation before UI update
-            guard self.isLoadingMore else { return };
+             guard !Task.isCancelled else { FavoritesView.logger.info("Load more task cancelled after API error."); return }
+             // Already on MainActor, update state directly
+             guard self.isLoadingMore else { FavoritesView.logger.info("Load more cancelled before UI update (isLoadingMore became false)."); return };
             // Update UI state directly (on MainActor)
             if items.isEmpty { errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" };
             self.canLoadMore = false
@@ -339,7 +373,8 @@ var body: some View {
     }
 }
 
-// MARK: - Previews
+
+// MARK: - Previews (unchanged)
 #Preview("Logged In") { let previewSettings = AppSettings(); let previewAuthService = AuthService(appSettings: previewSettings); previewAuthService.isLoggedIn = true; previewAuthService.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2, badges: []); return FavoritesView().environmentObject(previewSettings).environmentObject(previewAuthService) }
 #Preview("Logged Out") { FavoritesView().environmentObject(AppSettings()).environmentObject(AuthService(appSettings: AppSettings())) }
 // --- END OF COMPLETE FILE ---
