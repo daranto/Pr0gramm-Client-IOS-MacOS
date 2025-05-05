@@ -383,6 +383,36 @@ class APIService {
         }
     }
 
+    // --- NEW: Function to vote on comments ---
+    func voteComment(commentId: Int, vote: Int, nonce: String) async throws {
+        let endpoint = "/comments/vote"
+        Self.logger.info("Attempting to vote \(vote) on comment \(commentId).")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "id", value: String(commentId)),
+            URLQueryItem(name: "vote", value: String(vote)), // vote = 1 (up), -1 (down), 0 (clear)
+            URLQueryItem(name: "_nonce", value: nonce)
+        ]
+        request.httpBody = components.query?.data(using: .utf8)
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            // The API seems to just return 200 OK on success, no body content needed.
+            try handleApiResponseVoid(response: response, endpoint: endpoint + " (comment: \(commentId), vote: \(vote))")
+            Self.logger.info("Successfully sent vote (\(vote)) for comment \(commentId).")
+        } catch {
+            Self.logger.error("Failed to vote (\(vote)) for comment \(commentId): \(error.localizedDescription)")
+            // Propagate the error so AuthService can handle rollbacks/auth issues
+            throw error
+        }
+    }
+    // --- END NEW ---
+
     func postComment(itemId: Int, parentId: Int, comment: String, nonce: String) async throws -> [PostCommentResultComment] {
         let endpoint = "/comments/post"
         Self.logger.info("Attempting to post comment to item \(itemId) (parent: \(parentId)).")
