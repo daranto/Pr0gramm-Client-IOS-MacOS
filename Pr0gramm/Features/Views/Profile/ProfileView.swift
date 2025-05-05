@@ -4,6 +4,13 @@
 import SwiftUI
 import Kingfisher // Import Kingfisher
 
+// --- NEW: Define navigation targets ---
+enum ProfileNavigationTarget: Hashable {
+    case uploads(username: String)
+    case favoritedComments(username: String)
+}
+// --- END NEW ---
+
 /// Displays the user's profile information when logged in, or prompts for login otherwise.
 struct ProfileView: View {
     @EnvironmentObject var authService: AuthService // Access authentication state
@@ -46,10 +53,16 @@ struct ProfileView: View {
                          .padding().background(Material.regular).cornerRadius(10)
                  }
             }
-            // Add navigation destination for UserUploadsView
-            .navigationDestination(for: String.self) { username in
-                 UserUploadsView(username: username)
+            // --- MODIFIED: Use ProfileNavigationTarget ---
+            .navigationDestination(for: ProfileNavigationTarget.self) { target in
+                 switch target {
+                 case .uploads(let username):
+                     UserUploadsView(username: username)
+                 case .favoritedComments(let username):
+                     UserFavoritedCommentsView(username: username)
+                 }
             }
+            // --- END MODIFICATION ---
         }
     }
 
@@ -90,11 +103,19 @@ struct ProfileView: View {
                         .foregroundColor(.secondary)
                 }
 
-                // NavigationLink to uploads
-                NavigationLink(value: user.name) {
+                // --- MODIFIED: Use ProfileNavigationTarget for uploads ---
+                NavigationLink(value: ProfileNavigationTarget.uploads(username: user.name)) {
                     Text("Meine Uploads")
                         .font(UIConstants.bodyFont) // Use adaptive font
                 }
+                // --- END MODIFICATION ---
+
+                // --- NEW: NavigationLink for favorited comments ---
+                NavigationLink(value: ProfileNavigationTarget.favoritedComments(username: user.name)) {
+                     Text("Favorisierte Kommentare")
+                         .font(UIConstants.bodyFont)
+                 }
+                // --- END NEW ---
 
             } else {
                 // Show placeholder while user data might still be loading initially
@@ -105,7 +126,7 @@ struct ProfileView: View {
         }
         .headerProminence(.increased) // Make section header slightly more prominent
 
-        // --- NEW SECTION for pr0mium Link ---
+        // Section for pr0mium Link
         Section("pr0gramm unterstützen") {
             VStack(alignment: .leading, spacing: 8) {
                  // The descriptive text
@@ -130,7 +151,6 @@ struct ProfileView: View {
             }
         }
         .headerProminence(.increased) // Make section header slightly more prominent
-        // --- END NEW SECTION ---
 
 
         Section {
@@ -244,7 +264,7 @@ private struct LoggedInProfilePreviewWrapper: View {
 
         ai.currentUser = UserInfo(
             id: 1,
-            name: "PreviewUser",
+            name: "Daranto", // Use your name for preview consistency
             registered: Int(Date().timeIntervalSince1970) - 500000,
             score: 1337,
             mark: 2,

@@ -21,19 +21,18 @@ struct CachedItemDetails {
     let totalCommentCount: Int
 }
 
-// --- NEW: Structure to hold reply context ---
+// Structure to hold reply context
 struct ReplyTarget: Identifiable {
     let id = UUID() // Make identifiable for sheet
     let itemId: Int
     let parentId: Int // 0 for top-level
 }
-// --- END NEW ---
 
 
 // PagedDetailTabViewItem (Pass AuthService vote states/actions)
 @MainActor
 struct PagedDetailTabViewItem: View {
-    let item: Item // Now let, as modifications happen in parent
+    let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
     @ObservedObject var playerManager: VideoPlayerManager
 
@@ -55,7 +54,7 @@ struct PagedDetailTabViewItem: View {
     let currentVote: Int
     let upvoteAction: () -> Void
     let downvoteAction: () -> Void
-    let showCommentInputAction: (Int) -> Void
+    let showCommentInputAction: (Int, Int) -> Void // Takes itemId, parentId
 
     @EnvironmentObject private var settings: AppSettings
 
@@ -80,7 +79,8 @@ struct PagedDetailTabViewItem: View {
             totalCommentCount: totalCommentCount,
             infoLoadingStatus: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget, fullscreenImageTarget: $fullscreenImageTarget,
-            isFavorited: isFavorited, toggleFavoriteAction: toggleFavoriteAction,
+            isFavorited: isFavorited,
+            toggleFavoriteAction: toggleFavoriteAction,
             showAllTagsAction: showAllTagsAction,
             isCommentCollapsed: isCommentCollapsed,
             toggleCollapseAction: toggleCollapseAction,
@@ -153,13 +153,6 @@ struct PagedDetailView: View {
         self.playerManager = playerManager
         self.loadMoreAction = loadMoreAction
         PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex)")
-    }
-
-    private var isCurrentItemFavorited: Bool {
-        guard selectedIndex >= 0 && selectedIndex < items.count else { return false }
-        let currentItemID = items[selectedIndex].id
-        if let localStatus = localFavoritedStatus[currentItemID] { return localStatus }
-        return authService.favoritedItemIDs.contains(currentItemID)
     }
 
     // MARK: - Body
@@ -235,6 +228,8 @@ struct PagedDetailView: View {
             let currentItem = items[index]
             let pageData = preparePageData(for: index)
             let currentVote = authService.votedItemStates[currentItem.id] ?? 0
+            let calculatedIsFavorited = localFavoritedStatus[currentItem.id]
+                ?? authService.favoritedItemIDs.contains(currentItem.id)
 
             if let data = pageData {
                  PagedDetailTabViewItem(
@@ -251,7 +246,7 @@ struct PagedDetailView: View {
                      onWillEndFullScreen: handleEndFullScreen,
                      previewLinkTarget: $previewLinkTarget,
                      fullscreenImageTarget: $fullscreenImageTarget,
-                     isFavorited: isCurrentItemFavorited,
+                     isFavorited: calculatedIsFavorited, // Pass calculated value
                      toggleFavoriteAction: toggleFavorite,
                      showAllTagsAction: { showAllTagsForItem.insert(currentItem.id) },
                      collapsedCommentIDs: collapsedCommentIDs,
@@ -259,9 +254,9 @@ struct PagedDetailView: View {
                      currentVote: currentVote,
                      upvoteAction: { Task { await handleVoteTap(voteType: 1) } },
                      downvoteAction: { Task { await handleVoteTap(voteType: -1) } },
-                     showCommentInputAction: { parentId in
-                         self.commentReplyTarget = ReplyTarget(itemId: currentItem.id, parentId: parentId)
-                         PagedDetailView.logger.debug("Setting comment reply target: itemId=\(currentItem.id), parentId=\(parentId)")
+                     showCommentInputAction: { itemId, parentId in
+                         self.commentReplyTarget = ReplyTarget(itemId: itemId, parentId: parentId)
+                         PagedDetailView.logger.debug("Setting comment reply target: itemId=\(itemId), parentId=\(parentId)")
                      }
                  )
                  .tag(index)
@@ -462,6 +457,19 @@ struct PagedDetailView: View {
          }
          let currentItem = items[newValue]
          await loadInfoIfNeededAndPrepareHierarchy(for: currentItem)
+
+         // --- FIX: Wrap load calls in Task {} instead of Task.detached ---
+         Task { // Start background task for next item
+             let nextIndex = newValue + 1
+             if nextIndex < self.items.count { await self.loadInfoIfNeededAndPrepareHierarchy(for: self.items[nextIndex]) }
+         }
+         Task { // Start background task for previous item
+             let prevIndex = newValue - 1
+             if prevIndex >= 0 { await self.loadInfoIfNeededAndPrepareHierarchy(for: self.items[prevIndex]) }
+         }
+         // --- END FIX ---
+
+         // Prefetching logic remains the same
          var urlsToPrefetch: [URL] = []
          let startIndex = max(0, newValue - prefetchLookahead)
          let endIndex = min(items.count - 1, newValue + prefetchLookahead)
@@ -478,10 +486,8 @@ struct PagedDetailView: View {
          } else {
              PagedDetailView.logger.debug("No valid URLs to prefetch around index \(newValue).")
          }
-         async let loadNextTask: () = { if await newValue + 1 < items.count { await loadInfoIfNeededAndPrepareHierarchy(for: items[newValue + 1]) } }()
-         async let loadPrevTask: () = { if newValue > 0 { await loadInfoIfNeededAndPrepareHierarchy(for: items[newValue - 1]) } }()
-         _ = await [loadNextTask, loadPrevTask]
-         PagedDetailView.logger.debug("Finished loading adjacent item info for index \(newValue).")
+
+         PagedDetailView.logger.debug("Finished launching adjacent item info loads for index \(newValue).")
      }
 
     private func handleScenePhaseChange(oldPhase: ScenePhase, newPhase: ScenePhase) {
@@ -571,10 +577,13 @@ struct PagedDetailView: View {
         let currentItem = items[selectedIndex]
         guard authService.isLoggedIn, let nonce = authService.userNonce, let collectionId = authService.favoritesCollectionId else { PagedDetailView.logger.warning("Favorite toggle skipped: User not logged in or nonce/collectionId missing."); return }
         let itemId = currentItem.id
-        let targetFavoriteState = !isCurrentItemFavorited
+        let currentIsFavorited: Bool // Calculate locally
+        if let localStatus = localFavoritedStatus[itemId] { currentIsFavorited = localStatus }
+        else { currentIsFavorited = authService.favoritedItemIDs.contains(itemId) }
+        let targetFavoriteState = !currentIsFavorited
 
         isTogglingFavorite = true
-        localFavoritedStatus[itemId] = targetFavoriteState
+        localFavoritedStatus[itemId] = targetFavoriteState // Optimistic UI update
 
         do {
             if targetFavoriteState {
@@ -591,7 +600,11 @@ struct PagedDetailView: View {
             PagedDetailView.logger.info("Favorite toggled successfully for item \(itemId). Global state updated. Cache cleared.")
         } catch {
             PagedDetailView.logger.error("Failed to toggle favorite for item \(itemId): \(error.localizedDescription)")
-            localFavoritedStatus.removeValue(forKey: itemId)
+            localFavoritedStatus.removeValue(forKey: itemId) // Rollback optimistic UI
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                 PagedDetailView.logger.warning("Favorite toggle failed due to auth error. Logging out.")
+                 await authService.logout() // await added previously
+            }
         }
         isTogglingFavorite = false
     }
@@ -614,7 +627,9 @@ struct PagedDetailView: View {
         let initialUp = items[itemIndex].up
         let initialDown = items[itemIndex].down
 
+        // --- FIX: Ensure await is present ---
         await authService.performVote(itemId: itemId, voteType: voteType)
+        // --- END FIX ---
 
         let newVoteState = authService.votedItemStates[itemId] ?? 0
 
@@ -629,25 +644,25 @@ struct PagedDetailView: View {
                 case (-1, 0): deltaDown = -1
                 default: PagedDetailView.logger.warning("Unexpected vote state transition: \(initialVoteState) -> \(newVoteState) for item \(itemId)")
             }
-            if itemIndex == selectedIndex && itemIndex < items.count {
+            if itemIndex < items.count && itemIndex == selectedIndex {
                 var mutableItem = items[itemIndex]
                 mutableItem.up += deltaUp
                 mutableItem.down += deltaDown
-                items[itemIndex] = mutableItem
+                items[itemIndex] = mutableItem // Assign back to the binding
                 PagedDetailView.logger.info("Updated local item \(itemId) score: deltaUp=\(deltaUp), deltaDown=\(deltaDown). New counts: up=\(items[itemIndex].up), down=\(items[itemIndex].down)")
             } else {
-                 PagedDetailView.logger.warning("Could not update local item score for \(itemId): selectedIndex changed during vote.")
+                 PagedDetailView.logger.warning("Could not update local item score for \(itemId): selectedIndex changed during vote or index out of bounds.")
             }
         } else {
              PagedDetailView.logger.info("Vote state for item \(itemId) did not change after handleVoteTap (API might have failed or state already correct). No local score update needed.")
              let finalVoteStateInAuth = authService.votedItemStates[itemId] ?? 0
-             if finalVoteStateInAuth == initialVoteState && itemIndex == selectedIndex && itemIndex < items.count {
+             if finalVoteStateInAuth == initialVoteState && itemIndex < items.count && itemIndex == selectedIndex {
                  if items[itemIndex].up != initialUp || items[itemIndex].down != initialDown {
                      PagedDetailView.logger.warning("Reverting local item counts for \(itemId) due to API failure and vote state rollback.")
                      var mutableItem = items[itemIndex]
                      mutableItem.up = initialUp
                      mutableItem.down = initialDown
-                     items[itemIndex] = mutableItem
+                     items[itemIndex] = mutableItem // Assign back to the binding
                  }
              }
         }
@@ -662,10 +677,11 @@ struct PagedDetailView: View {
         PagedDetailView.logger.info("Submitting comment via PagedDetailView for itemId: \(itemId), parentId: \(parentId)")
         do {
             let updatedComments = try await apiService.postComment(itemId: itemId, parentId: parentId, comment: text, nonce: nonce)
-            if var currentDetails = cachedDetails[itemId] {
+            if let currentDetails = cachedDetails[itemId] {
                 PagedDetailView.logger.info("Updating cached comments for item \(itemId). Previous count: \(currentDetails.info.comments.count), New count: \(updatedComments.count)")
                  let updatedItemComments = updatedComments.map {
-                    ItemComment(id: $0.id, parent: $0.parent, content: $0.content, created: $0.created, up: $0.up, down: $0.down, confidence: $0.confidence, name: $0.name, mark: $0.mark)
+                    // Use the explicit initializer for ItemComment
+                    ItemComment(id: $0.id, parent: $0.parent, content: $0.content, created: $0.created, up: $0.up, down: $0.down, confidence: $0.confidence, name: $0.name, mark: $0.mark, itemId: itemId) // <-- Pass itemId here if relevant
                  }
                 let updatedInfo = ItemsInfoResponse(tags: currentDetails.info.tags, comments: updatedItemComments)
                 let newFlatList = prepareFlatDisplayComments(from: updatedItemComments, sortedBy: currentDetails.sortedBy, maxDepth: commentMaxDepth)
@@ -674,7 +690,11 @@ struct PagedDetailView: View {
             } else {
                 PagedDetailView.logger.warning("Comment posted successfully for item \(itemId), but no cached details found to update.")
                  infoLoadingStatus[itemId] = .idle
-                 Task { await loadInfoIfNeededAndPrepareHierarchy(for: items[selectedIndex]) }
+                 if selectedIndex >= 0 && selectedIndex < items.count {
+                     Task { await loadInfoIfNeededAndPrepareHierarchy(for: items[selectedIndex]) }
+                 } else {
+                     PagedDetailView.logger.error("Cannot reload hierarchy after posting comment: Invalid selectedIndex \(selectedIndex)")
+                 }
             }
         } catch {
             PagedDetailView.logger.error("Failed to submit comment for item \(itemId): \(error.localizedDescription)")

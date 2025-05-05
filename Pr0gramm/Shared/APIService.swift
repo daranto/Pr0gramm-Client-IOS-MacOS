@@ -21,34 +21,54 @@ struct ItemTag: Codable, Identifiable, Hashable {
 /// Represents a comment associated with an item.
 struct ItemComment: Codable, Identifiable, Hashable {
     let id: Int
-    let parent: Int? // ID of the parent comment, if it's a reply
+    let parent: Int?
     let content: String
-    let created: Int // Unix timestamp
+    let created: Int
     let up: Int
     let down: Int
-    let confidence: Double
+    // --- FIX: Make confidence optional ---
+    let confidence: Double?
+    // --- END FIX ---
     let name: String
-    let mark: Int // User's mark/rank (raw integer value from API)
+    let mark: Int
+    let itemId: Int?
+
+    // --- FIX: Update initializer to accept optional confidence ---
+    init(id: Int, parent: Int?, content: String, created: Int, up: Int, down: Int, confidence: Double?, name: String, mark: Int, itemId: Int? = nil) {
+        self.id = id
+        self.parent = parent
+        self.content = content
+        self.created = created
+        self.up = up
+        self.down = down
+        self.confidence = confidence // Assign optional confidence
+        self.name = name
+        self.mark = mark
+        self.itemId = itemId
+    }
+    // --- END FIX ---
 }
 /// Generic response structure for endpoints returning a list of items (e.g., `/items/get`).
 struct ApiResponse: Codable {
     let items: [Item]
-    let atEnd: Bool? // Indicates if the end of the feed/list has been reached
-    let atStart: Bool? // Indicates if the start of the feed/list has been reached (less common)
+    let atEnd: Bool?
+    let atStart: Bool?
+    let hasOlder: Bool?
+    let hasNewer: Bool?
 }
 /// Response structure for the `/user/login` endpoint.
 struct LoginResponse: Codable {
     let success: Bool
-    let error: String? // Error message if success is false
-    let ban: BanInfo? // Information about a ban, if applicable
-    let nonce: NonceInfo? // Nonce from API response (currently unused, we extract from cookie)
+    let error: String?
+    let ban: BanInfo?
+    let nonce: NonceInfo?
 }
 /// Details about a user ban.
 struct BanInfo: Codable {
     let banned: Bool
     let reason: String
-    let till: Int? // Unix timestamp until the ban lifts, nil if permanent
-    let userId: Int? // ID of the banned user
+    let till: Int?
+    let userId: Int?
 }
 /// Nonce structure from API response (currently unused).
 struct NonceInfo: Codable {
@@ -56,22 +76,19 @@ struct NonceInfo: Codable {
 }
 /// Response structure for the `/user/captcha` endpoint.
 struct CaptchaResponse: Codable {
-    let token: String // Token to be submitted with the login request
-    let captcha: String // Base64 encoded image string (data URL format)
+    let token: String
+    let captcha: String
 }
 
 // MARK: - Badge Structure ---
-/// Represents a user badge as returned by the API. Matches the provided API response structure.
 struct ApiBadge: Codable, Identifiable, Hashable {
-    // Use image as ID since ID is missing in API response
     var id: String { image }
-    let image: String // Filename of the badge image (e.g., "pr0-coin.png")
+    let image: String
     let description: String?
     let created: Int?
     let link: String?
-    let category: String? // Seems to be null in example, keep as optional String
+    let category: String?
 
-    /// Computed property to construct the full image URL.
     var fullImageUrl: URL? {
         return URL(string: "https://pr0gramm.com/media/badges/")?.appendingPathComponent(image)
     }
@@ -81,34 +98,31 @@ struct ApiBadge: Codable, Identifiable, Hashable {
 /// Response structure for the `/profile/info` endpoint.
 struct ProfileInfoResponse: Codable {
     let user: ApiProfileUser
-    let badges: [ApiBadge]? // Badges sind hier, auf der Top-Level-Ebene
+    let badges: [ApiBadge]?
     let commentCount: Int?
     let uploadCount: Int?
     let tagCount: Int?
-    // Add other top-level fields from response if needed (comments, comments_likes, etc.)
 }
 /// Represents user profile details as returned by the `/profile/info` API.
 struct ApiProfileUser: Codable, Hashable {
     let id: Int
     let name: String
-    let registered: Int // Unix timestamp
-    let score: Int // "Benis"
-    let mark: Int // User's mark/rank (raw integer value from API)
-    let up: Int? // Total upvotes given?
-    let down: Int? // Total downvotes given?
-    let banned: Int? // 0 or 1 ?
-    let bannedUntil: Int? // Unix timestamp?
-    // badges removed from here, as it's top-level in the response
+    let registered: Int
+    let score: Int
+    let mark: Int
+    let up: Int?
+    let down: Int?
+    let banned: Int?
+    let bannedUntil: Int?
 }
 /// Simplified user info structure used within the app (e.g., `AuthService.currentUser`).
-/// Kept badges here for convenience in ProfileView.
 struct UserInfo: Codable, Hashable {
     let id: Int
     let name: String
-    let registered: Int // Unix timestamp
-    let score: Int // "Benis"
-    let mark: Int // User's mark/rank (raw integer value)
-    let badges: [ApiBadge]? // <-- Behalten für einfache Übergabe an ProfileView
+    let registered: Int
+    let score: Int
+    let mark: Int
+    let badges: [ApiBadge]?
 }
 /// Response structure for the `/collections/get` endpoint.
 struct CollectionsResponse: Codable {
@@ -118,52 +132,54 @@ struct CollectionsResponse: Codable {
 struct ApiCollection: Codable, Identifiable {
     let id: Int
     let name: String
-    let keyword: String? // e.g., "favoriten"
-    let isPublic: Int // 0 or 1
-    let isDefault: Int // 0 or 1 (1 for the default "Favoriten" collection)
+    let keyword: String?
+    let isPublic: Int
+    let isDefault: Int
     let itemCount: Int
 }
 /// Response structure for the `/user/sync` endpoint.
-/// Contains the `_nonce` value needed for authenticated POST requests.
 struct UserSyncResponse: Codable {
-    /// The nonce value required for POST requests like adding/removing favorites.
-    /// The API calls this `likeNonce`.
     let likeNonce: String?
 }
 
-// --- NEW: Structure for Comment Post Response ---
-// Matches the structure within CommentsPostSuccessResponse
+// Structure for Comment Post Response
 struct PostCommentResultComment: Codable, Identifiable, Hashable {
     let id: Int
-    let parent: Int? // Can be 0 for top-level, or nil? API spec says CommentId (int64), 0 is valid int64. Let's assume 0 or nil means top-level reply.
+    let parent: Int?
     let content: String
     let created: Int
     let up: Int
     let down: Int
+    // --- Keep confidence non-optional here, assuming API provides it ---
     let confidence: Double
+    // --- End change ---
     let name: String
     let mark: Int
 }
 
 struct CommentsPostSuccessResponse: Codable {
-    let success: Bool = true // Explicitly true for success case
-    let commentId: Int // ID of the newly posted comment
-    let comments: [PostCommentResultComment] // The updated list of all comments for the item
+    let success: Bool
+    let commentId: Int
+    let comments: [PostCommentResultComment]
 }
 
 struct CommentsPostErrorResponse: Codable {
-    let success: Bool = false // Explicitly false for error case
-    let error: String // e.g., "commentTooSoon", "commentEmpty", etc.
-    // Optional fields like 'report' if needed based on specific errors
+    let success: Bool
+    let error: String
 }
-// --- END NEW ---
+
+// Structure for Comment Likes Response
+struct ProfileCommentLikesResponse: Codable {
+    let comments: [ItemComment] // Uses ItemComment which now has optional confidence
+    let hasOlder: Bool
+    let hasNewer: Bool
+}
 
 
 // MARK: - APIService Class Definition
 
 /// Handles communication with the pr0gramm API.
 class APIService {
-    /// Structure to hold login credentials, including optional captcha details.
     struct LoginRequest { let username: String; let password: String; let captcha: String?; let token: String? }
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "APIService")
@@ -172,6 +188,7 @@ class APIService {
 
     // MARK: - API Methods
 
+    // ... (fetchItems, fetchItem, fetchFavorites, searchItems, fetchItemInfo, login, logout, fetchCaptcha, getProfileInfo, getUserCollections, syncUser, addToCollection, removeFromCollection, vote, postComment, fetchFavoritedComments - unverändert) ...
     func fetchItems(flags: Int, promoted: Int? = nil, user: String? = nil, tags: String? = nil, olderThanId: Int? = nil) async throws -> [Item] {
         let endpoint = "/items/get"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
@@ -371,6 +388,46 @@ class APIService {
             }
         } catch {
             Self.logger.error("Failed to post comment to item \(itemId) (parent: \(parentId)): \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    func fetchFavoritedComments(username: String, flags: Int, before: Int? = nil) async throws -> ProfileCommentLikesResponse {
+        let endpoint = "/profile/commentLikes"
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+
+        var queryItems = [
+            URLQueryItem(name: "name", value: username),
+            URLQueryItem(name: "flags", value: String(flags))
+        ]
+
+        if let beforeTimestamp = before {
+            queryItems.append(URLQueryItem(name: "before", value: String(beforeTimestamp)))
+            Self.logger.info("Fetching favorited comments for '\(username)' (flags: \(flags)) before timestamp: \(beforeTimestamp)")
+        } else {
+             let distantFutureTimestamp = Int(Date.distantFuture.timeIntervalSince1970)
+             queryItems.append(URLQueryItem(name: "before", value: String(distantFutureTimestamp)))
+             Self.logger.info("Fetching initial favorited comments for '\(username)' (flags: \(flags))")
+        }
+
+        urlComponents.queryItems = queryItems
+
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        let request = URLRequest(url: url)
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: ProfileCommentLikesResponse = try handleApiResponse(data: data, response: response, endpoint: "\(endpoint) (user: \(username))")
+            Self.logger.info("Successfully fetched \(apiResponse.comments.count) favorited comments for user \(username). HasOlder: \(apiResponse.hasOlder)")
+            return apiResponse
+        } catch {
+            Self.logger.error("Error fetching favorited comments for user \(username): \(error.localizedDescription)")
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                 Self.logger.warning("Fetching favorited comments failed: User authentication required.")
+            }
             throw error
         }
     }

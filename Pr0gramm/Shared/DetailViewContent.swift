@@ -65,7 +65,9 @@ struct DetailViewContent: View {
     let currentVote: Int
     let upvoteAction: () -> Void
     let downvoteAction: () -> Void
-    let showCommentInputAction: (Int) -> Void
+    // --- MODIFIED: Closure now takes itemId and parentId ---
+    let showCommentInputAction: (Int, Int) -> Void // itemId, parentId
+    // --- END MODIFICATION ---
 
 
     @EnvironmentObject var navigationService: NavigationService
@@ -168,7 +170,9 @@ struct DetailViewContent: View {
     }
 
     @ViewBuilder private var addCommentButton: some View {
-        Button { showCommentInputAction(0) }
+        // --- MODIFIED: Pass itemId and parentId=0 ---
+        Button { showCommentInputAction(item.id, 0) }
+        // --- END MODIFICATION ---
         label: {
             Image(systemName: "plus.message")
                 .font(actionIconFont)
@@ -231,7 +235,9 @@ struct DetailViewContent: View {
             previewLinkTarget: $previewLinkTarget,
             isCommentCollapsed: isCommentCollapsed,
             toggleCollapseAction: toggleCollapseAction,
-            showCommentInputAction: showCommentInputAction
+            // --- MODIFIED: Pass itemId along with parentId ---
+            showCommentInputAction: { parentId in showCommentInputAction(item.id, parentId) }
+            // --- END MODIFICATION ---
         )
     }
 
@@ -316,16 +322,20 @@ fileprivate extension UIFont {
         @StateObject var authService = AuthService(appSettings: AppSettings())
         @StateObject var navService = NavigationService()
         @StateObject var playerManager = VideoPlayerManager()
-        @State var showingCommentSheet = false
+        // --- MODIFIED: State for sheet presentation ---
+        @State private var commentReplyTarget: ReplyTarget? = nil
+        // --- END MODIFICATION ---
 
         func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
         func isCollapsed(_ id: Int) -> Bool { collapsedIDs.contains(id) }
 
         var body: some View {
+            // --- Use let for the item definition ---
             let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, subtitles: nil, favorited: true)
+            // --- End modification ---
             let previewHandler = KeyboardActionHandler()
             let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "TopTag1"), ItemTag(id: 2, confidence: 0.8, tag: "TopTag2"), ItemTag(id: 3, confidence: 0.7, tag: "TopTag3"), ItemTag(id: 4, confidence: 0.6, tag: "beim lesen programmieren gelernt") ]
-            let sampleComments = [ ItemComment(id: 1, parent: 0, content: "Kommentar 1 http://pr0gramm.com/new/54321", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), ItemComment(id: 2, parent: 1, content: "Antwort 1.1", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "User2", mark: 2) ]
+            let sampleComments = [ ItemComment(id: 1, parent: 0, content: "Kommentar 1 http://pr0gramm.com/new/54321", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1, itemId: 2), ItemComment(id: 2, parent: 1, content: "Antwort 1.1", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "User2", mark: 2, itemId: 2) ]
             let previewFlatComments = flattenHierarchyForPreview(comments: sampleComments)
 
             NavigationStack {
@@ -351,10 +361,13 @@ fileprivate extension UIFont {
                     currentVote: 1,
                     upvoteAction: { print("Preview Upvote Tapped") },
                     downvoteAction: { print("Preview Downvote Tapped") },
-                    showCommentInputAction: { parentId in
-                         print("Preview Show Comment Input Tapped for parentId: \(parentId)")
-                         showingCommentSheet = true
+                    // --- MODIFIED: Provide the showCommentInputAction closure ---
+                    showCommentInputAction: { itemId, parentId in
+                         print("Preview Show Comment Input Tapped for itemId: \(itemId), parentId: \(parentId)")
+                         // Create and set the ReplyTarget to show the sheet
+                         self.commentReplyTarget = ReplyTarget(itemId: itemId, parentId: parentId)
                     }
+                    // --- END MODIFICATION ---
                 )
                 .environmentObject(navService)
                 .environmentObject(settings)
@@ -372,7 +385,20 @@ fileprivate extension UIFont {
                          print("Preview Task: AuthService configured and item marked as seen.")
                     }
                 }
-                 .sheet(isPresented: $showingCommentSheet) { Text("Dummy Comment Sheet") }
+                 // --- MODIFIED: Add the sheet modifier ---
+                 .sheet(item: $commentReplyTarget) { target in
+                     // Dummy CommentInputView for preview
+                     CommentInputView(
+                         itemId: target.itemId,
+                         parentId: target.parentId,
+                         onSubmit: { commentText in
+                             print("Preview Submit: \(commentText) for itemId \(target.itemId), parent \(target.parentId)")
+                             try await Task.sleep(for: .seconds(1))
+                         }
+                     )
+                     .environmentObject(authService) // Pass authService if needed inside
+                 }
+                 // --- END MODIFICATION ---
             }
         }
     }
