@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Shared/Item.swift
+// --- START OF COMPLETE FILE ---
+
 import Foundation
 
 /// Represents a single media item (post) from the pr0gramm API.
@@ -21,6 +24,7 @@ struct Item: Codable, Identifiable, Hashable {
     let mark: Int // Uploader's mark/rank (raw integer value)
     let repost: Bool? // Indicates if the item is potentially a repost (API determines this)
     let variants: [ItemVariant]? // Available video variants (different codecs/resolutions)
+    let subtitles: [ItemSubtitle]? // Array of available subtitles
     var favorited: Bool? // Local state indicating if the *current user* has favorited this item. Updated by app logic, not directly from `items/get`.
 
     // MARK: - Computed Properties
@@ -38,8 +42,6 @@ struct Item: Codable, Identifiable, Hashable {
     }
 
     /// Constructs the full URL for the main media content (image or video).
-    /// For videos, this usually points to the highest quality MP4 variant by default.
-    /// Future logic could select a specific variant from `variants` based on settings or network conditions.
     var imageUrl: URL? {
         if isVideo {
             // Videos are served from the 'vid' subdomain.
@@ -58,17 +60,35 @@ struct Item: Codable, Identifiable, Hashable {
 
 /// Represents a single video variant available for an `Item`.
 struct ItemVariant: Codable, Hashable {
-    let name: String     // Identifier for the variant (e.g., "vp9s", "h264", "source")
-    let path: String     // Relative path to the video file on the 'vid' subdomain
-    let mimeType: String // MIME type (e.g., "video/mp4", "video/webm")
-    let codec: String    // Video codec (e.g., "vp9", "h264")
+    let name: String
+    let path: String
+    let mimeType: String
+    let codec: String
     let width: Int
     let height: Int
-    let bitRate: Double? // Video bitrate, can be nil
-    let fileSize: Int?   // File size in bytes, can be nil
+    let bitRate: Double?
+    let fileSize: Int?
 
     /// Constructs the full URL for this specific video variant.
     var variantUrl: URL? {
-        return URL(string: "https://vid.pr0gramm.com\(path)")
+        let correctedPath = path.hasPrefix("/") ? path : "/\(path)"
+        return URL(string: "https://vid.pr0gramm.com\(correctedPath)")
     }
 }
+
+/// Represents a subtitle track available for an `Item`. Matches API `GetItemsItemSubtitle`.
+struct ItemSubtitle: Codable, Hashable {
+    let language: String
+    let path: String
+    let label: String
+    let isDefault: Bool?
+
+    // Construct full URL
+    var subtitleUrl: URL? {
+         let correctedPath = path.hasPrefix("/") ? path : "/\(path)"
+         // --- FIX: Use images.pr0gramm.com for subtitles ---
+         return URL(string: "https://images.pr0gramm.com\(correctedPath)")
+         // --- END FIX ---
+    }
+}
+// --- END OF COMPLETE FILE ---

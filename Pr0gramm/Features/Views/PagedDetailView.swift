@@ -1,5 +1,5 @@
 // Pr0gramm/Pr0gramm/Features/Views/PagedDetailView.swift
-// --- START OF COMPLETE FILE ---
+// --- START OF COMPLETE FILE --- (Resumed)
 
 import SwiftUI
 import os
@@ -22,12 +22,14 @@ struct CachedItemDetails {
 }
 
 
-// MARK: - PagedDetailTabViewItem (unverändert)
+// MARK: - PagedDetailTabViewItem (Unchanged from previous step)
 @MainActor
 struct PagedDetailTabViewItem: View {
     let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
-    let player: AVPlayer?
+    @ObservedObject var playerManager: VideoPlayerManager // Observe the whole manager
+
+    // Existing properties...
     let visibleFlatComments: [FlatCommentDisplayItem]
     let totalCommentCount: Int
     let displayedTags: [ItemTag]
@@ -44,16 +46,26 @@ struct PagedDetailTabViewItem: View {
     let collapsedCommentIDs: Set<Int>
     let toggleCollapseAction: (Int) -> Void
 
-    @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var settings: AppSettings // Keep if needed elsewhere
 
     private func isCommentCollapsed(_ commentID: Int) -> Bool {
         collapsedCommentIDs.contains(commentID)
     }
 
+    // Helper to get the correct player instance for DetailViewContent
+    private var currentPlayerForView: AVPlayer? {
+        // Only pass the player if it belongs to the currently displayed item
+        return item.id == playerManager.playerItemID ? playerManager.player : nil
+    }
+
     var body: some View {
         DetailViewContent(
-            item: item, keyboardActionHandler: keyboardActionHandler, player: player,
-            onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen,
+            item: item,
+            keyboardActionHandler: keyboardActionHandler,
+            player: currentPlayerForView,
+            currentSubtitleText: playerManager.currentSubtitleText, // Pass the text
+            onWillBeginFullScreen: onWillBeginFullScreen,
+            onWillEndFullScreen: onWillEndFullScreen,
             displayedTags: displayedTags, totalTagCount: totalTagCount, showingAllTags: showingAllTags,
             flatComments: visibleFlatComments,
             totalCommentCount: totalCommentCount,
@@ -68,6 +80,21 @@ struct PagedDetailTabViewItem: View {
         .onAppear {
              PagedDetailView.logger.trace("PagedDetailTabViewItem appeared for item \(item.id)")
         }
+         .overlay(alignment: .top) {
+             if let subtitleError = playerManager.subtitleError, playerManager.playerItemID == item.id {
+                 Text("Untertitel: \(subtitleError)")
+                     .font(.caption)
+                     .foregroundColor(.orange)
+                     .padding(5)
+                     .background(Material.ultraThin)
+                     .cornerRadius(5)
+                     .transition(.opacity.combined(with: .move(edge: .top)))
+                     .padding(.top, 5)
+                     .onAppear {
+                         PagedDetailView.logger.warning("Subtitle error displayed for item \(item.id): \(subtitleError)")
+                     }
+             }
+         }
     }
 }
 
@@ -84,7 +111,7 @@ struct PagedDetailView: View {
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
     @StateObject private var keyboardActionHandler = KeyboardActionHandler()
-    @ObservedObject var playerManager: VideoPlayerManager
+    @ObservedObject var playerManager: VideoPlayerManager // Already observing this
     @State private var isFullscreen = false
     @State private var cachedDetails: [Int: CachedItemDetails] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
@@ -103,7 +130,6 @@ struct PagedDetailView: View {
     let prefetchLookahead = 3
     let swipeSettleDelay: Duration = .milliseconds(200)
 
-    // --- Prefetcher instance ---
     @State private var imagePrefetcher = ImagePrefetcher(urls: [])
 
     init(items: Binding<[Item]>, selectedIndex: Int, playerManager: VideoPlayerManager, loadMoreAction: @escaping () async -> Void) {
@@ -118,10 +144,6 @@ struct PagedDetailView: View {
         }
         self._localFavoritedStatus = State(initialValue: initialFavStatus)
 
-        // Initialization moved to declaration
-        // Optional: Configure prefetcher
-        // self.imagePrefetcher.maxConcurrentDownloads = 4
-
         PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex)")
     }
 
@@ -130,7 +152,7 @@ struct PagedDetailView: View {
         return localFavoritedStatus[items[selectedIndex].id] ?? items[selectedIndex].favorited ?? false
     }
 
-    // MARK: - Body (Structure unchanged)
+    // MARK: - Body
     var body: some View {
         Group { tabViewContent }
         .background(KeyCommandView(handler: keyboardActionHandler))
@@ -149,7 +171,7 @@ struct PagedDetailView: View {
         }
     }
 
-    // MARK: - TabView Content and Page Generation (Structure unchanged)
+    // MARK: - TabView Content and Page Generation
     private var tabViewContent: some View {
         TabView(selection: $selectedIndex) {
             ForEach(items.indices, id: \.self) { index in
@@ -186,7 +208,6 @@ struct PagedDetailView: View {
          }
     }
 
-    // tabViewPage remains unchanged
     @ViewBuilder
     private func tabViewPage(for index: Int) -> some View {
         if index >= 0 && index < items.count {
@@ -197,7 +218,7 @@ struct PagedDetailView: View {
                  PagedDetailTabViewItem(
                      item: currentItem,
                      keyboardActionHandler: keyboardActionHandler,
-                     player: currentItem.id == playerManager.playerItemID ? playerManager.player : nil,
+                     playerManager: playerManager, // Pass the manager
                      visibleFlatComments: data.visibleFlatComments,
                      totalCommentCount: data.totalCommentCount,
                      displayedTags: data.displayedTags,
@@ -226,8 +247,7 @@ struct PagedDetailView: View {
     }
 
 
-    // MARK: - Data Preparation and Loading (preparePageData, loadInfoIfNeededAndPrepareHierarchy, etc. unchanged)
-    // ... (preparePageData, loadInfoIfNeededAndPrepareHierarchy, prepareFlatDisplayComments, calculateVisibleComments remain the same) ...
+    // MARK: - Data Preparation and Loading
        private func preparePageData(for index: Int) -> ( currentItem: Item, status: InfoLoadingStatus, visibleFlatComments: [FlatCommentDisplayItem], totalCommentCount: Int, displayedTags: [ItemTag], totalTagCount: Int, showingAllTags: Bool )? {
            guard index >= 0 && index < items.count else { PagedDetailView.logger.warning("preparePageData: index \(index) out of bounds (items.count: \(items.count))."); return nil }
            let currentItem = items[index]
@@ -250,6 +270,7 @@ struct PagedDetailView: View {
 
            return (currentItem, statusForItem, visibleComments, finalTotalCommentCount, tagsToDisplay, totalTagCount, shouldShowAll)
        }
+
        private func loadInfoIfNeededAndPrepareHierarchy(for item: Item) async {
             let itemId = item.id
             let currentStatus = infoLoadingStatus[itemId]
@@ -281,6 +302,7 @@ struct PagedDetailView: View {
                 infoLoadingStatus[itemId] = .error(error.localizedDescription)
             }
        }
+
        private func prepareFlatDisplayComments(from comments: [ItemComment], sortedBy sortOrder: CommentSortOrder, maxDepth: Int) -> [FlatCommentDisplayItem] {
            PagedDetailView.logger.debug("Preparing FULL FLAT display comments (\(comments.count) raw), sort: \(sortOrder.displayName), depth: \(maxDepth).")
            let startTime = Date()
@@ -314,6 +336,7 @@ struct PagedDetailView: View {
            PagedDetailView.logger.info("Finished preparing FULL FLAT comments (\(flatList.count) items) in \(String(format: "%.3f", duration))s.")
            return flatList
        }
+
         private func calculateVisibleComments(for itemID: Int) -> [FlatCommentDisplayItem] {
             guard let details = cachedDetails[itemID] else { return [] }
             let fullList = details.flatDisplayComments
@@ -355,8 +378,7 @@ struct PagedDetailView: View {
             return visibleList
         }
 
-    // MARK: - View Lifecycle and State Handling Helpers (setupView, cleanupViewAndMarkVisited, handleIndexChangeImmediate unchanged)
-    // ... (setupView, cleanupViewAndMarkVisited, handleIndexChangeImmediate remain the same) ...
+    // MARK: - View Lifecycle and State Handling Helpers
        private func setupView() {
            PagedDetailView.logger.info("PagedDetailView appeared.")
            if isFullscreen { isFullscreen = false } // Reset fullscreen state if returning
@@ -411,14 +433,8 @@ struct PagedDetailView: View {
        private func handleIndexChangeImmediate(oldValue: Int, newValue: Int) {
            PagedDetailView.logger.info("Selected index changed from \(oldValue) to \(newValue)")
            guard newValue >= 0 && newValue < items.count else {
-                PagedDetailView.logger.warning("handleIndexChangeImmediate: Invalid new index \(newValue) (items.count: \(items.count)). Resetting to 0.")
-                // Attempt to reset to a valid index if possible, otherwise log error
-                if items.isEmpty {
-                    PagedDetailView.logger.error("handleIndexChangeImmediate: Cannot reset index, items array is empty.")
-                } else {
-                    // selectedIndex = 0 // This might cause unexpected jumps, perhaps just preventing crash is better.
-                    PagedDetailView.logger.warning("Prevented immediate action due to invalid index.")
-                }
+                PagedDetailView.logger.warning("handleIndexChangeImmediate: Invalid new index \(newValue) (items.count: \(items.count)).")
+                // Don't reset index, just log and prevent action
                 return
            }
            let newItem = items[newValue]
@@ -433,7 +449,6 @@ struct PagedDetailView: View {
            imagePrefetcher.stop()
        }
 
-    // --- MOST DIRECT CALL: handleIndexChangeDeferred with Prefetching ---
     private func handleIndexChangeDeferred(newValue: Int) async {
         PagedDetailView.logger.debug("Deferred actions executing for index \(newValue).")
         guard newValue >= 0 && newValue < items.count else {
@@ -443,7 +458,6 @@ struct PagedDetailView: View {
 
         // 1. Load Info for Current Item
         let currentItem = items[newValue]
-        // --- FIX: Add await ---
         await loadInfoIfNeededAndPrepareHierarchy(for: currentItem)
 
         // 2. Prepare URLs for Prefetching
@@ -485,81 +499,77 @@ struct PagedDetailView: View {
         _ = await [loadNextTask, loadPrevTask]
         PagedDetailView.logger.debug("Finished loading adjacent item info for index \(newValue).")
     }
-    // --- END MOST DIRECT CALL ---
 
-    // handleScenePhaseChange, handleSortOrderChange, handleEndFullScreen, triggerLoadMoreIfNeeded unchanged
-    // ... (handleScenePhaseChange, handleSortOrderChange, handleEndFullScreen, triggerLoadMoreIfNeeded remain the same) ...
-        private func handleScenePhaseChange(oldPhase: ScenePhase, newPhase: ScenePhase) {
-             PagedDetailView.logger.debug("Scene phase: \(String(describing: oldPhase)) -> \(String(describing: newPhase))")
-             if newPhase == .active {
-                 // Reset transient mute state when app becomes active
-                 settings.transientSessionMuteState = nil
-                 // Re-apply persisted mute setting if needed
-                 if let player = playerManager.player, player.isMuted != settings.isVideoMuted {
-                     player.isMuted = settings.isVideoMuted
-                 }
-                  // Resume player if it was playing and we are in fullscreen
-                  if isFullscreen, let player = playerManager.player, player.timeControlStatus != .playing {
-                      player.play()
-                  }
-             } else if newPhase == .inactive || newPhase == .background {
-                 // Pause player only if *not* fullscreen and *not* showing a link preview
-                 if (!isFullscreen && previewLinkTarget == nil), let player = playerManager.player, player.timeControlStatus == .playing {
-                     PagedDetailView.logger.debug("Scene became inactive/background. Pausing player (not fullscreen, no link preview).")
-                     player.pause()
-                 } else {
-                     PagedDetailView.logger.debug("Scene became inactive/background. NOT pausing player (is fullscreen or link preview is active).")
-                 }
+    private func handleScenePhaseChange(oldPhase: ScenePhase, newPhase: ScenePhase) {
+         PagedDetailView.logger.debug("Scene phase: \(String(describing: oldPhase)) -> \(String(describing: newPhase))")
+         if newPhase == .active {
+             // Reset transient mute state when app becomes active
+             settings.transientSessionMuteState = nil
+             // Re-apply persisted mute setting if needed
+             if let player = playerManager.player, player.isMuted != settings.isVideoMuted {
+                 player.isMuted = settings.isVideoMuted
              }
-        }
-
-        private func handleSortOrderChange(newOrder: CommentSortOrder) {
-             PagedDetailView.logger.info("Sort order changed to \(newOrder.displayName). Recalculating cached flat lists.")
-             var updatedCache: [Int: CachedItemDetails] = [:]
-             for (id, details) in cachedDetails where details.sortedBy != newOrder {
-                  let newFlatList = prepareFlatDisplayComments(from: details.info.comments, sortedBy: newOrder, maxDepth: commentMaxDepth)
-                  updatedCache[id] = CachedItemDetails(info: details.info, sortedBy: newOrder, flatDisplayComments: newFlatList, totalCommentCount: details.totalCommentCount)
-             }
-             cachedDetails.merge(updatedCache) { (_, new) in new }
-             // Trigger reload for the currently visible item to reflect the sort change
-             if selectedIndex >= 0 && selectedIndex < items.count {
-                 let currentItemID = items[selectedIndex].id
-                 // Reset status to force reload/recalc if necessary, or just update view if data is cached
-                 infoLoadingStatus[currentItemID] = .idle // Simplest way to trigger reload/recalc
-                 Task { await loadInfoIfNeededAndPrepareHierarchy(for: items[selectedIndex]) }
+              // Resume player if it was playing and we are in fullscreen
+              if isFullscreen, let player = playerManager.player, player.timeControlStatus != .playing {
+                  player.play()
+              }
+         } else if newPhase == .inactive || newPhase == .background {
+             // Pause player only if *not* fullscreen and *not* showing a link preview
+             if (!isFullscreen && previewLinkTarget == nil), let player = playerManager.player, player.timeControlStatus == .playing {
+                 PagedDetailView.logger.debug("Scene became inactive/background. Pausing player (not fullscreen, no link preview).")
+                 player.pause()
              } else {
-                 PagedDetailView.logger.warning("Cannot force comment refresh after sort order change: invalid selectedIndex \(selectedIndex).")
+                 PagedDetailView.logger.debug("Scene became inactive/background. NOT pausing player (is fullscreen or link preview is active).")
              }
-        }
+         }
+    }
 
-        private func handleEndFullScreen() {
-             self.isFullscreen = false
-             PagedDetailView.logger.debug("[View] Callback: handleEndFullScreen")
-             // Attempt to resume playback if the video for the current item was playing
-             if selectedIndex >= 0 && selectedIndex < items.count,
-                items[selectedIndex].isVideo,
-                items[selectedIndex].id == playerManager.playerItemID {
-                 Task { @MainActor in
-                     try? await Task.sleep(for: .milliseconds(100)) // Short delay to allow transition to finish
-                     // Resume only if fullscreen ended, no link preview is showing, and player isn't already playing
-                     if !self.isFullscreen && self.previewLinkTarget == nil && self.playerManager.player?.timeControlStatus != .playing {
-                         PagedDetailView.logger.debug("Resuming player after ending fullscreen (preview not active).")
-                         self.playerManager.player?.play()
-                     } else {
-                         PagedDetailView.logger.debug("NOT resuming player after ending fullscreen (preview is active or player already playing/paused).")
-                     }
+    private func handleSortOrderChange(newOrder: CommentSortOrder) {
+         PagedDetailView.logger.info("Sort order changed to \(newOrder.displayName). Recalculating cached flat lists.")
+         var updatedCache: [Int: CachedItemDetails] = [:]
+         for (id, details) in cachedDetails where details.sortedBy != newOrder {
+              let newFlatList = prepareFlatDisplayComments(from: details.info.comments, sortedBy: newOrder, maxDepth: commentMaxDepth)
+              updatedCache[id] = CachedItemDetails(info: details.info, sortedBy: newOrder, flatDisplayComments: newFlatList, totalCommentCount: details.totalCommentCount)
+         }
+         cachedDetails.merge(updatedCache) { (_, new) in new }
+         // Trigger reload for the currently visible item to reflect the sort change
+         if selectedIndex >= 0 && selectedIndex < items.count {
+             let currentItemID = items[selectedIndex].id
+             // Reset status to force reload/recalc if necessary, or just update view if data is cached
+             infoLoadingStatus[currentItemID] = .idle // Simplest way to trigger reload/recalc
+             Task { await loadInfoIfNeededAndPrepareHierarchy(for: items[selectedIndex]) }
+         } else {
+             PagedDetailView.logger.warning("Cannot force comment refresh after sort order change: invalid selectedIndex \(selectedIndex).")
+         }
+    }
+
+    private func handleEndFullScreen() {
+         self.isFullscreen = false
+         PagedDetailView.logger.debug("[View] Callback: handleEndFullScreen")
+         // Attempt to resume playback if the video for the current item was playing
+         if selectedIndex >= 0 && selectedIndex < items.count,
+            items[selectedIndex].isVideo,
+            items[selectedIndex].id == playerManager.playerItemID {
+             Task { @MainActor in
+                 try? await Task.sleep(for: .milliseconds(100)) // Short delay to allow transition to finish
+                 // Resume only if fullscreen ended, no link preview is showing, and player isn't already playing
+                 if !self.isFullscreen && self.previewLinkTarget == nil && self.playerManager.player?.timeControlStatus != .playing {
+                     PagedDetailView.logger.debug("Resuming player after ending fullscreen (preview not active).")
+                     self.playerManager.player?.play()
+                 } else {
+                     PagedDetailView.logger.debug("NOT resuming player after ending fullscreen (preview is active or player already playing/paused).")
                  }
              }
-        }
+         }
+    }
 
-        private func triggerLoadMoreIfNeeded(currentIndex: Int) async {
-             guard currentIndex >= items.count - preloadThreshold else { return }
-             PagedDetailView.logger.info("Approaching end of list (index \(currentIndex)/\(items.count - 1)). Triggering load more action...")
-             await loadMoreAction()
-        }
+    private func triggerLoadMoreIfNeeded(currentIndex: Int) async {
+         guard currentIndex >= items.count - preloadThreshold else { return }
+         PagedDetailView.logger.info("Approaching end of list (index \(currentIndex)/\(items.count - 1)). Triggering load more action...")
+         await loadMoreAction()
+    }
 
-    // MARK: - Navigation and Actions (selectNext, selectPrevious, etc. unchanged)
-    // ... (selectNext, selectPrevious, currentItemTitle, toggleFavorite, toggleCollapse remain the same) ...
+    // MARK: - Navigation and Actions
         private func selectNext() {
             guard selectedIndex < items.count - 1 else { return }
             selectedIndex += 1
@@ -623,7 +633,7 @@ struct PagedDetailView: View {
 }
 
 
-// MARK: - Wrapper View (unverändert)
+// MARK: - Wrapper View (Needed for previews of LinkedItemPreviewView)
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
     @EnvironmentObject var settings: AppSettings
@@ -643,15 +653,17 @@ struct LinkedItemPreviewWrapperView: View {
     }
 }
 
-// MARK: - Preview Provider (unverändert)
+// MARK: - Preview Provider
 #Preview("Preview") {
     struct PreviewWrapper: View {
-         @State var previewItems: [Item] = [ /* ... preview items ... */
-             Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: 1, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false),
-             Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: 2, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true),
-             Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: 3, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil, favorited: nil),
-             Item(id: 4, promoted: 1004, userId: 3, down: 1, up: 10, created: 4, image: "img3.gif", thumb: "t4.gif", fullsize: nil, preview: nil, width: 500, height: 300, audio: false, source: nil, flags: 1, user: "UserC", mark: 0, repost: nil, variants: nil, favorited: false)
+         // --- FIX: Add subtitles: nil to all Item initializations ---
+         @State var previewItems: [Item] = [
+             Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: 1, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, subtitles: nil, favorited: false),
+             Item(id: 2, promoted: 1002, userId: 1, down: 2, up: 20, created: 2, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, subtitles: nil, favorited: true),
+             Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: 3, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil, subtitles: nil, favorited: nil),
+             Item(id: 4, promoted: 1004, userId: 3, down: 1, up: 10, created: 4, image: "img3.gif", thumb: "t4.gif", fullsize: nil, preview: nil, width: 500, height: 300, audio: false, source: nil, flags: 1, user: "UserC", mark: 0, repost: nil, variants: nil, subtitles: nil, favorited: false)
          ]
+         // --- END FIX ---
          @StateObject var previewSettings = AppSettings()
          @StateObject var previewAuthService = AuthService(appSettings: AppSettings())
          @StateObject var previewPlayerManager = VideoPlayerManager()

@@ -41,6 +41,7 @@ struct DetailViewContent: View {
     let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
     let player: AVPlayer?
+    let currentSubtitleText: String? // Now receives subtitle text
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
 
@@ -63,9 +64,7 @@ struct DetailViewContent: View {
 
     @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var authService: AuthService
-    // --- NEW: Access AppSettings ---
     @EnvironmentObject var settings: AppSettings
-    // --- END NEW ---
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
     @State private var isProcessingFavorite = false
@@ -73,30 +72,51 @@ struct DetailViewContent: View {
 
     // MARK: - Computed View Properties
     @ViewBuilder private var mediaContentInternal: some View {
-        Group {
-            if item.isVideo {
-                if let player = player {
-                    CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler, onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen, horizontalSizeClass: horizontalSizeClass).id(item.id)
-                } else { Rectangle().fill(.black).overlay(ProgressView().tint(.white)) }
-            } else {
-                DetailImageView(item: item, horizontalSizeClass: horizontalSizeClass, fullscreenImageTarget: $fullscreenImageTarget)
+        ZStack(alignment: .bottom) { // Wrap in ZStack for subtitle overlay
+            Group { // Group existing media types
+                if item.isVideo {
+                    if let player = player {
+                        CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler, onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen, horizontalSizeClass: horizontalSizeClass)
+                            .id(item.id)
+                    } else {
+                        Rectangle().fill(.black).overlay(ProgressView().tint(.white))
+                    }
+                } else {
+                    DetailImageView(item: item, horizontalSizeClass: horizontalSizeClass, fullscreenImageTarget: $fullscreenImageTarget)
+                }
+            }
+
+            // Subtitle Overlay
+            if let subtitle = currentSubtitleText, !subtitle.isEmpty {
+                 Text(subtitle)
+                     .font(UIConstants.footnoteFont.weight(.medium))
+                     .foregroundColor(.white)
+                     .padding(.horizontal, 8)
+                     .padding(.vertical, 4)
+                     .background(.black.opacity(0.65))
+                     .cornerRadius(4)
+                     .multilineTextAlignment(.center)
+                     .padding(.bottom, horizontalSizeClass == .compact ? 40 : 20)
+                     .padding(.horizontal)
+                     .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+                     .id("subtitle_\(subtitle)")
             }
         }
-        // --- NEW: Overlay for Seen Checkmark ---
-        .overlay(alignment: .topTrailing) { // Align to top trailing corner
+        // Seen Checkmark Overlay
+        .overlay(alignment: .topTrailing) {
             if settings.seenItemIDs.contains(item.id) {
                 Image(systemName: "checkmark.circle.fill")
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(.white, Color.accentColor)
-                    .font(.title2) // Slightly larger font for detail view
-                    .padding(8) // Add some padding
-                    // Optional: Add a semi-transparent background for better visibility
-                    .padding(8) // Padding outside the background/clipShape
+                    .font(.title2)
+                    .padding(8)
+                    .padding(8)
             }
         }
-        // --- END NEW ---
     }
-    @ViewBuilder private var voteCounterView: some View { /* ... unverändert ... */
+
+    // voteCounterView, favoriteButton, shareButton, infoAndTagsContent, TagView, commentsContent remain unchanged
+    @ViewBuilder private var voteCounterView: some View {
         let benis = item.up - item.down
         VStack(alignment: .leading, spacing: 2) {
             Text("\(benis)").font(.largeTitle).fontWeight(.medium).foregroundColor(.primary).lineLimit(1)
@@ -106,18 +126,17 @@ struct DetailViewContent: View {
             }
         }
     }
-    @ViewBuilder private var favoriteButton: some View { /* ... unverändert ... */
+    @ViewBuilder private var favoriteButton: some View {
         Button { Task { isProcessingFavorite = true; await toggleFavoriteAction(); try? await Task.sleep(for: .milliseconds(100)); isProcessingFavorite = false } }
         label: { Image(systemName: isFavorited ? "heart.fill" : "heart").imageScale(.large).foregroundColor(isFavorited ? .pink : .secondary).frame(width: 44, height: 44).contentShape(Rectangle()) }
         .buttonStyle(.plain).disabled(isProcessingFavorite || !authService.isLoggedIn)
     }
-    @ViewBuilder private var shareButton: some View { /* ... unverändert ... */
+    @ViewBuilder private var shareButton: some View {
         Button { showingShareOptions = true }
         label: { Image(systemName: "square.and.arrow.up").imageScale(.large).foregroundColor(.secondary).frame(width: 44, height: 44).contentShape(Rectangle()) }
         .buttonStyle(.plain)
     }
-
-    @ViewBuilder private var infoAndTagsContent: some View { /* ... unverändert ... */
+    @ViewBuilder private var infoAndTagsContent: some View {
         HStack(alignment: .top, spacing: 15) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -148,13 +167,12 @@ struct DetailViewContent: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
-    struct TagView: View { /* ... unverändert ... */
+    struct TagView: View {
         let tag: ItemTag; private let characterLimit = 25
         private var displayText: String { tag.tag.count > characterLimit ? String(tag.tag.prefix(characterLimit - 1)) + "…" : tag.tag }
         var body: some View { Text(displayText).font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.gray.opacity(0.2)).foregroundColor(.primary).clipShape(Capsule()) }
     }
-
-    @ViewBuilder private var commentsContent: some View { /* ... unverändert ... */
+    @ViewBuilder private var commentsContent: some View {
         CommentsSection(
             flatComments: flatComments,
             totalCommentCount: totalCommentCount,
@@ -170,7 +188,7 @@ struct DetailViewContent: View {
         Group {
             if horizontalSizeClass == .regular {
                 HStack(alignment: .top, spacing: 0) {
-                    mediaContentInternal // Contains the overlay now
+                    mediaContentInternal
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     Divider()
                     ScrollView {
@@ -186,7 +204,7 @@ struct DetailViewContent: View {
                     VStack(spacing: 0) {
                         GeometryReader { geo in
                             let aspect = guessAspectRatio() ?? 1.0
-                            mediaContentInternal // Contains the overlay now
+                            mediaContentInternal
                                 .frame(width: geo.size.width, height: geo.size.width / aspect)
                         }
                         .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
@@ -199,7 +217,7 @@ struct DetailViewContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
         .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
-        .confirmationDialog( /* ... unverändert ... */
+        .confirmationDialog(
             "Link kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
         ) {
             Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; Self.logger.info("Copied Post-Link to clipboard: \(urlString)") }
@@ -209,7 +227,7 @@ struct DetailViewContent: View {
 
 
     // MARK: - Helper Methods
-    private func guessAspectRatio() -> CGFloat? { /* ... unverändert ... */
+    private func guessAspectRatio() -> CGFloat? {
         guard item.width > 0, item.height > 0 else { return 1.0 }
         return CGFloat(item.width) / CGFloat(item.height)
     }
@@ -217,7 +235,7 @@ struct DetailViewContent: View {
 
 // Helper Extension (unverändert)
 fileprivate extension UIFont {
-    static func uiFont(from font: Font) -> UIFont { /* ... unverändert ... */
+    static func uiFont(from font: Font) -> UIFont {
         switch font {
             case .largeTitle: return UIFont.preferredFont(forTextStyle: .largeTitle)
             case .title: return UIFont.preferredFont(forTextStyle: .title1)
@@ -236,44 +254,41 @@ fileprivate extension UIFont {
 }
 
 
-// MARK: - Previews (Angepasst, benötigt AppSettings)
+// MARK: - Previews
 #Preview("Compact - Limited Tags") {
     // --- Wrapper View für Preview Setup ---
     struct PreviewWrapper: View {
         @State var previewLinkTarget: PreviewLinkTarget? = nil
         @State var fullscreenTarget: FullscreenImageTarget? = nil
         @State var collapsedIDs: Set<Int> = []
-        // --- StateObjects für die Preview Instanzen ---
         @StateObject var settings = AppSettings()
-        // Initialize AuthService with a temporary AppSettings instance, will be replaced in .task
         @StateObject var authService = AuthService(appSettings: AppSettings())
         @StateObject var navService = NavigationService()
+        @StateObject var playerManager = VideoPlayerManager()
 
         func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
         func isCollapsed(_ id: Int) -> Bool { collapsedIDs.contains(id) }
 
-        // --- Moved Sample Data inside body or task ---
-
         var body: some View {
-            // --- Define Sample Data Here ---
-            let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, favorited: true)
+            // --- FIX: Define Sample Data Here, add subtitles: nil ---
+            let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, subtitles: nil, favorited: true)
+            // --- END FIX ---
             let previewHandler = KeyboardActionHandler()
             let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "TopTag1"), ItemTag(id: 2, confidence: 0.8, tag: "TopTag2"), ItemTag(id: 3, confidence: 0.7, tag: "TopTag3"), ItemTag(id: 4, confidence: 0.6, tag: "beim lesen programmieren gelernt") ]
-            // Calculate flat comments based on sample comments
             let sampleComments = [ ItemComment(id: 1, parent: 0, content: "Kommentar 1 http://pr0gramm.com/new/54321", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), ItemComment(id: 2, parent: 1, content: "Antwort 1.1", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "User2", mark: 2) ]
             let previewFlatComments = flattenHierarchyForPreview(comments: sampleComments)
-            // --- End Sample Data ---
 
             NavigationStack {
                 DetailViewContent(
                     item: sampleVideoItem,
                     keyboardActionHandler: previewHandler,
                     player: nil,
+                    currentSubtitleText: "Dies ist ein Test-Untertitel",
                     onWillBeginFullScreen: {}, onWillEndFullScreen: {},
                     displayedTags: Array(previewTags.prefix(4)),
                     totalTagCount: previewTags.count,
                     showingAllTags: false,
-                    flatComments: previewFlatComments, // Use calculated value
+                    flatComments: previewFlatComments,
                     totalCommentCount: previewFlatComments.count,
                     infoLoadingStatus: .loaded,
                     previewLinkTarget: $previewLinkTarget,
@@ -284,27 +299,21 @@ fileprivate extension UIFont {
                     isCommentCollapsed: isCollapsed,
                     toggleCollapseAction: toggleCollapse
                 )
-                // Umgebungsobjekte übergeben
                 .environmentObject(navService)
                 .environmentObject(settings)
-                .environmentObject(authService) // Pass the @StateObject instance
+                .environmentObject(authService)
+                .environmentObject(playerManager)
                 .environment(\.horizontalSizeClass, .compact)
                 .preferredColorScheme(.dark)
                 .task {
-                    // --- MODIFIED: Configure AuthService and mark item AFTER init ---
-                    // Ensure AuthService uses the correct AppSettings instance from the environment
-                    // (This assumes AuthService can handle reconfiguration or is simple enough)
-                    // A better approach might involve passing AppSettings via init if possible,
-                    // but for Preview, direct modification in .task often works.
-                    if authService.currentUser == nil { // Prevent re-running setup if already done
+                    playerManager.configure(settings: settings)
+                    if authService.currentUser == nil {
                          authService.isLoggedIn = true
                          authService.favoritesCollectionId = 1234
-                         authService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil) // Example user
-                         // Mark item 2 as seen using the public method
+                         authService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil)
                          await settings.markItemAsSeen(id: 2)
                          print("Preview Task: AuthService configured and item marked as seen.")
                     }
-                    // --- END MODIFICATION ---
                 }
             }
         }
@@ -329,3 +338,4 @@ fileprivate extension UIFont {
     }
     return PreviewWrapper() // Return the wrapper
 }
+// --- END OF COMPLETE FILE ---

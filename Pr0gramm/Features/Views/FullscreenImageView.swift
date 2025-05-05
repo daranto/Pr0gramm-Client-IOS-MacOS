@@ -2,6 +2,9 @@
 // --- START OF COMPLETE FILE ---
 
 import SwiftUI
+import UIKit
+import Kingfisher // Import Kingfisher
+import os // Import os for logging
 
 /// A view designed to be presented modally (e.g., in a sheet) to display
 /// an image full-screen with zoom and pan capabilities.
@@ -68,10 +71,20 @@ struct FullscreenImageView: View {
 
 #Preview {
     // Sample item for preview
-    let sampleImageItem = Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: Int(Date().timeIntervalSince1970) - 200, image: "efefd31e9c1f6518ca494ff8f569728b.jpg", thumb: "t1.jpg", fullsize: "efefd31e9c1f6518ca494ff8f569728b.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, favorited: false)
+    let sampleImageItem = Item(
+        id: 1, promoted: 1001, userId: 1, down: 15, up: 150,
+        created: Int(Date().timeIntervalSince1970) - 200,
+        image: "efefd31e9c1f6518ca494ff8f569728b.jpg", thumb: "t1.jpg",
+        fullsize: "efefd31e9c1f6518ca494ff8f569728b.jpg", preview: nil,
+        width: 800, height: 600, audio: false, source: "http://example.com",
+        flags: 1, user: "UserA", mark: 1, repost: nil,
+        variants: nil,
+        subtitles: nil, // Add missing argument
+        favorited: false
+    )
 
-    return FullscreenImageView(item: sampleImageItem)
-         // Add necessary environment objects if the view itself needed them
-         // .environmentObject(AppSettings())
+    // --- FIX: Remove explicit return ---
+    FullscreenImageView(item: sampleImageItem)
+    // --- END FIX ---
 }
 // --- END OF COMPLETE FILE ---

@@ -7,24 +7,37 @@ import os
 /// View for displaying and modifying application settings, including cache management.
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
-    /// State to control the presentation of the cache clearing confirmation alert.
     @State private var showingClearAllCacheAlert = false
-    /// State for seen items alert
     @State private var showingClearSeenItemsAlert = false
 
-    /// Predefined options for the maximum image cache size picker.
     let cacheSizeOptions = [50, 100, 250, 500, 1000] // In MB
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "SettingsView")
 
     var body: some View {
         NavigationStack {
             Form {
-                // Section for Video Settings
-                Section("Video") {
+                // Section for Video & Audio Settings
+                Section {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
                         .font(UIConstants.bodyFont)
+
+                    // Subtitle Settings Picker
+                    Picker("Untertitel anzeigen", selection: $settings.subtitleActivationMode) {
+                        ForEach(SubtitleActivationMode.allCases) { mode in
+                             Text(mode.displayName).tag(mode)
+                                .font(UIConstants.bodyFont)
+                        }
+                    }
+                    .font(UIConstants.bodyFont)
+
+                } header: {
+                     Text("Video & Ton")
+                } footer: {
+                     Text("Die Option 'Automatisch' zeigt Untertitel nur an, wenn das Video im Player stummgeschaltet ist. 'Immer an' versucht, Untertitel immer anzuzeigen, falls verfügbar.")
+                        .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+
 
                 // Section for Comment Settings
                 Section("Kommentare") {
@@ -38,7 +51,7 @@ struct SettingsView: View {
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
-                // --- NEW: Section for Experimental Features ---
+                // Section for Experimental Features
                 Section {
                     Toggle("Feature: 'Nur Frisches anzeigen' aktivieren", isOn: $settings.enableExperimentalHideSeen)
                         .font(UIConstants.bodyFont)
@@ -49,12 +62,11 @@ struct SettingsView: View {
                         .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
-                // --- END NEW ---
 
-                // Section for Clearing Seen Items (Button only)
+                // Section for Clearing Seen Items
                 Section {
                     Button("Gesehene Posts zurücksetzen", role: .destructive) {
-                        showingClearSeenItemsAlert = true // Trigger specific alert
+                        showingClearSeenItemsAlert = true
                     }
                     .font(UIConstants.bodyFont)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -62,14 +74,13 @@ struct SettingsView: View {
                      Text("Anzeige-Verlauf")
                 } footer: {
                      Text("Entfernt die Markierungen für bereits angesehene Posts. Die Bilder selbst bleiben im Cache erhalten. Die Option, gesehene Posts auszublenden, muss ggf. unter 'Experimentelle Features' aktiviert werden.")
-                        .font(UIConstants.footnoteFont) // Adjusted footer text
+                        .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
 
                 // Section for Cache Settings
                 Section {
-                    // Display current cache sizes (read-only)
                     HStack {
                         Text("Bild-Cache Größe")
                             .font(UIConstants.bodyFont)
@@ -86,8 +97,6 @@ struct SettingsView: View {
                             .font(UIConstants.bodyFont)
                             .foregroundColor(.secondary)
                     }
-
-                    // Picker to select max image cache size
                     Picker("Max. Bild-Cache Größe", selection: $settings.maxImageCacheSizeMB) {
                         ForEach(cacheSizeOptions, id: \.self) { size in
                             Text("\(size) MB").tag(size)
@@ -98,14 +107,11 @@ struct SettingsView: View {
                     .onChange(of: settings.maxImageCacheSizeMB) { _, _ in
                         Self.logger.info("Max image cache size setting changed.")
                     }
-
-                    // Button to clear all caches (remains here)
                     Button("Gesamten App-Cache leeren", role: .destructive) {
-                        showingClearAllCacheAlert = true // Trigger confirmation alert
+                        showingClearAllCacheAlert = true
                     }
                     .font(UIConstants.bodyFont)
                     .frame(maxWidth: .infinity, alignment: .center)
-
                 } header: {
                     Text("Cache")
                 } footer: {
@@ -114,68 +120,50 @@ struct SettingsView: View {
                 }
                  .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
-                // Section for Info & Project (Unchanged)
+                // Section for Info & Project
                 Section {
-                    // Link to Licenses view
                     NavigationLink(destination: LicenseAndDependenciesView()) {
                         Text("Lizenzen & Abhängigkeiten")
                             .font(UIConstants.bodyFont)
                     }
-
-                    // Link to GitHub Repository
                     if let url = URL(string: "https://github.com/daranto/Pr0gramm-Client-IOS-MacOS") {
                         Link(destination: url) {
-                            // Use Label for icon and text
                             Label("Projekt auf GitHub", systemImage: "link")
                                 .font(UIConstants.bodyFont)
                         }
-                        // Optional: Tint the link to make it stand out
                         .tint(.accentColor)
                     }
-
                 } header: {
-                    Text("Info & Projekt") // Header text updated
+                    Text("Info & Projekt")
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
-            }
+            } // End Form
             .navigationTitle("Einstellungen")
             .alert("Gesehene Posts zurücksetzen?", isPresented: $showingClearSeenItemsAlert) {
                 Button("Abbrechen", role: .cancel) { }
-                Button("Zurücksetzen", role: .destructive) {
-                    Task {
-                        await settings.clearSeenItemsCache()
-                    }
-                }
+                Button("Zurücksetzen", role: .destructive) { Task { await settings.clearSeenItemsCache() } }
             } message: {
                 Text("Dadurch werden alle Markierungen für gesehene Bilder und Videos entfernt. Die Posts erscheinen wieder als 'neu'.")
             }
             .alert("Gesamten App-Cache leeren?", isPresented: $showingClearAllCacheAlert) {
                 Button("Abbrechen", role: .cancel) { }
-                Button("Leeren", role: .destructive) {
-                    Task {
-                        await settings.clearAllAppCache()
-                    }
-                }
+                Button("Leeren", role: .destructive) { Task { await settings.clearAllAppCache() } }
             } message: {
                 Text("Möchtest du wirklich alle zwischengespeicherten Daten (Feeds, Favoriten, Bilder, Gesehen-Markierungen etc.) löschen? Dies kann nicht rückgängig gemacht werden.")
             }
-            .onAppear {
-                Task {
-                    await settings.updateCacheSizes()
-                }
-            }
-        }
-    }
-}
+            .onAppear { Task { await settings.updateCacheSizes() } }
+        } // End NavigationStack
+    } // End body
+} // End struct SettingsView
 
 
-// MARK: - Preview (Unchanged)
+// MARK: - Preview
 
 #Preview {
     SettingsView().environmentObject(AppSettings())
 }
 
-// LicenseAndDependenciesView (unverändert)
+// LicenseAndDependenciesView
 struct LicenseAndDependenciesView: View {
     var body: some View {
         ScrollView {

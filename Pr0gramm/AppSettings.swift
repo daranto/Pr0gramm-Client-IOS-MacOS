@@ -9,31 +9,37 @@ import CloudKit // Needed for NSUbiquitousKeyValueStore
 
 // FeedType and CommentSortOrder enums remain the same...
 enum FeedType: Int, CaseIterable, Identifiable {
-    case new = 0
-    case promoted = 1
-
+    case new = 0, promoted = 1
     var id: Int { self.rawValue }
-
     var displayName: String {
-        switch self {
-        case .new: return "Neu"
-        case .promoted: return "Beliebt"
-        }
+        switch self { case .new: return "Neu"; case .promoted: return "Beliebt" }
     }
 }
 enum CommentSortOrder: Int, CaseIterable, Identifiable {
-    case date = 0
-    case score = 1
+    case date = 0, score = 1
+    var id: Int { self.rawValue }
+    var displayName: String {
+        switch self { case .date: return "Datum / Zeit"; case .score: return "Benis (Score)"}
+    }
+}
+
+// --- NEW: Enum for Subtitle Activation Mode ---
+enum SubtitleActivationMode: Int, CaseIterable, Identifiable {
+    case disabled = 0
+    case automatic = 1 // Default: Show when player is muted
+    case alwaysOn = 2
 
     var id: Int { self.rawValue }
 
     var displayName: String {
         switch self {
-        case .date: return "Datum / Zeit"
-        case .score: return "Benis (Score)"
+        case .disabled: return "Deaktiviert"
+        case .automatic: return "Automatisch (bei Stumm)"
+        case .alwaysOn: return "Immer an"
         }
     }
 }
+// --- END NEW ---
 
 
 /// Manages application-wide settings, persists them to UserDefaults, and provides access to cache services.
@@ -57,6 +63,9 @@ class AppSettings: ObservableObject {
     private static let commentSortOrderKey = "commentSortOrder_v1"
     private static let hideSeenItemsKey = "hideSeenItems_v1"
     private static let enableExperimentalHideSeenKey = "enableExperimentalHideSeen_v1"
+    // --- NEW: Key for subtitle mode ---
+    private static let subtitleActivationModeKey = "subtitleActivationMode_v1"
+    // --- END NEW ---
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
     private var keyValueStoreChangeObserver: NSObjectProtocol?
@@ -83,14 +92,11 @@ class AppSettings: ObservableObject {
     }
     @Published var hideSeenItems: Bool {
         didSet {
-            // Only save if the experimental feature is actually enabled
             if enableExperimentalHideSeen {
                  UserDefaults.standard.set(hideSeenItems, forKey: Self.hideSeenItemsKey)
                  Self.logger.info("Hide seen items setting changed to: \(self.hideSeenItems)")
             } else if hideSeenItems {
-                 // If the experimental feature is OFF, force this back to false if something tries to set it to true.
                  Self.logger.warning("Attempted to set hideSeenItems to true while experimental feature is disabled. Forcing back to false.")
-                 // Use a Task to avoid direct modification within didSet causing loops/issues
                  Task { @MainActor in self.hideSeenItems = false }
             }
         }
@@ -99,16 +105,21 @@ class AppSettings: ObservableObject {
         didSet {
             UserDefaults.standard.set(enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey)
             Self.logger.info("Setting 'Enable Experimental Hide Seen' changed to: \(self.enableExperimentalHideSeen)")
-            // If the experimental feature is disabled, also force the actual hideSeenItems setting to false.
             if !enableExperimentalHideSeen {
-                // Update hideSeenItems directly (protected by the logic in its own didSet)
                 self.hideSeenItems = false
                 Self.logger.info("Experimental 'Hide Seen' disabled. Forcing 'hideSeenItems' setting to false.")
-                // Remove the potentially stored value for hideSeenItems to avoid confusion if re-enabled later
                  UserDefaults.standard.removeObject(forKey: Self.hideSeenItemsKey)
             }
         }
     }
+    // --- NEW: Subtitle Activation Mode Setting ---
+    @Published var subtitleActivationMode: SubtitleActivationMode {
+        didSet {
+            UserDefaults.standard.set(subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey)
+            Self.logger.info("Subtitle activation mode changed to: \(self.subtitleActivationMode.displayName)")
+        }
+    }
+    // --- END NEW ---
 
     // MARK: - Published Session State (Not Persisted)
     @Published var transientSessionMuteState: Bool? = nil
@@ -129,7 +140,7 @@ class AppSettings: ObservableObject {
 
     // MARK: - Initializer
     init() {
-        // Initialize standard settings first
+        // Initialize standard settings
         self.isVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil ? true : UserDefaults.standard.bool(forKey: Self.isVideoMutedPreferenceKey)
         self.feedType = FeedType(rawValue: UserDefaults.standard.integer(forKey: Self.feedTypeKey)) ?? .promoted
         self.showSFW = UserDefaults.standard.object(forKey: Self.showSFWKey) == nil ? true : UserDefaults.standard.bool(forKey: Self.showSFWKey)
@@ -140,36 +151,33 @@ class AppSettings: ObservableObject {
         self.maxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) == nil ? 100 : UserDefaults.standard.integer(forKey: Self.maxImageCacheSizeMBKey)
         self.commentSortOrder = CommentSortOrder(rawValue: UserDefaults.standard.integer(forKey: Self.commentSortOrderKey)) ?? .date
 
-        // Initialize the experimental flag (default false)
+        // Initialize experimental flag
         let initialExperimentalEnabled = UserDefaults.standard.bool(forKey: Self.enableExperimentalHideSeenKey)
         self.enableExperimentalHideSeen = initialExperimentalEnabled
 
-        // --- FIX: Initialize hideSeenItems BEFORE accessing self.enableExperimentalHideSeen ---
-        // Give hideSeenItems a default value first.
-        self.hideSeenItems = false
-        // Now, phase two allows accessing self. We can check the flag and potentially load the real value.
+        // Initialize hideSeenItems based on experimental flag
+        self.hideSeenItems = false // Default
         if initialExperimentalEnabled {
-            // Only load the persisted value if the feature was already enabled.
             self.hideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
         }
-        // --- END FIX ---
 
-        // The rest of the initializer can now safely access self.hideSeenItems and self.enableExperimentalHideSeen
+        // --- NEW: Initialize subtitle mode (default .automatic) ---
+        self.subtitleActivationMode = SubtitleActivationMode(rawValue: UserDefaults.standard.integer(forKey: Self.subtitleActivationModeKey)) ?? .automatic
+        // --- END NEW ---
+
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
         Self.logger.info("- enableExperimentalHideSeen: \(self.enableExperimentalHideSeen)")
         Self.logger.info("- hideSeenItems (actual): \(self.hideSeenItems)")
+        Self.logger.info("- subtitleActivationMode: \(self.subtitleActivationMode.displayName)") // Log new setting
 
         // Ensure defaults are set if first launch
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
-        // Only set default for hideSeenItems if experimental is enabled AND key doesn't exist
-        if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil && self.enableExperimentalHideSeen {
-            UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey)
-        }
-        if UserDefaults.standard.object(forKey: Self.enableExperimentalHideSeenKey) == nil {
-            UserDefaults.standard.set(self.enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey)
-        }
-
+        if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil && self.enableExperimentalHideSeen { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
+        if UserDefaults.standard.object(forKey: Self.enableExperimentalHideSeenKey) == nil { UserDefaults.standard.set(self.enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey) }
+        // --- NEW: Set default for subtitle mode ---
+        if UserDefaults.standard.object(forKey: Self.subtitleActivationModeKey) == nil { UserDefaults.standard.set(self.subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey) }
+        // --- END NEW ---
 
         updateKingfisherCacheLimit()
         setupCloudKitKeyValueStoreObserver()
@@ -181,42 +189,28 @@ class AppSettings: ObservableObject {
     }
 
     // MARK: - Cache Management Methods (Unchanged)
-
-    /// Clears the cache of seen item IDs both locally and in iCloud KVS.
+    // ... (clearSeenItemsCache, clearAllAppCache, updateCacheSizes, etc.) ...
     func clearSeenItemsCache() async {
         Self.logger.warning("Clearing Seen Items Cache (Local & iCloud) requested.")
-        // Clear in-memory state
-        // No need for MainActor.run as we are already on the MainActor
         self.seenItemIDs = []
         Self.logger.info("Cleared in-memory seen items set.")
-
-        // Clear local cache file managed by CacheService
         await cacheService.clearCache(forKey: Self.localSeenItemsCacheKey)
         Self.logger.info("Cleared local seen items cache file via CacheService.")
-
-        // Clear iCloud KVS
         cloudStore.removeObject(forKey: Self.iCloudSeenItemsKey)
-        let syncSuccess = cloudStore.synchronize() // Request sync
+        let syncSuccess = cloudStore.synchronize()
         Self.logger.info("Removed seen items key from iCloud KVS. Synchronize requested: \(syncSuccess).")
     }
-
-    /// Clears ALL application caches including data, images, and seen items.
     func clearAllAppCache() async {
         Self.logger.warning("Clearing ALL Data Cache, Kingfisher Image Cache, Seen Items Cache (Local & iCloud) requested.")
-        // Clear data cache (feeds, favorites etc.)
         await cacheService.clearAllDataCache()
-        // Clear seen items (uses the new dedicated method)
         await clearSeenItemsCache()
-        // Clear Kingfisher image cache
-        let logger = Self.logger // Capture logger for async block
+        let logger = Self.logger
         KingfisherManager.shared.cache.clearDiskCache {
             logger.info("Kingfisher disk cache clearing finished.")
-            Task { await self.updateCacheSizes() } // Update sizes after clearing
+            Task { await self.updateCacheSizes() }
         }
-        // Update cache sizes immediately (data cache size might be 0 now)
         await updateCacheSizes()
     }
-
     func updateCacheSizes() async {
         Self.logger.debug("Updating both image and data cache sizes...")
         await updateDataCacheSize()
@@ -225,7 +219,6 @@ class AppSettings: ObservableObject {
     private func updateDataCacheSize() async {
         let dataSizeBytes = await cacheService.getCurrentDataCacheTotalSize()
         let dataSizeMB = Double(dataSizeBytes) / (1024.0 * 1024.0)
-        // Ensure UI update is on MainActor (already guaranteed by class annotation)
         self.currentDataCacheSizeMB = dataSizeMB
         Self.logger.info("Updated currentDataCacheSizeMB to: \(String(format: "%.2f", dataSizeMB)) MB")
     }
@@ -240,7 +233,6 @@ class AppSettings: ObservableObject {
             }
         }
         let imageSizeMB = Double(imageSizeBytes) / (1024.0 * 1024.0)
-        // Ensure UI update is on MainActor
         self.currentImageDataCacheSizeMB = imageSizeMB
         Self.logger.info("Updated currentImageDataCacheSizeMB to: \(String(format: "%.2f", imageSizeMB)) MB")
     }
@@ -250,7 +242,9 @@ class AppSettings: ObservableObject {
         Self.logger.info("Set Kingfisher (image) disk cache size limit to \(limitBytes) bytes (\(self.maxImageCacheSizeMB) MB).")
     }
 
+
     // MARK: - Data Cache Access Methods (Delegated to CacheService - Unchanged)
+    // ... (saveItemsToCache, loadItemsFromCache, clearFavoritesCache) ...
     func saveItemsToCache(_ items: [Item], forKey cacheKey: String) async {
         guard !cacheKey.isEmpty else { return }
         await cacheService.saveItems(items, forKey: cacheKey)
@@ -267,6 +261,7 @@ class AppSettings: ObservableObject {
     }
 
     // MARK: - Seen Items Management Methods (Unchanged)
+    // ... (markItemAsSeen, markItemsAsSeen, saveSeenItemIDsToCloudAndLocal, loadSeenItemIDs) ...
     func markItemAsSeen(id: Int) async {
         if !seenItemIDs.contains(id) {
              var idsToUpdate = seenItemIDs
@@ -336,6 +331,7 @@ class AppSettings: ObservableObject {
 
 
     // MARK: - iCloud KVS Synchronization Handling (Unchanged)
+    // ... (setupCloudKitKeyValueStoreObserver, handleCloudKitStoreChange) ...
     private func setupCloudKitKeyValueStoreObserver() {
         if keyValueStoreChangeObserver != nil { NotificationCenter.default.removeObserver(keyValueStoreChangeObserver!); keyValueStoreChangeObserver = nil }
         keyValueStoreChangeObserver = NotificationCenter.default.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification, object: cloudStore, queue: .main) { [weak self] notification in // Use main queue
@@ -343,8 +339,6 @@ class AppSettings: ObservableObject {
         }
         let syncSuccess = cloudStore.synchronize(); Self.logger.info("Setup iCloud KVS observer. Initial synchronize requested: \(syncSuccess)")
     }
-    // Ensure handleCloudKitStoreChange is annotated or called within MainActor context correctly
-    // (Current setup with Task { @MainActor ... } is correct)
     private func handleCloudKitStoreChange(notification: Notification) async {
         Self.logger.info("Received iCloud KVS didChangeExternallyNotification.")
         guard let userInfo = notification.userInfo, let changeReason = userInfo[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int else { Self.logger.warning("Could not get change reason from KVS notification."); return }
@@ -356,7 +350,6 @@ class AppSettings: ObservableObject {
             Self.logger.debug("Change reason: ServerChange or InitialSyncChange.")
             guard let cloudData = cloudStore.data(forKey: Self.iCloudSeenItemsKey) else {
                 Self.logger.warning("Our key (\(Self.iCloudSeenItemsKey)) was reportedly changed, but no data found in KVS. Possibly deleted externally?")
-                // Already on MainActor, update directly
                 self.seenItemIDs = []
                 await self.cacheService.clearCache(forKey: Self.localSeenItemsCacheKey)
                 Self.logger.info("Cleared local seen items state because key was missing in iCloud after external change notification.")
@@ -366,12 +359,11 @@ class AppSettings: ObservableObject {
                 let incomingIDs = try JSONDecoder().decode(Set<Int>.self, from: cloudData); Self.logger.info("Successfully decoded \(incomingIDs.count) seen IDs from external iCloud KVS change.")
                 let localIDs = self.seenItemIDs; let mergedIDs = localIDs.union(incomingIDs)
                 if mergedIDs.count > localIDs.count {
-                    // Already on MainActor, update directly
                     self.seenItemIDs = mergedIDs; Self.logger.info("Merged external seen IDs. New total: \(mergedIDs.count).")
-                    Task.detached { await self.cacheService.saveSeenIDs(mergedIDs, forKey: Self.localSeenItemsCacheKey) } // Save merged back locally async
+                    Task.detached { await self.cacheService.saveSeenIDs(mergedIDs, forKey: Self.localSeenItemsCacheKey) }
                 } else {
                     Self.logger.debug("Incoming seen IDs did not add new items to the local set. No UI update needed.")
-                    Task.detached { await self.cacheService.saveSeenIDs(localIDs, forKey: Self.localSeenItemsCacheKey) } // Ensure local still matches cloud
+                    Task.detached { await self.cacheService.saveSeenIDs(localIDs, forKey: Self.localSeenItemsCacheKey) }
                 }
             } catch { Self.logger.error("Failed to decode seen IDs from external iCloud KVS change data: \(error.localizedDescription)") }
         case NSUbiquitousKeyValueStoreAccountChange: Self.logger.warning("iCloud account changed. Reloading seen items state."); await loadSeenItemIDs()
