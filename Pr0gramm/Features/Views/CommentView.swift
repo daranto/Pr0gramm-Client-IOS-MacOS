@@ -4,42 +4,35 @@
 import SwiftUI
 import Foundation
 import UIKit // Für UIFont
+import os // Für Logger
 
 /// Displays a single comment, including user info, score, relative time, and formatted content with tappable links.
-/// Supports collapsing/expanding if it has children.
+/// Supports collapsing/expanding if it has children. Allows favoriting comments.
 struct CommentView: View {
     let comment: ItemComment
-    /// Binding to trigger the preview sheet when a pr0gramm link is tapped.
     @Binding var previewLinkTarget: PreviewLinkTarget?
-    /// Indicates if this comment has replies.
     let hasChildren: Bool
-    /// Indicates if this comment is currently collapsed.
     let isCollapsed: Bool
-    /// Action to perform when the collapse toggle is tapped.
     let onToggleCollapse: () -> Void
-    /// Action to perform when reply button is tapped
     let onReply: () -> Void
 
-    @EnvironmentObject var authService: AuthService // Check login status
+    @EnvironmentObject var authService: AuthService // Check login status & favorite state
+    // --- NEW: Logger ---
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CommentView")
+    // --- END NEW ---
 
-    /// The user's rank/mark as an enum case.
     private var markEnum: Mark { Mark(rawValue: comment.mark) }
-    /// The color associated with the user's rank.
     private var userMarkColor: Color { markEnum.displayColor }
-    /// The display name of the user's rank.
     private var userMarkName: String { markEnum.displayName }
-    /// The calculated score (upvotes - downvotes).
     private var score: Int { comment.up - comment.down }
 
-    /// A human-readable, relative timestamp (e.g., "5 min ago").
     private var relativeTime: String {
         let date = Date(timeIntervalSince1970: TimeInterval(comment.created))
         let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated // Use short style like "min", "hr"
+        formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 
-    /// The comment content formatted with tappable links.
     private var attributedCommentContent: AttributedString {
         var attributedString = AttributedString(comment.content)
         let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont)
@@ -59,6 +52,18 @@ struct CommentView: View {
         }
         return attributedString
     }
+
+    // --- NEW: Computed property for favorite status ---
+    private var isFavorited: Bool {
+        authService.favoritedCommentIDs.contains(comment.id)
+    }
+    // --- END NEW ---
+
+    // --- NEW: Computed property for favoriting in progress ---
+    private var isTogglingFavorite: Bool {
+        authService.isFavoritingComment[comment.id] ?? false
+    }
+    // --- END NEW ---
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -82,8 +87,32 @@ struct CommentView: View {
                 Text(relativeTime).font(UIConstants.captionFont).foregroundColor(.secondary)
                 Spacer() // Push info to left
 
-                // Reply Button
+                // --- MODIFIED: Add Favorite Button ---
                 if authService.isLoggedIn {
+                    // Favorite Button
+                    Button {
+                        Task {
+                            Self.logger.debug("Favorite button tapped for comment \(comment.id)")
+                            await authService.performCommentFavToggle(commentId: comment.id)
+                        }
+                    } label: {
+                        // --- NEW: Show progress or heart ---
+                        if isTogglingFavorite {
+                            ProgressView()
+                                .frame(width: 16, height: 16) // Match icon size roughly
+                                .scaleEffect(0.7) // Make spinner smaller
+                        } else {
+                            Image(systemName: isFavorited ? "heart.fill" : "heart")
+                                .foregroundColor(isFavorited ? .pink : .secondary)
+                                .font(.caption) // Consistent size
+                        }
+                        // --- END NEW ---
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isTogglingFavorite) // Disable while processing
+                    .padding(.leading, 5)
+
+                    // Reply Button
                     Button(action: onReply) {
                         Image(systemName: "arrowshape.turn.up.left")
                             .font(.caption)
@@ -92,6 +121,7 @@ struct CommentView: View {
                     .buttonStyle(.plain)
                     .padding(.leading, 5)
                 }
+                // --- END MODIFICATION ---
             }
             .contentShape(Rectangle())
             .onTapGesture { if hasChildren { onToggleCollapse() } }
@@ -110,16 +140,32 @@ struct CommentView: View {
         .environment(\.openURL, OpenURLAction { url in
             if let itemID = parsePr0grammLink(url: url) {
                 print("Pr0gramm link tapped, attempting to preview item ID: \(itemID)")
-                self.previewLinkTarget = PreviewLinkTarget(id: itemID)
-                return .handled
+                // --- MODIFIED: Use NavigationLink value for preview ---
+                // For comment previews, we still use the sheet mechanism if needed,
+                // but the main navigation now uses NavigationLink value.
+                // This part remains for potential future use or direct previews from CommentView.
+                // self.previewLinkTarget = PreviewLinkTarget(id: itemID)
+                // --- END MODIFICATION ---
+                // Handle navigation outside or let the system handle if not specifically previewing
+                // Returning .handled here prevents default browser opening for pr0 links
+                // We actually WANT the default browser if the link is not handled by our sheet.
+                // Let's rethink this - OpenURLAction might not be the best place if we use NavLink value.
+                // For now, let's keep it simple: allow system to handle links if not previewing.
+                return .systemAction // Or handle specifically if needed elsewhere
             } else {
                 print("Non-pr0gramm link tapped: \(url). Opening in system browser.")
                 return .systemAction
             }
         })
+        // --- NEW: Add onChange observer for comment favs ---
+        .onChange(of: authService.favoritedCommentIDs) { _, _ in
+            // This empty block forces the view to re-evaluate 'isFavorited'
+            // when the global set changes.
+        }
+        // --- END NEW ---
     }
 
-    private func parsePr0grammLink(url: URL) -> Int? {
+    private func parsePr0grammLink(url: URL) -> Int? { // Unverändert
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
         let pathComponents = url.pathComponents; for component in pathComponents.reversed() { if let itemID = Int(component) { return itemID } }
         if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems { for item in queryItems { if item.name == "id", let value = item.value, let itemID = Int(value) { return itemID } } }
@@ -127,7 +173,7 @@ struct CommentView: View {
     }
 }
 
-// Helper Extension
+// Helper Extension (unverändert)
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -150,12 +196,16 @@ fileprivate extension UIFont {
 }
 
 
-// MARK: - Preview
+// MARK: - Preview (unverändert, aber profitiert vom Fix in ItemComment init)
 #Preview("Normal with Reply") {
     struct PreviewWrapper: View {
         @State var target: PreviewLinkTarget? = nil
         var body: some View {
-            CommentView(
+            let auth = AuthService(appSettings: AppSettings())
+            auth.isLoggedIn = true
+            auth.favoritedCommentIDs = [1] // Simulate favorited
+
+            return CommentView(
                 comment: ItemComment(id: 1, parent: 0, content: "Top comment http://pr0gramm.com/new/12345", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "UserA", mark: 2),
                 previewLinkTarget: $target,
                 hasChildren: true,
@@ -164,12 +214,10 @@ fileprivate extension UIFont {
                 onReply: { print("Reply Tapped") }
             )
             .padding()
-            .environmentObject(AuthService(appSettings: AppSettings()))
+            .environmentObject(auth) // Use the configured auth service
         }
     }
-    let auth = AuthService(appSettings: AppSettings())
-    auth.isLoggedIn = true
-    return PreviewWrapper().environmentObject(auth)
+    return PreviewWrapper()
 }
 
 #Preview("Collapsed") {
@@ -185,19 +233,20 @@ fileprivate extension UIFont {
                 onReply: { print("Reply Tapped") }
             )
             .padding()
-            .environmentObject(AuthService(appSettings: AppSettings()))
+            .environmentObject(AuthService(appSettings: AppSettings())) // Basic logged out state for this one
         }
     }
-    let auth = AuthService(appSettings: AppSettings())
-    auth.isLoggedIn = true
-    return PreviewWrapper().environmentObject(auth)
+    return PreviewWrapper()
 }
 
 #Preview("No Children") {
     struct PreviewWrapper: View {
         @State var target: PreviewLinkTarget? = nil
         var body: some View {
-            CommentView(
+             let auth = AuthService(appSettings: AppSettings())
+             auth.isLoggedIn = true // Logged in for reply/fav button
+
+            return CommentView(
                 comment: ItemComment(id: 3, parent: 1, content: "Reply without children", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "UserC", mark: 7),
                 previewLinkTarget: $target,
                 hasChildren: false,
@@ -206,11 +255,9 @@ fileprivate extension UIFont {
                 onReply: { print("Reply Tapped") }
             )
             .padding()
-            .environmentObject(AuthService(appSettings: AppSettings()))
+            .environmentObject(auth)
         }
     }
-    let auth = AuthService(appSettings: AppSettings())
-    auth.isLoggedIn = true
-    return PreviewWrapper().environmentObject(auth)
+    return PreviewWrapper()
 }
 // --- END OF COMPLETE FILE ---

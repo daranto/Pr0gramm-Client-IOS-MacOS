@@ -5,7 +5,7 @@ import Foundation
 import os
 import UIKit // For UIImage in CaptchaResponse
 
-// MARK: - API Data Structures (Top Level)
+// MARK: - API Data Structures (Top Level) - Unverändert
 
 /// Response structure for the `/items/info` endpoint.
 struct ItemsInfoResponse: Codable {
@@ -30,11 +30,8 @@ struct ItemComment: Codable, Identifiable, Hashable {
     let name: String
     let mark: Int
     let itemId: Int?
-    // --- NEW: Add thumb property ---
-    let thumb: String? // Thumbnail of the item the comment belongs to
-    // --- END NEW ---
+    let thumb: String?
 
-    // --- MODIFIED: Update initializer ---
     init(id: Int, parent: Int?, content: String, created: Int, up: Int, down: Int, confidence: Double?, name: String, mark: Int, itemId: Int? = nil, thumb: String? = nil) {
         self.id = id
         self.parent = parent
@@ -46,17 +43,13 @@ struct ItemComment: Codable, Identifiable, Hashable {
         self.name = name
         self.mark = mark
         self.itemId = itemId
-        self.thumb = thumb // Initialize new property
+        self.thumb = thumb
     }
-    // --- END MODIFICATION ---
 
-    // --- NEW: Computed property for thumbnail URL ---
     var itemThumbnailUrl: URL? {
         guard let thumb = thumb, !thumb.isEmpty else { return nil }
-        // Assuming thumbnails always come from thumb.pr0gramm.com
         return URL(string: "https://thumb.pr0gramm.com/")?.appendingPathComponent(thumb)
     }
-    // --- END NEW ---
 }
 /// Generic response structure for endpoints returning a list of items (e.g., `/items/get`).
 struct ApiResponse: Codable {
@@ -90,7 +83,7 @@ struct CaptchaResponse: Codable {
     let captcha: String
 }
 
-// MARK: - Badge Structure ---
+// MARK: - Badge Structure --- Unverändert
 struct ApiBadge: Codable, Identifiable, Hashable {
     var id: String { image }
     let image: String
@@ -105,7 +98,7 @@ struct ApiBadge: Codable, Identifiable, Hashable {
 }
 // --- END Badge Structure ---
 
-/// Response structure for the `/profile/info` endpoint.
+/// Response structure for the `/profile/info` endpoint. - Unverändert
 struct ProfileInfoResponse: Codable {
     let user: ApiProfileUser
     let badges: [ApiBadge]?
@@ -113,7 +106,7 @@ struct ProfileInfoResponse: Codable {
     let uploadCount: Int?
     let tagCount: Int?
 }
-/// Represents user profile details as returned by the `/profile/info` API.
+/// Represents user profile details as returned by the `/profile/info` API. - Unverändert
 struct ApiProfileUser: Codable, Hashable {
     let id: Int
     let name: String
@@ -125,7 +118,7 @@ struct ApiProfileUser: Codable, Hashable {
     let banned: Int?
     let bannedUntil: Int?
 }
-/// Simplified user info structure used within the app (e.g., `AuthService.currentUser`).
+/// Simplified user info structure used within the app (e.g., `AuthService.currentUser`). - Unverändert
 struct UserInfo: Codable, Hashable {
     let id: Int
     let name: String
@@ -134,11 +127,11 @@ struct UserInfo: Codable, Hashable {
     let mark: Int
     let badges: [ApiBadge]?
 }
-/// Response structure for the `/collections/get` endpoint.
+/// Response structure for the `/collections/get` endpoint. - Unverändert
 struct CollectionsResponse: Codable {
     let collections: [ApiCollection]
 }
-/// Represents a user collection (e.g., Favorites).
+/// Represents a user collection (e.g., Favorites). - Unverändert
 struct ApiCollection: Codable, Identifiable {
     let id: Int
     let name: String
@@ -147,12 +140,12 @@ struct ApiCollection: Codable, Identifiable {
     let isDefault: Int
     let itemCount: Int
 }
-/// Response structure for the `/user/sync` endpoint.
+/// Response structure for the `/user/sync` endpoint. - Unverändert
 struct UserSyncResponse: Codable {
     let likeNonce: String?
 }
 
-// Structure for Comment Post Response
+// Structure for Comment Post Response - Unverändert
 struct PostCommentResultComment: Codable, Identifiable, Hashable {
     let id: Int
     let parent: Int?
@@ -176,7 +169,7 @@ struct CommentsPostErrorResponse: Codable {
     let error: String
 }
 
-// Structure for Comment Likes Response
+// Structure for Comment Likes Response - Unverändert
 struct ProfileCommentLikesResponse: Codable {
     let comments: [ItemComment]
     let hasOlder: Bool
@@ -440,8 +433,58 @@ class APIService {
         }
     }
 
+    // --- NEW: Functions for comment favoriting ---
+    func favComment(commentId: Int, nonce: String) async throws {
+        let endpoint = "/comments/fav"
+        Self.logger.info("Attempting to favorite comment \(commentId).")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "id", value: String(commentId)),
+            URLQueryItem(name: "_nonce", value: nonce)
+        ]
+        request.httpBody = components.query?.data(using: .utf8)
+        logRequestDetails(request, for: endpoint)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            try handleApiResponseVoid(response: response, endpoint: endpoint + " (commentId: \(commentId))")
+            Self.logger.info("Successfully favorited comment \(commentId).")
+        } catch {
+            Self.logger.error("Failed to favorite comment \(commentId): \(error.localizedDescription)")
+            throw error
+        }
+    }
 
-    // MARK: - Helper Methods
+    func unfavComment(commentId: Int, nonce: String) async throws {
+        let endpoint = "/comments/unfav"
+        Self.logger.info("Attempting to unfavorite comment \(commentId).")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "id", value: String(commentId)),
+            URLQueryItem(name: "_nonce", value: nonce)
+        ]
+        request.httpBody = components.query?.data(using: .utf8)
+        logRequestDetails(request, for: endpoint)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            try handleApiResponseVoid(response: response, endpoint: endpoint + " (commentId: \(commentId))")
+            Self.logger.info("Successfully unfavorited comment \(commentId).")
+        } catch {
+            Self.logger.error("Failed to unfavorite comment \(commentId): \(error.localizedDescription)")
+            throw error
+        }
+    }
+    // --- END NEW ---
+
+
+    // MARK: - Helper Methods (unverändert)
 
     private func handleApiResponse<T: Decodable>(data: Data, response: URLResponse, endpoint: String) throws -> T {
         guard let httpResponse = response as? HTTPURLResponse else { Self.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }

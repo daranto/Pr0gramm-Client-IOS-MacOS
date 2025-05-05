@@ -5,10 +5,10 @@ import SwiftUI
 import os
 import Kingfisher // Import Kingfisher
 
-/// Zeigt die vom Benutzer favorisierten ("Geliketen") Kommentare an.
+/// Zeigt die vom Benutzer favorisierten ("Favorisierten") Kommentare an.
 /// Erfordert, dass der Benutzer angemeldet ist. Handhabt Laden, Paginierung und Filterung.
 struct UserFavoritedCommentsView: View {
-    let username: String // Benutzername, dessen gelikete Kommentare angezeigt werden sollen
+    let username: String // Benutzername, dessen Favorisierte Kommentare angezeigt werden sollen
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
@@ -35,7 +35,7 @@ struct UserFavoritedCommentsView: View {
         Group {
             commentsContentView
         }
-        .navigationTitle("Gelikete Kommentare")
+        .navigationTitle("Favorisierte Kommentare")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
