@@ -103,45 +103,81 @@ struct DetailViewContent: View {
         }
     }
 
+    // --- MODIFICATION START: Icon Font Size ---
+    // Define a consistent font size for action icons
+    private let actionIconFont: Font = .title2 // Explicitly use .title2
+
     @ViewBuilder private var voteCounterView: some View {
         let benis = item.up - item.down
-        VStack(alignment: .leading, spacing: 2) {
-            Text("\(benis)").font(.largeTitle).fontWeight(.medium).foregroundColor(.primary).lineLimit(1)
-            HStack(spacing: 8) {
-                HStack(spacing: 3) { Image(systemName: "arrow.up.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, .green).imageScale(.small); Text("\(item.up)").font(.caption).foregroundColor(.secondary) }
-                HStack(spacing: 3) { Image(systemName: "arrow.down.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, .red).imageScale(.small); Text("\(item.down)").font(.caption).foregroundColor(.secondary) }
-            }
+        HStack(spacing: 6) {
+            // Upvote Icon
+            Image(systemName: "arrow.up.circle.fill")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, .green)
+                .font(actionIconFont) // Apply consistent font
+
+            // Benis Score
+            Text("\(benis)")
+                .font(UIConstants.titleFont.weight(.medium)) // Font unchanged
+                .foregroundColor(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            // Downvote Icon
+            Image(systemName: "arrow.down.circle.fill")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, .red)
+                .font(actionIconFont) // Apply consistent font
         }
     }
+
     @ViewBuilder private var favoriteButton: some View {
         Button { Task { isProcessingFavorite = true; await toggleFavoriteAction(); try? await Task.sleep(for: .milliseconds(100)); isProcessingFavorite = false } }
-        label: { Image(systemName: isFavorited ? "heart.fill" : "heart").imageScale(.large).foregroundColor(isFavorited ? .pink : .secondary).frame(width: 44, height: 44).contentShape(Rectangle()) }
+        label: {
+            Image(systemName: isFavorited ? "heart.fill" : "heart")
+                .font(actionIconFont) // Apply consistent font
+                .foregroundColor(isFavorited ? .pink : .secondary)
+                .frame(width: 44, height: 44) // Keep frame for touch target
+                .contentShape(Rectangle())
+        }
         .buttonStyle(.plain).disabled(isProcessingFavorite || !authService.isLoggedIn)
     }
+
     @ViewBuilder private var shareButton: some View {
         Button { showingShareOptions = true }
-        label: { Image(systemName: "square.and.arrow.up").imageScale(.large).foregroundColor(.secondary).frame(width: 44, height: 44).contentShape(Rectangle()) }
+        label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(actionIconFont) // Apply consistent font
+                .foregroundColor(.secondary)
+                .frame(width: 44, height: 44) // Keep frame for touch target
+                .contentShape(Rectangle())
+        }
         .buttonStyle(.plain)
     }
-
-    // --- REMOVED seenStatusIcon ViewBuilder ---
+    // --- MODIFICATION END ---
 
     @ViewBuilder private var infoAndTagsContent: some View {
-        HStack(alignment: .top, spacing: 15) {
-            VStack(alignment: .leading, spacing: 8) {
-                // --- RESTORED previous HStack spacing and padding ---
-                HStack(alignment: .firstTextBaseline, spacing: 8) { // Using 8 spacing again
-                    voteCounterView
-                    if authService.isLoggedIn { favoriteButton.padding(.top, 5) }
-                    shareButton.padding(.top, 5)
-                    // seenStatusIcon removed from here
-                    Spacer()
-                }
-                // --- END RESTORATION ---
-            }.fixedSize(horizontal: true, vertical: false) // Restore fixedSize if needed
+        VStack(alignment: .leading, spacing: 12) {
 
-            // Tag Section (unchanged)
-            Group {
+            // --- MODIFICATION START: Horizontal Layout and Alignment ---
+            // Row 1: Votes and Actions
+            HStack(alignment: .center, spacing: 15) { // alignment: .center for vertical alignment
+                voteCounterView // Votes/Benis part
+
+                Spacer() // Pushes buttons to the right
+
+                if authService.isLoggedIn {
+                    favoriteButton // Button with its own frame
+                }
+                shareButton // Button with its own frame
+                // No Spacer needed at the end anymore
+            }
+            .frame(minHeight: 44) // Ensure minimum height for consistent vertical alignment
+            // --- MODIFICATION END ---
+
+
+            // Row 2: Tags (FlowLayout or placeholders)
+            Group { // Keep the group for the switch logic
                 switch infoLoadingStatus {
                 case .loaded:
                     if !displayedTags.isEmpty {
@@ -153,19 +189,27 @@ struct DetailViewContent: View {
                                 .buttonStyle(.plain)
                             }
                         }
-                    } else { Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5) }
+                    } else {
+                        Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                    }
                 case .loading: ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .error: Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5) // Placeholder for spacing
                 }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-        }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading) // Ensure tags take available width
+
+        } // End main VStack
     }
+
+    // TagView remains unchanged
     struct TagView: View {
         let tag: ItemTag; private let characterLimit = 25
         private var displayText: String { tag.tag.count > characterLimit ? String(tag.tag.prefix(characterLimit - 1)) + "…" : tag.tag }
         var body: some View { Text(displayText).font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.gray.opacity(0.2)).foregroundColor(.primary).clipShape(Capsule()) }
     }
+
+    // commentsContent remains unchanged
     @ViewBuilder private var commentsContent: some View {
         CommentsSection(
             flatComments: flatComments,
@@ -177,7 +221,7 @@ struct DetailViewContent: View {
         )
     }
 
-    // MARK: - Body
+    // MARK: - Body (Structure remains the same, uses the modified infoAndTagsContent)
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
@@ -187,7 +231,7 @@ struct DetailViewContent: View {
                     Divider()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 15) {
-                            infoAndTagsContent.padding([.horizontal, .top]);
+                            infoAndTagsContent.padding([.horizontal, .top]); // Padding applied here
                             commentsContent.padding([.horizontal, .bottom])
                         }
                     }
@@ -202,7 +246,7 @@ struct DetailViewContent: View {
                                 .frame(width: geo.size.width, height: geo.size.width / aspect)
                         }
                         .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
-                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
+                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10) // Padding applied here
                         commentsContent.padding(.horizontal).padding(.bottom, 10)
                     }
                 }
@@ -211,7 +255,7 @@ struct DetailViewContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
         .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
-        .confirmationDialog(
+        .confirmationDialog( // Share dialog remains unchanged
             "Link kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
         ) {
             Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; Self.logger.info("Copied Post-Link to clipboard: \(urlString)") }
@@ -220,7 +264,7 @@ struct DetailViewContent: View {
     }
 
 
-    // MARK: - Helper Methods
+    // MARK: - Helper Methods (Unchanged)
     private func guessAspectRatio() -> CGFloat? {
         guard item.width > 0, item.height > 0 else { return 1.0 }
         return CGFloat(item.width) / CGFloat(item.height)
@@ -248,7 +292,7 @@ fileprivate extension UIFont {
 }
 
 
-// MARK: - Previews (Unchanged)
+// MARK: - Previews (Unchanged, but will reflect the new layout)
 #Preview("Compact - Limited Tags") {
     struct PreviewWrapper: View {
         @State var previewLinkTarget: PreviewLinkTarget? = nil
@@ -294,7 +338,7 @@ fileprivate extension UIFont {
                 .environmentObject(settings)
                 .environmentObject(authService)
                 .environmentObject(playerManager)
-                .environment(\.horizontalSizeClass, .compact)
+                .environment(\.horizontalSizeClass, .compact) // Test compact layout
                 .preferredColorScheme(.dark)
                 .task {
                     playerManager.configure(settings: settings)
