@@ -23,7 +23,6 @@ struct FilterView: View {
     var body: some View {
         NavigationStack {
             Form {
-                // --- MODIFIED: Conditionally show this section ---
                 // Section for Feed Type Selection and Hide Seen toggle
                 if !hideFeedOptions {
                     Section {
@@ -35,18 +34,27 @@ struct FilterView: View {
                         }
                         .pickerStyle(.segmented)
 
-                        Toggle("Nur Frisches anzeigen", isOn: $settings.hideSeenItems)
-                            .font(UIConstants.bodyFont)
+                        // Conditionally show the "Hide Seen" toggle
+                        // Only show if the experimental feature is enabled in AppSettings
+                        if settings.enableExperimentalHideSeen {
+                            Toggle("Nur Frisches anzeigen (Experimentell)", isOn: $settings.hideSeenItems)
+                                .font(UIConstants.bodyFont)
+                        }
 
                     } header: {
                         Text("Anzeige")
+                    // --- MODIFIED: Footer now only shown if the toggle is visible ---
                     } footer: {
-                        Text("Blendet Posts aus, die du bereits in der Detailansicht geöffnet hast.")
-                            .font(UIConstants.footnoteFont)
+                        // Only show the basic explanation if the experimental toggle is actually visible
+                        if settings.enableExperimentalHideSeen {
+                             Text("Blendet Posts aus, die du bereits in der Detailansicht geöffnet hast.")
+                                .font(UIConstants.footnoteFont)
+                        }
+                        // No footer text is shown if the experimental feature is off
                     }
                      .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+                    // --- END MODIFICATION ---
                 }
-                // --- END MODIFICATION ---
 
                 // Section for Content Filters (always shown if context allows, visibility depends on login)
                 if authService.isLoggedIn {
@@ -91,7 +99,7 @@ struct FilterView: View {
     }
 }
 
-// MARK: - Previews
+// MARK: - Previews (Unchanged)
 
 #Preview("Standard (Feed)") {
     let previewSettings = AppSettings(); let previewAuthService = AuthService(appSettings: previewSettings); previewAuthService.isLoggedIn = true; previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: []);
@@ -114,5 +122,16 @@ struct FilterView: View {
     FilterView()
         .environmentObject(AppSettings())
         .environmentObject(AuthService(appSettings: AppSettings()))
+}
+
+#Preview("Experimental Enabled") {
+    let previewSettings = AppSettings()
+    previewSettings.enableExperimentalHideSeen = true // Enable experimental feature for preview
+    let previewAuthService = AuthService(appSettings: previewSettings)
+    previewAuthService.isLoggedIn = true
+    previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
+    return FilterView()
+        .environmentObject(previewSettings)
+        .environmentObject(previewAuthService)
 }
 // --- END OF COMPLETE FILE ---

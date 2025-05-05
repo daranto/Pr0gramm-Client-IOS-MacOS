@@ -45,6 +45,7 @@ class AppSettings: ObservableObject {
     private let cacheService = CacheService()
     private let cloudStore = NSUbiquitousKeyValueStore.default
 
+    // UserDefaults Keys
     private static let isVideoMutedPreferenceKey = "isVideoMutedPreference_v1"
     private static let feedTypeKey = "feedTypePreference_v1"
     private static let showSFWKey = "showSFWPreference_v1"
@@ -55,6 +56,7 @@ class AppSettings: ObservableObject {
     private static let maxImageCacheSizeMBKey = "maxImageCacheSizeMB_v1"
     private static let commentSortOrderKey = "commentSortOrder_v1"
     private static let hideSeenItemsKey = "hideSeenItems_v1"
+    private static let enableExperimentalHideSeenKey = "enableExperimentalHideSeen_v1"
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
     private var keyValueStoreChangeObserver: NSObjectProtocol?
@@ -81,8 +83,30 @@ class AppSettings: ObservableObject {
     }
     @Published var hideSeenItems: Bool {
         didSet {
-            UserDefaults.standard.set(hideSeenItems, forKey: Self.hideSeenItemsKey)
-            Self.logger.info("Hide seen items setting changed to: \(self.hideSeenItems)")
+            // Only save if the experimental feature is actually enabled
+            if enableExperimentalHideSeen {
+                 UserDefaults.standard.set(hideSeenItems, forKey: Self.hideSeenItemsKey)
+                 Self.logger.info("Hide seen items setting changed to: \(self.hideSeenItems)")
+            } else if hideSeenItems {
+                 // If the experimental feature is OFF, force this back to false if something tries to set it to true.
+                 Self.logger.warning("Attempted to set hideSeenItems to true while experimental feature is disabled. Forcing back to false.")
+                 // Use a Task to avoid direct modification within didSet causing loops/issues
+                 Task { @MainActor in self.hideSeenItems = false }
+            }
+        }
+    }
+    @Published var enableExperimentalHideSeen: Bool {
+        didSet {
+            UserDefaults.standard.set(enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey)
+            Self.logger.info("Setting 'Enable Experimental Hide Seen' changed to: \(self.enableExperimentalHideSeen)")
+            // If the experimental feature is disabled, also force the actual hideSeenItems setting to false.
+            if !enableExperimentalHideSeen {
+                // Update hideSeenItems directly (protected by the logic in its own didSet)
+                self.hideSeenItems = false
+                Self.logger.info("Experimental 'Hide Seen' disabled. Forcing 'hideSeenItems' setting to false.")
+                // Remove the potentially stored value for hideSeenItems to avoid confusion if re-enabled later
+                 UserDefaults.standard.removeObject(forKey: Self.hideSeenItemsKey)
+            }
         }
     }
 
@@ -105,6 +129,7 @@ class AppSettings: ObservableObject {
 
     // MARK: - Initializer
     init() {
+        // Initialize standard settings first
         self.isVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil ? true : UserDefaults.standard.bool(forKey: Self.isVideoMutedPreferenceKey)
         self.feedType = FeedType(rawValue: UserDefaults.standard.integer(forKey: Self.feedTypeKey)) ?? .promoted
         self.showSFW = UserDefaults.standard.object(forKey: Self.showSFWKey) == nil ? true : UserDefaults.standard.bool(forKey: Self.showSFWKey)
@@ -114,14 +139,37 @@ class AppSettings: ObservableObject {
         self.showPOL = UserDefaults.standard.bool(forKey: Self.showPOLKey)
         self.maxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) == nil ? 100 : UserDefaults.standard.integer(forKey: Self.maxImageCacheSizeMBKey)
         self.commentSortOrder = CommentSortOrder(rawValue: UserDefaults.standard.integer(forKey: Self.commentSortOrderKey)) ?? .date
-        self.hideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
 
+        // Initialize the experimental flag (default false)
+        let initialExperimentalEnabled = UserDefaults.standard.bool(forKey: Self.enableExperimentalHideSeenKey)
+        self.enableExperimentalHideSeen = initialExperimentalEnabled
+
+        // --- FIX: Initialize hideSeenItems BEFORE accessing self.enableExperimentalHideSeen ---
+        // Give hideSeenItems a default value first.
+        self.hideSeenItems = false
+        // Now, phase two allows accessing self. We can check the flag and potentially load the real value.
+        if initialExperimentalEnabled {
+            // Only load the persisted value if the feature was already enabled.
+            self.hideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
+        }
+        // --- END FIX ---
+
+        // The rest of the initializer can now safely access self.hideSeenItems and self.enableExperimentalHideSeen
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
-        Self.logger.info("- hideSeenItems: \(self.hideSeenItems)")
+        Self.logger.info("- enableExperimentalHideSeen: \(self.enableExperimentalHideSeen)")
+        Self.logger.info("- hideSeenItems (actual): \(self.hideSeenItems)")
 
+        // Ensure defaults are set if first launch
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
-        if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
+        // Only set default for hideSeenItems if experimental is enabled AND key doesn't exist
+        if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil && self.enableExperimentalHideSeen {
+            UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey)
+        }
+        if UserDefaults.standard.object(forKey: Self.enableExperimentalHideSeenKey) == nil {
+            UserDefaults.standard.set(self.enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey)
+        }
+
 
         updateKingfisherCacheLimit()
         setupCloudKitKeyValueStoreObserver()
@@ -132,9 +180,8 @@ class AppSettings: ObservableObject {
         }
     }
 
-    // MARK: - Cache Management Methods
+    // MARK: - Cache Management Methods (Unchanged)
 
-    // --- NEW: Clear only seen items cache ---
     /// Clears the cache of seen item IDs both locally and in iCloud KVS.
     func clearSeenItemsCache() async {
         Self.logger.warning("Clearing Seen Items Cache (Local & iCloud) requested.")
@@ -152,7 +199,6 @@ class AppSettings: ObservableObject {
         let syncSuccess = cloudStore.synchronize() // Request sync
         Self.logger.info("Removed seen items key from iCloud KVS. Synchronize requested: \(syncSuccess).")
     }
-    // --- END NEW ---
 
     /// Clears ALL application caches including data, images, and seen items.
     func clearAllAppCache() async {

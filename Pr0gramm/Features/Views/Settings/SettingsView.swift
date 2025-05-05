@@ -24,6 +24,7 @@ struct SettingsView: View {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
                         .font(UIConstants.bodyFont)
                 }
+                .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
                 // Section for Comment Settings
                 Section("Kommentare") {
@@ -35,8 +36,22 @@ struct SettingsView: View {
                     }
                     .font(UIConstants.bodyFont)
                 }
+                .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
-                // Section for Clearing Seen Items
+                // --- NEW: Section for Experimental Features ---
+                Section {
+                    Toggle("Feature: 'Nur Frisches anzeigen' aktivieren", isOn: $settings.enableExperimentalHideSeen)
+                        .font(UIConstants.bodyFont)
+                } header: {
+                     Text("Experimentelle Features")
+                } footer: {
+                     Text("Aktiviere diese Option, um die experimentelle Funktion 'Nur Frisches anzeigen' im Filter-Menü verfügbar zu machen. Diese Funktion blendet bereits gesehene Posts im Feed aus, kann aber bei der Paginierung (Nachladen älterer Posts) noch zu unerwartetem Verhalten führen.")
+                        .font(UIConstants.footnoteFont)
+                }
+                .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+                // --- END NEW ---
+
+                // Section for Clearing Seen Items (Button only)
                 Section {
                     Button("Gesehene Posts zurücksetzen", role: .destructive) {
                         showingClearSeenItemsAlert = true // Trigger specific alert
@@ -46,8 +61,8 @@ struct SettingsView: View {
                 } header: {
                      Text("Anzeige-Verlauf")
                 } footer: {
-                     Text("Entfernt die Markierungen für bereits angesehene Posts. Die Bilder selbst bleiben im Cache erhalten.")
-                        .font(UIConstants.footnoteFont)
+                     Text("Entfernt die Markierungen für bereits angesehene Posts. Die Bilder selbst bleiben im Cache erhalten. Die Option, gesehene Posts auszublenden, muss ggf. unter 'Experimentelle Features' aktiviert werden.")
+                        .font(UIConstants.footnoteFont) // Adjusted footer text
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
@@ -99,7 +114,7 @@ struct SettingsView: View {
                 }
                  .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
-                // --- MODIFIED: Info Section ---
+                // Section for Info & Project (Unchanged)
                 Section {
                     // Link to Licenses view
                     NavigationLink(destination: LicenseAndDependenciesView()) {
@@ -121,8 +136,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Info & Projekt") // Header text updated
                 }
-                // --- END MODIFICATION ---
-                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+                .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
             }
             .navigationTitle("Einstellungen")
             .alert("Gesehene Posts zurücksetzen?", isPresented: $showingClearSeenItemsAlert) {
@@ -155,11 +169,12 @@ struct SettingsView: View {
 }
 
 
-// MARK: - Preview
+// MARK: - Preview (Unchanged)
 
 #Preview {
     SettingsView().environmentObject(AppSettings())
 }
+
 // LicenseAndDependenciesView (unverändert)
 struct LicenseAndDependenciesView: View {
     var body: some View {
