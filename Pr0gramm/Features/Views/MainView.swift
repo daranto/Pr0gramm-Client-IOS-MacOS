@@ -4,10 +4,12 @@
 import SwiftUI
 
 /// Represents the main tabs of the application.
+// --- MODIFIED: Add Inbox Tab ---
 enum Tab: Int, CaseIterable, Identifiable {
-    case feed = 0, favorites = 1, search = 2, profile = 3, settings = 4
+    case feed = 0, favorites = 1, search = 2, inbox = 3, profile = 4, settings = 5 // Indices verschoben
     var id: Int { self.rawValue }
 }
+// --- END MODIFICATION ---
 
 /// The root view of the application, containing the main content area and the tab bar.
 /// It observes `NavigationService` to switch between different content views (Feed, Favorites, etc.).
@@ -26,6 +28,9 @@ struct MainView: View {
                 case .feed: FeedView(popToRootTrigger: feedPopToRootTrigger)
                 case .favorites: FavoritesView()
                 case .search: SearchView()
+                // --- NEW: Inbox Case ---
+                case .inbox: InboxView() // Die neue View
+                // --- END NEW ---
                 case .profile: ProfileView()
                 case .settings: SettingsView()
                 }
@@ -45,14 +50,15 @@ struct MainView: View {
     private var tabBarHStack: some View {
         HStack(spacing: 0) {
             ForEach(Tab.allCases) { tab in
-                 if tab == .favorites && !authService.isLoggedIn { /* Skip */ }
+                 // --- MODIFIED: Check for Inbox visibility ---
+                 if (tab == .favorites || tab == .inbox) && !authService.isLoggedIn { /* Skip */ }
+                 // --- END MODIFICATION ---
                  else {
                      Button { handleTap(on: tab) } label: {
-                         TabBarButtonLabel( // Use the updated label
+                         TabBarButtonLabel(
                              iconName: iconName(for: tab),
                              isSelected: selectedTab == tab
                          )
-                         // Add accessibility label for screen readers
                          .accessibilityLabel(label(for: tab))
                      }
                      .buttonStyle(.plain)
@@ -66,42 +72,62 @@ struct MainView: View {
     }
 
 
-    private func handleTap(on tab: Tab) { /* Unverändert */
+    private func handleTap(on tab: Tab) { // Unverändert
         if tab == .feed && selectedTab == .feed { print("Feed tab tapped again. Triggering pop to root."); feedPopToRootTrigger = UUID() }
         else { navigationService.selectedTab = tab; if navigationService.pendingSearchTag != nil && tab != .search { print("Clearing pending search tag due to manual tab navigation."); navigationService.pendingSearchTag = nil } }
     }
-    private func iconName(for tab: Tab) -> String { /* Unverändert */
-        switch tab { case .feed: return "square.grid.2x2.fill"; case .favorites: return "heart.fill"; case .search: return "magnifyingglass"; case .profile: return "person.crop.circle"; case .settings: return "gearshape.fill" }
+
+    // --- MODIFIED: Add Icon for Inbox ---
+    private func iconName(for tab: Tab) -> String {
+        switch tab {
+        case .feed: return "square.grid.2x2.fill"
+        case .favorites: return "heart.fill"
+        case .search: return "magnifyingglass"
+        case .inbox: return "envelope.fill" // Neues Icon
+        case .profile: return "person.crop.circle"
+        case .settings: return "gearshape.fill"
+        }
     }
-    // Label function is kept for accessibility, but not displayed visually anymore
+    // --- END MODIFICATION ---
+
+    // --- MODIFIED: Add Label for Inbox ---
     private func label(for tab: Tab) -> String {
-        switch tab { case .feed: return settings.feedType.displayName; case .favorites: return "Favoriten"; case .search: return "Suche"; case .profile: return "Profil"; case .settings: return "Einstellungen" }
+        switch tab {
+        case .feed: return settings.feedType.displayName
+        case .favorites: return "Favoriten"
+        case .search: return "Suche"
+        case .inbox: return "Nachrichten" // Neues Label
+        case .profile: return "Profil"
+        case .settings: return "Einstellungen"
+        }
     }
+    // --- END MODIFICATION ---
 }
 
-/// A reusable view for the content of a tab bar button (icon only).
+/// A reusable view for the content of a tab bar button (icon only). - Unverändert
 struct TabBarButtonLabel: View {
     let iconName: String
     let isSelected: Bool
 
     var body: some View {
         Image(systemName: iconName)
-             // --- MODIFIED: Use .titleFont (Mac: .title, iOS: .title3) ---
-            .font(UIConstants.titleFont) // Changed from .largeTitleFont
-             // --- END MODIFICATION ---
+            .font(UIConstants.titleFont)
             .symbolVariant(isSelected ? .fill : .none)
-            .padding(.vertical, 6) // Adjusted padding since text is gone
+            .padding(.vertical, 6)
             .foregroundStyle(isSelected ? Color.accentColor : .secondary)
     }
 }
 
-// MARK: - Preview
+// MARK: - Preview - Unverändert
 
 #Preview {
-    // Setup necessary services for the preview
     let settings = AppSettings()
     let authService = AuthService(appSettings: settings)
     let navigationService = NavigationService()
+
+    // Optional: Simulate logged in state for preview if needed
+    // authService.isLoggedIn = true
+    // authService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
 
     return MainView()
         .environmentObject(settings)

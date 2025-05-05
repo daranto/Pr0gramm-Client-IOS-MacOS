@@ -5,7 +5,7 @@ import Foundation
 import os
 import UIKit // For UIImage in CaptchaResponse
 
-// MARK: - API Data Structures (Top Level) - Unverändert
+// MARK: - API Data Structures (Top Level) - Unverändert bis Inbox
 
 /// Response structure for the `/items/info` endpoint.
 struct ItemsInfoResponse: Codable {
@@ -176,6 +176,46 @@ struct ProfileCommentLikesResponse: Codable {
     let hasNewer: Bool
 }
 
+// --- NEW: Structures for Inbox ---
+struct InboxResponse: Codable {
+    let messages: [InboxMessage]
+    let atEnd: Bool // Indicates if the end of the inbox has been reached
+    // API Spec mentions 'queue' but example response doesn't have it, make optional
+    let queue: InboxQueueInfo?
+}
+
+struct InboxQueueInfo: Codable {
+    let comments: Int?
+    let mentions: Int?
+    let follows: Int?
+    let messages: Int?
+    let notifications: Int?
+    let total: Int?
+}
+
+struct InboxMessage: Codable, Identifiable {
+    let id: Int // ID of the message/notification/comment itself
+    let type: String // "comment", "notification", "message", "follow"
+    let itemId: Int? // ID of the post if type is "comment"
+    let thumb: String? // Thumbnail of the post if type is "comment"
+    let flags: Int? // Flags of the post if type is "comment"
+    let name: String? // Username of the sender (commenter, PM sender, follower)
+    let mark: Int? // Mark of the sender
+    let senderId: Int // User ID of the sender (0 for system notifications)
+    let score: Int // Score of the comment (if type="comment"), otherwise likely 0
+    let created: Int // Timestamp when the notification/message was created
+    let message: String? // Content of the comment, notification, or PM
+    let read: Int // 0 (unread) or 1 (read)
+    let blocked: Int // 0 or 1
+
+    // Computed property for thumbnail URL (similar to ItemComment)
+    var itemThumbnailUrl: URL? {
+        guard let thumb = thumb, !thumb.isEmpty else { return nil }
+        return URL(string: "https://thumb.pr0gramm.com/")?.appendingPathComponent(thumb)
+    }
+}
+// --- END NEW ---
+
 
 // MARK: - APIService Class Definition
 
@@ -189,7 +229,7 @@ class APIService {
 
     // MARK: - API Methods
 
-    // ... (fetchItems, fetchItem, fetchFavorites, searchItems, fetchItemInfo, login, logout, fetchCaptcha, getProfileInfo, getUserCollections, syncUser, addToCollection, removeFromCollection, vote, postComment, fetchFavoritedComments - unverändert) ...
+    // ... (fetchItems, fetchItem, fetchFavorites, searchItems, fetchItemInfo, login, logout, fetchCaptcha, getProfileInfo, getUserCollections, syncUser, addToCollection, removeFromCollection, vote, postComment, fetchFavoritedComments, favComment, unfavComment - unverändert) ...
     func fetchItems(flags: Int, promoted: Int? = nil, user: String? = nil, tags: String? = nil, olderThanId: Int? = nil) async throws -> [Item] {
         let endpoint = "/items/get"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
@@ -433,8 +473,7 @@ class APIService {
         }
     }
 
-    // --- NEW: Functions for comment favoriting ---
-    func favComment(commentId: Int, nonce: String) async throws {
+    func favComment(commentId: Int, nonce: String) async throws { // Unverändert
         let endpoint = "/comments/fav"
         Self.logger.info("Attempting to favorite comment \(commentId).")
         let url = baseURL.appendingPathComponent(endpoint)
@@ -458,7 +497,7 @@ class APIService {
         }
     }
 
-    func unfavComment(commentId: Int, nonce: String) async throws {
+    func unfavComment(commentId: Int, nonce: String) async throws { // Unverändert
         let endpoint = "/comments/unfav"
         Self.logger.info("Attempting to unfavorite comment \(commentId).")
         let url = baseURL.appendingPathComponent(endpoint)
@@ -478,6 +517,38 @@ class APIService {
             Self.logger.info("Successfully unfavorited comment \(commentId).")
         } catch {
             Self.logger.error("Failed to unfavorite comment \(commentId): \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    // --- NEW: Inbox API Function ---
+    func fetchInboxMessages(older: Int? = nil) async throws -> InboxResponse {
+        let endpoint = "/inbox/all"
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+
+        if let olderTimestamp = older {
+            urlComponents.queryItems = [URLQueryItem(name: "older", value: String(olderTimestamp))]
+            Self.logger.info("Fetching inbox messages older than timestamp: \(olderTimestamp)")
+        } else {
+            Self.logger.info("Fetching initial inbox messages.")
+        }
+
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        let request = URLRequest(url: url)
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: InboxResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint + (older == nil ? " (initial)" : " (older: \(older!))"))
+            Self.logger.info("Successfully fetched \(apiResponse.messages.count) inbox messages. AtEnd: \(apiResponse.atEnd)")
+            return apiResponse
+        } catch {
+            Self.logger.error("Error fetching inbox messages: \(error.localizedDescription)")
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                 Self.logger.warning("Fetching inbox messages failed: User authentication required.")
+            }
             throw error
         }
     }
