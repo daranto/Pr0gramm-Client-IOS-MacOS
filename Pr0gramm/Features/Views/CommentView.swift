@@ -93,43 +93,6 @@ struct CommentView: View {
 
                 // Action Buttons (only if logged in)
                 if authService.isLoggedIn {
-                    // --- NEW: Upvote Button ---
-                    Button {
-                        Task {
-                             Self.logger.debug("Upvote button tapped for comment \(comment.id)")
-                             await authService.performCommentVote(commentId: comment.id, voteType: 1)
-                        }
-                    } label: {
-                        Image(systemName: currentVote == 1 ? "arrow.up.circle.fill" : "arrow.up.circle")
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(currentVote == 1 ? Color.white : Color.secondary,
-                                             currentVote == 1 ? Color.green : Color.secondary)
-                            .font(.caption) // Use caption font for consistency
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isVoting) // Disable while processing vote
-                    .padding(.leading, 5)
-                    // --- END NEW ---
-
-                    // --- NEW: Downvote Button ---
-                    Button {
-                         Task {
-                              Self.logger.debug("Downvote button tapped for comment \(comment.id)")
-                              await authService.performCommentVote(commentId: comment.id, voteType: -1)
-                         }
-                    } label: {
-                        Image(systemName: currentVote == -1 ? "arrow.down.circle.fill" : "arrow.down.circle")
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(currentVote == -1 ? Color.white : Color.secondary,
-                                             currentVote == -1 ? Color.red : Color.secondary)
-                            .font(.caption) // Use caption font
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isVoting) // Disable while processing vote
-                    .padding(.leading, 2) // Slightly less padding
-                    // --- END NEW ---
-
-
                     // Favorite Button
                     Button {
                         Task {
@@ -144,7 +107,7 @@ struct CommentView: View {
                         } else {
                             Image(systemName: isFavorited ? "heart.fill" : "heart")
                                 .foregroundColor(isFavorited ? .pink : .secondary)
-                                .font(.caption)
+                                .font(.body)
                         }
                     }
                     .buttonStyle(.plain)
@@ -154,7 +117,7 @@ struct CommentView: View {
                     // Reply Button
                     Button(action: onReply) {
                         Image(systemName: "arrowshape.turn.up.left")
-                            .font(.caption)
+                            .font(.body)
                             .foregroundColor(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -167,11 +130,47 @@ struct CommentView: View {
 
 
             if !isCollapsed {
-                Text(attributedCommentContent)
-                    .foregroundColor(.primary)
-                    .lineLimit(nil)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, hasChildren ? 18 : 20)
+                HStack(alignment: .top, spacing: 8) {
+                    if authService.isLoggedIn {
+                        VStack(spacing: 6) {
+                            Button {
+                                 Task {
+                                      Self.logger.debug("Upvote button tapped for comment \(comment.id)")
+                                      await authService.performCommentVote(commentId: comment.id, voteType: 1)
+                                 }
+                            } label: {
+                                Image(systemName: currentVote == 1 ? "arrow.up.circle.fill" : "arrow.up.circle")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(currentVote == 1 ? Color.white : Color.secondary,
+                                                     currentVote == 1 ? Color.green : Color.secondary)
+                                    .font(.body)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isVoting)
+
+                            Button {
+                                 Task {
+                                      Self.logger.debug("Downvote button tapped for comment \(comment.id)")
+                                      await authService.performCommentVote(commentId: comment.id, voteType: -1)
+                                 }
+                            } label: {
+                                Image(systemName: currentVote == -1 ? "arrow.down.circle.fill" : "arrow.down.circle")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(currentVote == -1 ? Color.white : Color.secondary,
+                                                     currentVote == -1 ? Color.red : Color.secondary)
+                                    .font(.body)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isVoting)
+                        }
+                    }
+
+                    Text(attributedCommentContent)
+                        .foregroundColor(.primary)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.leading, hasChildren ? 18 : 20)
             }
         }
         .padding(.vertical, 6)

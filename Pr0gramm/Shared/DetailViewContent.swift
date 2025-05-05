@@ -112,7 +112,7 @@ struct DetailViewContent: View {
         }
     }
 
-    private let actionIconFont: Font = .title2
+    private let actionIconFont: Font = .title
 
     @ViewBuilder private var voteCounterView: some View {
         let benis = item.up - item.down
@@ -128,7 +128,7 @@ struct DetailViewContent: View {
             .disabled(!authService.isLoggedIn)
 
             Text("\(benis)")
-                .font(UIConstants.titleFont.weight(.medium))
+                .font(.title.weight(.bold))
                 .foregroundColor(.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
