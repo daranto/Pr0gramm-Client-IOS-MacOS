@@ -152,36 +152,44 @@ struct InboxView: View {
     }
 
     // MARK: - Data Loading Methods
-    @MainActor
-    func refreshMessages() async {
-        InboxView.logger.info("Refreshing inbox messages...")
-        guard authService.isLoggedIn else {
-            InboxView.logger.warning("Cannot refresh inbox: User not logged in.")
-            self.messages = []; self.errorMessage = "Bitte anmelden."
-            return
-        }
+      @MainActor
+      func refreshMessages() async {
+          InboxView.logger.info("Refreshing inbox messages...")
+          guard authService.isLoggedIn else {
+              InboxView.logger.warning("Cannot refresh inbox: User not logged in.")
+              self.messages = []; self.errorMessage = "Bitte anmelden."
+              return
+          }
 
-        self.isLoadingNavigationTarget = false; self.navigationTargetId = nil
-        self.isLoading = true; self.errorMessage = nil
+          self.isLoadingNavigationTarget = false; self.navigationTargetId = nil
+          self.isLoading = true; self.errorMessage = nil
 
-        defer { Task { @MainActor in self.isLoading = false } }
+          // --- NEW: Trigger count update on refresh ---
+          Task { await authService.updateUnreadCount() }
+          // --- END NEW ---
 
-        do {
-            let response = try await apiService.fetchInboxMessages(older: nil) // Initial load
-            guard !Task.isCancelled else { return }
-            self.messages = response.messages.sorted { $0.created > $1.created } // Sortiere nach Datum absteigend
-            self.canLoadMore = !response.atEnd
-            InboxView.logger.info("Fetched \(response.messages.count) initial inbox messages. AtEnd: \(response.atEnd)")
-        } catch let error as URLError where error.code == .userAuthenticationRequired {
-            InboxView.logger.error("Inbox API fetch failed: Authentication required.")
-            self.errorMessage = "Sitzung abgelaufen."; self.messages = []; self.canLoadMore = false
-            await authService.logout()
-        } catch {
-            InboxView.logger.error("Inbox API fetch failed: \(error.localizedDescription)")
-            self.errorMessage = "Fehler: \(error.localizedDescription)"; self.messages = []; self.canLoadMore = false
-        }
-    }
+          defer { Task { @MainActor in self.isLoading = false } }
 
+          do {
+              let response = try await apiService.fetchInboxMessages(older: nil)
+              guard !Task.isCancelled else { return }
+
+              self.messages = response.messages.sorted { $0.created > $1.created }
+              self.canLoadMore = !response.atEnd
+              // --- We already update the count via the separate task ---
+              // self.authService.unreadMessageCount = response.queue?.total ?? 0 // Remove direct update here
+              InboxView.logger.info("Fetched \(response.messages.count) initial inbox messages. AtEnd: \(response.atEnd)")
+
+          } catch let error as URLError where error.code == .userAuthenticationRequired {
+              InboxView.logger.error("Inbox API fetch failed: Authentication required.")
+              self.errorMessage = "Sitzung abgelaufen."; self.messages = []; self.canLoadMore = false
+              await authService.logout()
+          } catch {
+              InboxView.logger.error("Inbox API fetch failed: \(error.localizedDescription)")
+              self.errorMessage = "Fehler: \(error.localizedDescription)"; self.messages = []; self.canLoadMore = false
+          }
+      }
+    
     @MainActor
     func loadMoreMessages() async {
         guard authService.isLoggedIn else { return }
@@ -281,8 +289,9 @@ struct InboxMessageRow: View {
                      .foregroundColor(.secondary)
             } else {
                 // Platzhalter für Notifications/Messages ohne Bild
-                Rectangle().fill(Color.gray.opacity(0.1))
-                     .frame(width: 50, height: 50).cornerRadius(4)
+                Image(systemName: "bell.circle.fill")
+                    .resizable().scaledToFit().frame(width: 50, height: 50)
+                    .foregroundColor(.secondary)
             }
 
             // Inhalt und Metadaten
@@ -303,15 +312,14 @@ struct InboxMessageRow: View {
                      }
                 }
 
-                // Nachrichteninhalt (gekürzt)
+                // Nachrichteninhalt (nicht mehr abgeschnitten)
                 Text(message.message ?? "")
                     .font(.subheadline)
-                    .foregroundColor(message.read == 1 ? .secondary : .primary) // Gelesene Nachrichten leicht ausgrauen
-                    .lineLimit(3)
+                    .foregroundColor(.primary)
             }
         }
         .padding(.vertical, 5)
-        .opacity(message.read == 1 ? 0.8 : 1.0) // Gelesene Nachrichten leicht transparenter
+        // .opacity(message.read == 1 ? 0.8 : 1.0) // Gelesene Nachrichten leicht transparenter (ENTFERNT)
     }
 }
 
@@ -354,7 +362,7 @@ private struct InboxPreviewWrapper: View {
         let msg2 = InboxMessage(id: 2, type: "notification", itemId: nil, thumb: nil, flags: nil, name: nil, mark: nil, senderId: 0, score: 0, created: Int(Date().timeIntervalSince1970 - 3600), message: "Systemnachricht: Dein pr0mium läuft bald ab!", read: 1, blocked: 0)
         let msg3 = InboxMessage(id: 3, type: "follow", itemId: nil, thumb: nil, flags: nil, name: "FollowerDude", mark: 1, senderId: 102, score: 0, created: Int(Date().timeIntervalSince1970 - 7200), message: nil, read: 0, blocked: 0)
 
-        var view = InboxView()
+        let view = InboxView()
         view.messages = [msg1, msg2, msg3]
 
         return NavigationStack {

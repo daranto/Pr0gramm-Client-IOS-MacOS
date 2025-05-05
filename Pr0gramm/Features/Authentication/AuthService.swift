@@ -19,9 +19,7 @@ class AuthService: ObservableObject {
     private let sessionUsernameKey = "pr0grammUsername_v1"
     private let sessionCookieName = "me"
     private let userVotesKey = "pr0grammUserVotes_v1"
-    // --- NEW: Key for favorited comments ---
     private let favoritedCommentsKey = "pr0grammFavoritedComments_v1"
-    // --- END NEW ---
 
     // MARK: - Published Properties
     @Published var isLoggedIn: Bool = false
@@ -35,21 +33,24 @@ class AuthService: ObservableObject {
     @Published private(set) var captchaImage: UIImage? = nil
 
     @Published var favoritedItemIDs: Set<Int> = []
-    @Published var votedItemStates: [Int: Int] = [:] // ItemID -> Vote (-1, 0, 1)
-    @Published private(set) var isVoting: [Int: Bool] = [:] // Track voting progress per item
+    @Published var votedItemStates: [Int: Int] = [:]
+    @Published private(set) var isVoting: [Int: Bool] = [:]
 
-    // --- NEW: State for Comment Favorites ---
     @Published var favoritedCommentIDs: Set<Int> = []
-    @Published private(set) var isFavoritingComment: [Int: Bool] = [:] // Track fav progress per comment
+    @Published private(set) var isFavoritingComment: [Int: Bool] = [:]
+
+    // --- NEW: State for unread message count ---
+    @Published var unreadMessageCount: Int = 0
     // --- END NEW ---
 
     nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AuthService")
 
     init(appSettings: AppSettings) {
         self.appSettings = appSettings
-        loadVotedStates() // Load persisted votes on init
-        loadFavoritedCommentIDs() // Load persisted comment favs on init
+        loadVotedStates()
+        loadFavoritedCommentIDs()
         AuthService.logger.info("AuthService initialized. Loaded \(self.votedItemStates.count) vote states and \(self.favoritedCommentIDs.count) favorited comment IDs.")
+        // Initial count update might depend on login status check later
     }
 
     // MARK: - Public Methods (Login, Logout, Check Status etc.)
@@ -64,11 +65,9 @@ class AuthService: ObservableObject {
         guard !isLoading else { AuthService.logger.warning("Login attempt skipped: Already loading."); return }
         AuthService.logger.info("Attempting login for user: \(username)")
         await MainActor.run {
-            // Reset state before login attempt
             isLoading = true; loginError = nil; self.userNonce = nil; self.favoritesCollectionId = nil; self.favoritedItemIDs = []; self.votedItemStates = [:]; self.isVoting = [:]
-            // --- NEW: Reset comment favs on login ---
             self.favoritedCommentIDs = []; self.isFavoritingComment = [:]
-            // --- END NEW ---
+            self.unreadMessageCount = 0 // Reset count on login attempt
             AuthService.logger.debug("Resetting user-specific states for login.")
         }
 
@@ -98,18 +97,20 @@ class AuthService: ObservableObject {
                 AuthService.logger.info("Login successful via API for user: \(username)")
                 let profileLoaded = await loadProfileInfo(username: username, setLoadingState: false)
                 var collectionLoaded = false
-                var favoritesLoaded = false // Track favorite loading
+                var favoritesLoaded = false
+                var countLoaded = false // Track count loading
                 if profileLoaded {
                     collectionLoaded = await fetchUserCollections()
                     if collectionLoaded {
-                        favoritesLoaded = await loadInitialFavorites() // Load favorite IDs
-                        loadVotedStates() // Load votes
-                        loadFavoritedCommentIDs() // Load comment favs
-                        AuthService.logger.info("Loaded \(self.votedItemStates.count) persisted vote states and \(self.favoritedCommentIDs.count) comment fav IDs after successful login.")
+                        favoritesLoaded = await loadInitialFavorites()
+                        loadVotedStates()
+                        loadFavoritedCommentIDs()
+                        countLoaded = await updateUnreadCount() // Load count after success
+                        AuthService.logger.info("Loaded states after successful login. Votes: \(self.votedItemStates.count), Comment Favs: \(self.favoritedCommentIDs.count), Unread: \(self.unreadMessageCount)")
                     }
                 }
 
-                if profileLoaded && collectionLoaded && favoritesLoaded && self.userNonce != nil {
+                if profileLoaded && collectionLoaded && favoritesLoaded && countLoaded && self.userNonce != nil { // Check countLoaded too
                     AuthService.logger.debug("[LOGIN SUCCESS] Cookies BEFORE saving to Keychain:")
                     await logAllCookiesForPr0gramm()
                     let cookieSaved = await findAndSaveSessionCookie()
@@ -120,7 +121,7 @@ class AuthService: ObservableObject {
                         else { AuthService.logger.warning("Failed to save session cookie (\(cookieSaved)) or username (\(usernameSaved)) to keychain.") }
                         self.isLoggedIn = true
                         self.needsCaptcha = false; self.captchaToken = nil; self.captchaImage = nil
-                        AuthService.logger.info("User \(self.currentUser!.name) is now logged in. Nonce available: true. Fav Collection ID: \(self.favoritesCollectionId ?? -1). Badges: \(self.currentUser?.badges?.count ?? 0). Initial Favs loaded: \(self.favoritedItemIDs.count). Initial Votes loaded: \(self.votedItemStates.count). Initial Comment Favs: \(self.favoritedCommentIDs.count)")
+                        AuthService.logger.info("User \(self.currentUser!.name) is now logged in. Nonce: \(self.userNonce != nil), FavCol: \(self.favoritesCollectionId ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), Unread: \(self.unreadMessageCount)")
                     }
                 } else {
                     await MainActor.run {
@@ -128,8 +129,9 @@ class AuthService: ObservableObject {
                         if !profileLoaded { self.loginError = "Login erfolgreich, aber Profildaten konnten nicht geladen werden." }
                         else if !collectionLoaded { self.loginError = "Login erfolgreich, aber Favoriten-Ordner konnte nicht ermittelt werden." }
                         else if !favoritesLoaded { self.loginError = "Login erfolgreich, aber Favoriten konnten nicht initial geladen werden." }
+                        else if !countLoaded { self.loginError = "Login erfolgreich, aber Nachrichtenzähler konnte nicht geladen werden." } // Add check
                         else { self.loginError = "Login erfolgreich, aber Session-Daten (Nonce) konnten nicht gelesen werden." }
-                        AuthService.logger.error("Login sequence failed after API success. Profile: \(profileLoaded), Collections: \(collectionLoaded), Favorites: \(favoritesLoaded), Nonce: \(self.userNonce != nil)")
+                        AuthService.logger.error("Login sequence failed. Profile: \(profileLoaded), Collections: \(collectionLoaded), Favorites: \(favoritesLoaded), Count: \(countLoaded), Nonce: \(self.userNonce != nil)")
                     }
                     await performLogoutCleanup()
                 }
@@ -183,7 +185,6 @@ class AuthService: ObservableObject {
     func checkInitialLoginStatus() async { // Unverändert
         AuthService.logger.info("Checking initial login status...")
         await MainActor.run {
-            // Reset states, but keep loaded votes/comment favs for now
             isLoading = true; self.userNonce = nil; self.favoritesCollectionId = nil; self.favoritedItemIDs = []
         }
 
@@ -191,6 +192,7 @@ class AuthService: ObservableObject {
         var collectionLoaded = false
         var nonceAvailable = false
         var favoritesLoaded = false
+        var countLoaded = false // Track count loading
 
         AuthService.logger.debug("[SESSION RESTORE START] Cookies BEFORE restoring from Keychain:")
         await logAllCookiesForPr0gramm()
@@ -208,32 +210,29 @@ class AuthService: ObservableObject {
                  collectionLoaded = await fetchUserCollections()
                  if collectionLoaded {
                       favoritesLoaded = await loadInitialFavorites()
-                      // Votes & Comment Favs already loaded in init
+                      countLoaded = await updateUnreadCount() // Load count
                  }
              }
 
-             if !sessionValidAndProfileLoaded || !collectionLoaded || !favoritesLoaded || !nonceAvailable {
-                 AuthService.logger.warning("Cookie/Username loaded, but subsequent fetch/sync failed. Profile: \(sessionValidAndProfileLoaded), Collections: \(collectionLoaded), Favorites: \(favoritesLoaded), Nonce: \(nonceAvailable). Session might be invalid.")
-                 await performLogoutCleanup() // Cleanup includes clearing votes & comment favs
-                 sessionValidAndProfileLoaded = false
-                 collectionLoaded = false
-                 nonceAvailable = false
-                 favoritesLoaded = false
+             if !sessionValidAndProfileLoaded || !collectionLoaded || !favoritesLoaded || !nonceAvailable || !countLoaded { // Check countLoaded
+                 AuthService.logger.warning("Cookie/Username loaded, but subsequent fetch failed. Profile: \(sessionValidAndProfileLoaded), Collections: \(collectionLoaded), Favorites: \(favoritesLoaded), Nonce: \(nonceAvailable), Count: \(countLoaded). Session invalid.")
+                 await performLogoutCleanup()
+                 sessionValidAndProfileLoaded = false; collectionLoaded = false; nonceAvailable = false; favoritesLoaded = false; countLoaded = false
              }
         } else {
              AuthService.logger.info("No session cookie or username found in keychain.")
              await MainActor.run { self.currentUser = nil }
-             sessionValidAndProfileLoaded = false; collectionLoaded = false; nonceAvailable = false; favoritesLoaded = false
-             await performLogoutCleanup() // Cleanup includes clearing votes & comment favs
+             sessionValidAndProfileLoaded = false; collectionLoaded = false; nonceAvailable = false; favoritesLoaded = false; countLoaded = false
+             await performLogoutCleanup()
         }
 
-         let finalIsLoggedIn = sessionValidAndProfileLoaded && collectionLoaded && favoritesLoaded && nonceAvailable
+         let finalIsLoggedIn = sessionValidAndProfileLoaded && collectionLoaded && favoritesLoaded && nonceAvailable && countLoaded
          await MainActor.run {
              self.isLoggedIn = finalIsLoggedIn
              if self.isLoggedIn {
-                  AuthService.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce available: true. Fav Collection ID: \(self.favoritesCollectionId ?? -1). Badges: \(self.currentUser?.badges?.count ?? 0). Initial Favs loaded: \(self.favoritedItemIDs.count). Initial Votes loaded: \(self.votedItemStates.count). Initial Comment Favs: \(self.favoritedCommentIDs.count)")
+                  AuthService.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce: \(self.userNonce != nil), FavCol: \(self.favoritesCollectionId ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), Unread: \(self.unreadMessageCount)")
              } else {
-                 AuthService.logger.info("Initial check: User is not logged in (or session/profile/collection/favorites load/nonce extraction failed).")
+                 AuthService.logger.info("Initial check: User is not logged in.")
              }
              isLoading = false
          }
@@ -281,7 +280,7 @@ class AuthService: ObservableObject {
         }
     }
 
-    // --- NEW: Method for comment favoriting ---
+    // MARK: - Comment Favoriting Method (Unverändert)
     func performCommentFavToggle(commentId: Int) async {
         guard isLoggedIn, let nonce = userNonce else {
             AuthService.logger.warning("Comment favoriting skipped: User not logged in or nonce missing.")
@@ -298,7 +297,6 @@ class AuthService: ObservableObject {
         AuthService.logger.debug("Setting isFavoritingComment=true for comment \(commentId)")
         isFavoritingComment[commentId] = true
 
-        // Optimistic UI update
         if targetState {
             favoritedCommentIDs.insert(commentId)
             AuthService.logger.debug("Optimistic UI: Added comment \(commentId) to favorites.")
@@ -306,7 +304,7 @@ class AuthService: ObservableObject {
             favoritedCommentIDs.remove(commentId)
             AuthService.logger.debug("Optimistic UI: Removed comment \(commentId) from favorites.")
         }
-        saveFavoritedCommentIDs() // Save optimistic state immediately
+        saveFavoritedCommentIDs()
 
         defer {
             Task { @MainActor in
@@ -323,26 +321,53 @@ class AuthService: ObservableObject {
                 try await apiService.unfavComment(commentId: commentId, nonce: nonce)
                 AuthService.logger.info("Successfully unfavorited comment \(commentId) via API.")
             }
-            // API call successful, optimistic state is now confirmed.
-            // No need to save again unless API returned an unexpected state.
         } catch let error as URLError where error.code == .userAuthenticationRequired {
             AuthService.logger.error("Comment favoriting failed for comment \(commentId): Authentication required. Session might be invalid.")
-            // Rollback optimistic UI
-            if targetState { favoritedCommentIDs.remove(commentId) }
-            else { favoritedCommentIDs.insert(commentId) }
-            saveFavoritedCommentIDs() // Save rolled-back state
+            if targetState { favoritedCommentIDs.remove(commentId) } else { favoritedCommentIDs.insert(commentId) }
+            saveFavoritedCommentIDs()
             await logout()
         } catch {
             AuthService.logger.error("Comment favoriting failed for comment \(commentId): \(error.localizedDescription)")
-            // Rollback optimistic UI
-            if targetState { favoritedCommentIDs.remove(commentId) }
-            else { favoritedCommentIDs.insert(commentId) }
-            saveFavoritedCommentIDs() // Save rolled-back state
+            if targetState { favoritedCommentIDs.remove(commentId) } else { favoritedCommentIDs.insert(commentId) }
+            saveFavoritedCommentIDs()
+        }
+    }
+
+
+    // MARK: - Private Helper Methods
+
+    // --- NEW: Function to update unread count ---
+    @discardableResult // Allow discarding the Bool result if not needed
+    func updateUnreadCount() async -> Bool {
+        guard isLoggedIn else {
+            AuthService.logger.debug("Skipping unread count update: User not logged in.")
+            if unreadMessageCount != 0 {
+                await MainActor.run { self.unreadMessageCount = 0 } // Ensure count is 0 if logged out
+            }
+            return true // Considered success in this context
+        }
+        AuthService.logger.debug("Updating unread message count...")
+        do {
+            // Fetch inbox data (we need the 'queue' part of the response)
+            let response = try await apiService.fetchInboxMessages(older: nil) // Fetch newest page
+            guard !Task.isCancelled else { return false }
+            let newCount = response.queue?.total ?? 0
+            await MainActor.run {
+                if self.unreadMessageCount != newCount {
+                     self.unreadMessageCount = newCount
+                     AuthService.logger.info("Unread message count updated to: \(newCount)")
+                } else {
+                     AuthService.logger.debug("Unread message count remains: \(newCount)")
+                }
+            }
+            return true
+        } catch {
+            AuthService.logger.error("Failed to update unread message count: \(error.localizedDescription)")
+            // Don't reset count on error, keep last known value
+            return false
         }
     }
     // --- END NEW ---
-
-    // MARK: - Private Helper Methods (Persistence, Cleanup, etc.)
 
     private func loadVotedStates() { // Unverändert
         if let savedVotes = UserDefaults.standard.dictionary(forKey: userVotesKey) as? [String: Int] {
@@ -364,8 +389,7 @@ class AuthService: ObservableObject {
         AuthService.logger.trace("Saved \(stringKeyedVotes.count) vote states to UserDefaults.")
     }
 
-    // --- NEW: Persistence for favorited comment IDs ---
-    private func loadFavoritedCommentIDs() {
+    private func loadFavoritedCommentIDs() { // Unverändert
         if let savedIDs = UserDefaults.standard.array(forKey: favoritedCommentsKey) as? [Int] {
             self.favoritedCommentIDs = Set(savedIDs)
             AuthService.logger.debug("Loaded \(self.favoritedCommentIDs.count) favorited comment IDs from UserDefaults.")
@@ -375,13 +399,11 @@ class AuthService: ObservableObject {
         }
     }
 
-    private func saveFavoritedCommentIDs() {
+    private func saveFavoritedCommentIDs() { // Unverändert
         let idsToSave = Array(self.favoritedCommentIDs)
         UserDefaults.standard.set(idsToSave, forKey: favoritedCommentsKey)
         AuthService.logger.trace("Saved \(idsToSave.count) favorited comment IDs to UserDefaults.")
     }
-    // --- END NEW ---
-
 
     @discardableResult
     private func loadInitialFavorites() async -> Bool { // Unverändert
@@ -497,16 +519,15 @@ class AuthService: ObservableObject {
         }
     }
 
-    private func performLogoutCleanup() async { // Updated to clear comment favs
+    private func performLogoutCleanup() async { // Updated to reset unread count
         AuthService.logger.debug("Performing local logout cleanup.")
         await MainActor.run {
             self.isLoggedIn = false; self.currentUser = nil; self.userNonce = nil;
             self.favoritesCollectionId = nil; self.needsCaptcha = false; self.captchaToken = nil;
             self.captchaImage = nil; self.favoritedItemIDs = [];
             self.votedItemStates = [:]; self.isVoting = [:]
-            // --- NEW: Clear comment favs ---
             self.favoritedCommentIDs = []; self.isFavoritingComment = [:]
-            // --- END NEW ---
+            self.unreadMessageCount = 0 // Reset count on logout
             self.appSettings.showSFW = true; self.appSettings.showNSFW = false; self.appSettings.showNSFL = false;
             self.appSettings.showNSFP = false; self.appSettings.showPOL = false
         }
@@ -514,9 +535,7 @@ class AuthService: ObservableObject {
         _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey)
         _ = keychainService.deleteUsername(forKey: sessionUsernameKey)
         UserDefaults.standard.removeObject(forKey: userVotesKey)
-        // --- NEW: Remove persisted comment favs ---
         UserDefaults.standard.removeObject(forKey: favoritedCommentsKey)
-        // --- END NEW ---
         AuthService.logger.info("Reset content filters to SFW-only and cleared persisted votes and comment favorites.")
     }
 
