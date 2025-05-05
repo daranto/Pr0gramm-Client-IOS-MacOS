@@ -41,7 +41,7 @@ struct DetailViewContent: View {
     let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
     let player: AVPlayer?
-    let currentSubtitleText: String? // Now receives subtitle text
+    let currentSubtitleText: String?
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
 
@@ -72,8 +72,8 @@ struct DetailViewContent: View {
 
     // MARK: - Computed View Properties
     @ViewBuilder private var mediaContentInternal: some View {
-        ZStack(alignment: .bottom) { // Wrap in ZStack for subtitle overlay
-            Group { // Group existing media types
+        ZStack(alignment: .bottom) {
+            Group {
                 if item.isVideo {
                     if let player = player {
                         CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler, onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen, horizontalSizeClass: horizontalSizeClass)
@@ -86,7 +86,6 @@ struct DetailViewContent: View {
                 }
             }
 
-            // Subtitle Overlay
             if let subtitle = currentSubtitleText, !subtitle.isEmpty {
                  Text(subtitle)
                      .font(UIConstants.footnoteFont.weight(.medium))
@@ -102,20 +101,8 @@ struct DetailViewContent: View {
                      .id("subtitle_\(subtitle)")
             }
         }
-        // Seen Checkmark Overlay
-        .overlay(alignment: .topTrailing) {
-            if settings.seenItemIDs.contains(item.id) {
-                Image(systemName: "checkmark.circle.fill")
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, Color.accentColor)
-                    .font(.title2)
-                    .padding(8)
-                    .padding(8)
-            }
-        }
     }
 
-    // voteCounterView, favoriteButton, shareButton, infoAndTagsContent, TagView, commentsContent remain unchanged
     @ViewBuilder private var voteCounterView: some View {
         let benis = item.up - item.down
         VStack(alignment: .leading, spacing: 2) {
@@ -136,17 +123,24 @@ struct DetailViewContent: View {
         label: { Image(systemName: "square.and.arrow.up").imageScale(.large).foregroundColor(.secondary).frame(width: 44, height: 44).contentShape(Rectangle()) }
         .buttonStyle(.plain)
     }
+
+    // --- REMOVED seenStatusIcon ViewBuilder ---
+
     @ViewBuilder private var infoAndTagsContent: some View {
         HStack(alignment: .top, spacing: 15) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                // --- RESTORED previous HStack spacing and padding ---
+                HStack(alignment: .firstTextBaseline, spacing: 8) { // Using 8 spacing again
                     voteCounterView
                     if authService.isLoggedIn { favoriteButton.padding(.top, 5) }
                     shareButton.padding(.top, 5)
+                    // seenStatusIcon removed from here
                     Spacer()
                 }
-            }.fixedSize(horizontal: true, vertical: false)
+                // --- END RESTORATION ---
+            }.fixedSize(horizontal: true, vertical: false) // Restore fixedSize if needed
 
+            // Tag Section (unchanged)
             Group {
                 switch infoLoadingStatus {
                 case .loaded:
@@ -254,9 +248,8 @@ fileprivate extension UIFont {
 }
 
 
-// MARK: - Previews
+// MARK: - Previews (Unchanged)
 #Preview("Compact - Limited Tags") {
-    // --- Wrapper View für Preview Setup ---
     struct PreviewWrapper: View {
         @State var previewLinkTarget: PreviewLinkTarget? = nil
         @State var fullscreenTarget: FullscreenImageTarget? = nil
@@ -270,9 +263,7 @@ fileprivate extension UIFont {
         func isCollapsed(_ id: Int) -> Bool { collapsedIDs.contains(id) }
 
         var body: some View {
-            // --- FIX: Define Sample Data Here, add subtitles: nil ---
             let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, subtitles: nil, favorited: true)
-            // --- END FIX ---
             let previewHandler = KeyboardActionHandler()
             let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "TopTag1"), ItemTag(id: 2, confidence: 0.8, tag: "TopTag2"), ItemTag(id: 3, confidence: 0.7, tag: "TopTag3"), ItemTag(id: 4, confidence: 0.6, tag: "beim lesen programmieren gelernt") ]
             let sampleComments = [ ItemComment(id: 1, parent: 0, content: "Kommentar 1 http://pr0gramm.com/new/54321", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1), ItemComment(id: 2, parent: 1, content: "Antwort 1.1", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "User2", mark: 2) ]
@@ -311,7 +302,8 @@ fileprivate extension UIFont {
                          authService.isLoggedIn = true
                          authService.favoritesCollectionId = 1234
                          authService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil)
-                         await settings.markItemAsSeen(id: 2)
+                         // Mark seen items for preview state
+                         await settings.markItemsAsSeen(ids: [1,2]) // Mark items 1 and 2 as seen
                          print("Preview Task: AuthService configured and item marked as seen.")
                     }
                 }
@@ -336,6 +328,6 @@ fileprivate extension UIFont {
         topLevelComments.forEach { traverse(commentId: $0.id, currentLevel: 0) }
         return flatList
     }
-    return PreviewWrapper() // Return the wrapper
+    return PreviewWrapper()
 }
 // --- END OF COMPLETE FILE ---
