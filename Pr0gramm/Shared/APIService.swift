@@ -26,27 +26,37 @@ struct ItemComment: Codable, Identifiable, Hashable {
     let created: Int
     let up: Int
     let down: Int
-    // --- FIX: Make confidence optional ---
     let confidence: Double?
-    // --- END FIX ---
     let name: String
     let mark: Int
     let itemId: Int?
+    // --- NEW: Add thumb property ---
+    let thumb: String? // Thumbnail of the item the comment belongs to
+    // --- END NEW ---
 
-    // --- FIX: Update initializer to accept optional confidence ---
-    init(id: Int, parent: Int?, content: String, created: Int, up: Int, down: Int, confidence: Double?, name: String, mark: Int, itemId: Int? = nil) {
+    // --- MODIFIED: Update initializer ---
+    init(id: Int, parent: Int?, content: String, created: Int, up: Int, down: Int, confidence: Double?, name: String, mark: Int, itemId: Int? = nil, thumb: String? = nil) {
         self.id = id
         self.parent = parent
         self.content = content
         self.created = created
         self.up = up
         self.down = down
-        self.confidence = confidence // Assign optional confidence
+        self.confidence = confidence
         self.name = name
         self.mark = mark
         self.itemId = itemId
+        self.thumb = thumb // Initialize new property
     }
-    // --- END FIX ---
+    // --- END MODIFICATION ---
+
+    // --- NEW: Computed property for thumbnail URL ---
+    var itemThumbnailUrl: URL? {
+        guard let thumb = thumb, !thumb.isEmpty else { return nil }
+        // Assuming thumbnails always come from thumb.pr0gramm.com
+        return URL(string: "https://thumb.pr0gramm.com/")?.appendingPathComponent(thumb)
+    }
+    // --- END NEW ---
 }
 /// Generic response structure for endpoints returning a list of items (e.g., `/items/get`).
 struct ApiResponse: Codable {
@@ -150,9 +160,7 @@ struct PostCommentResultComment: Codable, Identifiable, Hashable {
     let created: Int
     let up: Int
     let down: Int
-    // --- Keep confidence non-optional here, assuming API provides it ---
     let confidence: Double
-    // --- End change ---
     let name: String
     let mark: Int
 }
@@ -170,7 +178,7 @@ struct CommentsPostErrorResponse: Codable {
 
 // Structure for Comment Likes Response
 struct ProfileCommentLikesResponse: Codable {
-    let comments: [ItemComment] // Uses ItemComment which now has optional confidence
+    let comments: [ItemComment]
     let hasOlder: Bool
     let hasNewer: Bool
 }
