@@ -62,6 +62,12 @@ struct DetailViewContent: View {
     let isCommentCollapsed: (Int) -> Bool
     let toggleCollapseAction: (Int) -> Void
 
+    // --- NEW: Add vote state and actions ---
+    let currentVote: Int // -1, 0, or 1
+    let upvoteAction: () -> Void
+    let downvoteAction: () -> Void
+    // --- END NEW ---
+
     @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var settings: AppSettings
@@ -69,6 +75,7 @@ struct DetailViewContent: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
     @State private var isProcessingFavorite = false
     @State private var showingShareOptions = false
+
 
     // MARK: - Computed View Properties
     @ViewBuilder private var mediaContentInternal: some View {
@@ -103,41 +110,51 @@ struct DetailViewContent: View {
         }
     }
 
-    // --- MODIFICATION START: Icon Font Size ---
-    // Define a consistent font size for action icons
-    private let actionIconFont: Font = .title2 // Explicitly use .title2
+    private let actionIconFont: Font = .title2
 
+    // --- MODIFICATION START: Interactive vote icons ---
     @ViewBuilder private var voteCounterView: some View {
         let benis = item.up - item.down
         HStack(spacing: 6) {
-            // Upvote Icon
-            Image(systemName: "arrow.up.circle.fill")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, .green)
-                .font(actionIconFont) // Apply consistent font
+            // Upvote Button
+            Button(action: upvoteAction) { // Call upvote action
+                Image(systemName: currentVote == 1 ? "arrow.up.circle.fill" : "arrow.up.circle") // Filled or outline
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(currentVote == 1 ? Color.white : Color.secondary, // Inner color
+                                     currentVote == 1 ? Color.green : Color.secondary) // Outer ring/fill
+                    .font(actionIconFont)
+            }
+            .buttonStyle(.plain) // Remove button styling
+            .disabled(!authService.isLoggedIn) // Disable if not logged in
 
             // Benis Score
             Text("\(benis)")
-                .font(UIConstants.titleFont.weight(.medium)) // Font unchanged
+                .font(UIConstants.titleFont.weight(.medium))
                 .foregroundColor(.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
 
-            // Downvote Icon
-            Image(systemName: "arrow.down.circle.fill")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, .red)
-                .font(actionIconFont) // Apply consistent font
+            // Downvote Button
+            Button(action: downvoteAction) { // Call downvote action
+                Image(systemName: currentVote == -1 ? "arrow.down.circle.fill" : "arrow.down.circle") // Filled or outline
+                    .symbolRenderingMode(.palette)
+                     .foregroundStyle(currentVote == -1 ? Color.white : Color.secondary, // Inner color
+                                      currentVote == -1 ? Color.red : Color.secondary) // Outer ring/fill
+                    .font(actionIconFont)
+            }
+            .buttonStyle(.plain) // Remove button styling
+            .disabled(!authService.isLoggedIn) // Disable if not logged in
         }
     }
+    // --- MODIFICATION END ---
 
     @ViewBuilder private var favoriteButton: some View {
         Button { Task { isProcessingFavorite = true; await toggleFavoriteAction(); try? await Task.sleep(for: .milliseconds(100)); isProcessingFavorite = false } }
         label: {
             Image(systemName: isFavorited ? "heart.fill" : "heart")
-                .font(actionIconFont) // Apply consistent font
+                .font(actionIconFont)
                 .foregroundColor(isFavorited ? .pink : .secondary)
-                .frame(width: 44, height: 44) // Keep frame for touch target
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(isProcessingFavorite || !authService.isLoggedIn)
@@ -147,37 +164,25 @@ struct DetailViewContent: View {
         Button { showingShareOptions = true }
         label: {
             Image(systemName: "square.and.arrow.up")
-                .font(actionIconFont) // Apply consistent font
+                .font(actionIconFont)
                 .foregroundColor(.secondary)
-                .frame(width: 44, height: 44) // Keep frame for touch target
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
-    // --- MODIFICATION END ---
 
     @ViewBuilder private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-
-            // --- MODIFICATION START: Horizontal Layout and Alignment ---
-            // Row 1: Votes and Actions
-            HStack(alignment: .center, spacing: 15) { // alignment: .center for vertical alignment
-                voteCounterView // Votes/Benis part
-
-                Spacer() // Pushes buttons to the right
-
-                if authService.isLoggedIn {
-                    favoriteButton // Button with its own frame
-                }
-                shareButton // Button with its own frame
-                // No Spacer needed at the end anymore
+            HStack(alignment: .center, spacing: 15) {
+                voteCounterView
+                Spacer()
+                if authService.isLoggedIn { favoriteButton }
+                shareButton
             }
-            .frame(minHeight: 44) // Ensure minimum height for consistent vertical alignment
-            // --- MODIFICATION END ---
+            .frame(minHeight: 44)
 
-
-            // Row 2: Tags (FlowLayout or placeholders)
-            Group { // Keep the group for the switch logic
+            Group {
                 switch infoLoadingStatus {
                 case .loaded:
                     if !displayedTags.isEmpty {
@@ -194,23 +199,21 @@ struct DetailViewContent: View {
                     }
                 case .loading: ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .error: Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5) // Placeholder for spacing
+                case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading) // Ensure tags take available width
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-        } // End main VStack
+        }
     }
 
-    // TagView remains unchanged
-    struct TagView: View {
+    struct TagView: View { // Unchanged
         let tag: ItemTag; private let characterLimit = 25
         private var displayText: String { tag.tag.count > characterLimit ? String(tag.tag.prefix(characterLimit - 1)) + "…" : tag.tag }
         var body: some View { Text(displayText).font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.gray.opacity(0.2)).foregroundColor(.primary).clipShape(Capsule()) }
     }
 
-    // commentsContent remains unchanged
-    @ViewBuilder private var commentsContent: some View {
+    @ViewBuilder private var commentsContent: some View { // Unchanged
         CommentsSection(
             flatComments: flatComments,
             totalCommentCount: totalCommentCount,
@@ -221,7 +224,7 @@ struct DetailViewContent: View {
         )
     }
 
-    // MARK: - Body (Structure remains the same, uses the modified infoAndTagsContent)
+    // MARK: - Body (Unchanged)
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
@@ -231,7 +234,7 @@ struct DetailViewContent: View {
                     Divider()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 15) {
-                            infoAndTagsContent.padding([.horizontal, .top]); // Padding applied here
+                            infoAndTagsContent.padding([.horizontal, .top]);
                             commentsContent.padding([.horizontal, .bottom])
                         }
                     }
@@ -246,7 +249,7 @@ struct DetailViewContent: View {
                                 .frame(width: geo.size.width, height: geo.size.width / aspect)
                         }
                         .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
-                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10) // Padding applied here
+                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
                         commentsContent.padding(.horizontal).padding(.bottom, 10)
                     }
                 }
@@ -255,7 +258,7 @@ struct DetailViewContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
         .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
-        .confirmationDialog( // Share dialog remains unchanged
+        .confirmationDialog( // Unchanged
             "Link kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
         ) {
             Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; Self.logger.info("Copied Post-Link to clipboard: \(urlString)") }
@@ -271,7 +274,7 @@ struct DetailViewContent: View {
     }
 }
 
-// Helper Extension (unverändert)
+// Helper Extension (Unchanged)
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -292,7 +295,7 @@ fileprivate extension UIFont {
 }
 
 
-// MARK: - Previews (Unchanged, but will reflect the new layout)
+// MARK: - Previews (Unchanged)
 #Preview("Compact - Limited Tags") {
     struct PreviewWrapper: View {
         @State var previewLinkTarget: PreviewLinkTarget? = nil
@@ -332,7 +335,12 @@ fileprivate extension UIFont {
                     toggleFavoriteAction: {},
                     showAllTagsAction: {},
                     isCommentCollapsed: isCollapsed,
-                    toggleCollapseAction: toggleCollapse
+                    toggleCollapseAction: toggleCollapse,
+                    // --- Pass dummy values for preview ---
+                    currentVote: 1, // Example: Item is upvoted
+                    upvoteAction: { print("Preview Upvote Tapped") },
+                    downvoteAction: { print("Preview Downvote Tapped") }
+                    // --- End Pass dummy ---
                 )
                 .environmentObject(navService)
                 .environmentObject(settings)

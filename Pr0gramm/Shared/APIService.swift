@@ -143,7 +143,7 @@ class APIService {
     private let baseURL = URL(string: "https://pr0gramm.com/api")!
     private let decoder = JSONDecoder()
 
-    // MARK: - API Methods
+    // MARK: - API Methods (Existing methods unchanged)
 
     func fetchItems(flags: Int, promoted: Int? = nil, user: String? = nil, tags: String? = nil, olderThanId: Int? = nil) async throws -> [Item] {
         let endpoint = "/items/get"
@@ -275,6 +275,47 @@ class APIService {
         do { let (_, response) = try await URLSession.shared.data(for: request); try handleApiResponseVoid(response: response, endpoint: endpoint + " (item: \(itemId), collection: \(collectionId))"); Self.logger.info("Successfully sent remove from collection request for item \(itemId).") }
         catch { Self.logger.error("Failed to remove item \(itemId) from collection \(collectionId): \(error.localizedDescription)"); throw error }
     }
+
+    // --- NEW VOTING FUNCTION ---
+    /// Sends a vote for a specific item to the API.
+    /// - Parameters:
+    ///   - itemId: The ID of the item to vote on.
+    ///   - vote: The vote value (-1 for downvote, 0 for unvote, 1 for upvote).
+    ///   - nonce: The user's current nonce (required for POST requests).
+    /// - Throws: An error if the API call fails (e.g., network error, authentication error, bad response).
+    func vote(itemId: Int, vote: Int, nonce: String) async throws {
+        let endpoint = "/items/vote"
+        Self.logger.info("Attempting to vote \(vote) on item \(itemId).")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        // Build the request body
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "id", value: String(itemId)),
+            URLQueryItem(name: "vote", value: String(vote)),
+            URLQueryItem(name: "_nonce", value: nonce)
+        ]
+        request.httpBody = components.query?.data(using: .utf8)
+
+        logRequestDetails(request, for: endpoint) // Log request before sending
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            // The API spec indicates a simple success/error response for voting.
+            // We can use handleApiResponseVoid which checks for 2xx status codes.
+            try handleApiResponseVoid(response: response, endpoint: endpoint + " (item: \(itemId), vote: \(vote))")
+            Self.logger.info("Successfully sent vote (\(vote)) for item \(itemId).")
+        } catch {
+            Self.logger.error("Failed to vote (\(vote)) for item \(itemId): \(error.localizedDescription)")
+            // Re-throw the error so the caller can handle it (e.g., revert optimistic UI)
+            throw error
+        }
+    }
+    // --- END NEW VOTING FUNCTION ---
+
 
     // MARK: - Helper Methods
 

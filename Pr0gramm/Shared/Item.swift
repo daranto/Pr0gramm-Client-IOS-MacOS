@@ -8,8 +8,10 @@ struct Item: Codable, Identifiable, Hashable {
     let id: Int
     let promoted: Int? // ID used for pagination in the 'promoted' feed, nil for 'new' feed
     let userId: Int
-    let down: Int // Downvotes
-    let up: Int // Upvotes
+    // --- MODIFIED: Make up/down mutable ---
+    var down: Int // Downvotes (now var)
+    var up: Int // Upvotes (now var)
+    // --- END MODIFICATION ---
     let created: Int // Unix Timestamp of creation
     let image: String // Filename of the image/video (relative path)
     let thumb: String // Filename of the thumbnail (relative path)
@@ -86,9 +88,7 @@ struct ItemSubtitle: Codable, Hashable {
     // Construct full URL
     var subtitleUrl: URL? {
          let correctedPath = path.hasPrefix("/") ? path : "/\(path)"
-         // --- FIX: Use images.pr0gramm.com for subtitles ---
          return URL(string: "https://images.pr0gramm.com\(correctedPath)")
-         // --- END FIX ---
     }
 }
 // --- END OF COMPLETE FILE ---

@@ -22,10 +22,10 @@ struct CachedItemDetails {
 }
 
 
-// PagedDetailTabViewItem remains unchanged
+// PagedDetailTabViewItem (Pass AuthService vote states/actions)
 @MainActor
 struct PagedDetailTabViewItem: View {
-    let item: Item
+    let item: Item // Now let, as modifications happen in parent
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
     @ObservedObject var playerManager: VideoPlayerManager
 
@@ -44,6 +44,11 @@ struct PagedDetailTabViewItem: View {
     let showAllTagsAction: () -> Void
     let collapsedCommentIDs: Set<Int>
     let toggleCollapseAction: (Int) -> Void
+    let currentVote: Int
+    // --- MODIFIED: Actions now trigger parent update logic ---
+    let upvoteAction: () -> Void
+    let downvoteAction: () -> Void
+    // --- END MODIFIED ---
 
     @EnvironmentObject private var settings: AppSettings
 
@@ -56,6 +61,7 @@ struct PagedDetailTabViewItem: View {
     }
 
     var body: some View {
+        // Pass item directly, DetailViewContent will calculate Benis from its up/down
         DetailViewContent(
             item: item,
             keyboardActionHandler: keyboardActionHandler,
@@ -71,7 +77,10 @@ struct PagedDetailTabViewItem: View {
             isFavorited: isFavorited, toggleFavoriteAction: toggleFavoriteAction,
             showAllTagsAction: showAllTagsAction,
             isCommentCollapsed: isCommentCollapsed,
-            toggleCollapseAction: toggleCollapseAction
+            toggleCollapseAction: toggleCollapseAction,
+            currentVote: currentVote,
+            upvoteAction: upvoteAction,
+            downvoteAction: downvoteAction
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -99,11 +108,11 @@ struct PagedDetailTabViewItem: View {
 // MARK: - PagedDetailView
 @MainActor
 struct PagedDetailView: View {
-    @Binding var items: [Item]
+    @Binding var items: [Item] // Keep the binding
     @State private var selectedIndex: Int
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService // Access AuthService
+    @EnvironmentObject var authService: AuthService
     @Environment(\.scenePhase) var scenePhase
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
@@ -113,11 +122,11 @@ struct PagedDetailView: View {
     @State private var cachedDetails: [Int: CachedItemDetails] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
     @State private var showAllTagsForItem: Set<Int> = []
-    private let apiService = APIService()
+    private let apiService = APIService() // Keep for info loading
     @State private var previewLinkTarget: PreviewLinkTarget? = nil
     @State private var isTogglingFavorite = false
     @State private var fullscreenImageTarget: FullscreenImageTarget? = nil
-    @State private var localFavoritedStatus: [Int: Bool] = [:] // Keep for immediate UI feedback
+    @State private var localFavoritedStatus: [Int: Bool] = [:]
     @State private var newlyVisitedItemIDsThisSession: Set<Int> = []
     @State private var collapsedCommentIDs: Set<Int> = []
 
@@ -134,22 +143,17 @@ struct PagedDetailView: View {
         self._selectedIndex = State(initialValue: selectedIndex)
         self.playerManager = playerManager
         self.loadMoreAction = loadMoreAction
-        // localFavoritedStatus starts empty
         PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex)")
     }
 
     private var isCurrentItemFavorited: Bool {
         guard selectedIndex >= 0 && selectedIndex < items.count else { return false }
         let currentItemID = items[selectedIndex].id
-        // 1. Check local override first (for instant UI feedback during toggle)
-        if let localStatus = localFavoritedStatus[currentItemID] {
-            return localStatus
-        }
-        // 2. Check the global set in AuthService
+        if let localStatus = localFavoritedStatus[currentItemID] { return localStatus }
         return authService.favoritedItemIDs.contains(currentItemID)
     }
 
-    // MARK: - Body
+    // MARK: - Body (Unchanged)
     var body: some View {
         Group { tabViewContent }
         .background(KeyCommandView(handler: keyboardActionHandler))
@@ -180,45 +184,33 @@ struct PagedDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
-             ToolbarItem(placement: .principal) {
-                 Text(currentItemTitle)
-                     .font(.headline)
-                     .lineLimit(1)
-             }
+             ToolbarItem(placement: .principal) { Text(currentItemTitle).font(.headline).lineLimit(1) }
              ToolbarItem(placement: .navigationBarTrailing) {
                  if selectedIndex >= 0 && selectedIndex < items.count && settings.seenItemIDs.contains(items[selectedIndex].id) {
-                     Image(systemName: "checkmark.circle.fill")
-                         .symbolRenderingMode(.palette)
-                         .foregroundStyle(.white, Color.accentColor)
-                         .font(.body)
-                 } else {
-                     EmptyView()
-                 }
+                     Image(systemName: "checkmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, Color.accentColor).font(.body)
+                 } else { EmptyView() }
              }
         }
         .onChange(of: selectedIndex) { oldValue, newValue in
             handleIndexChangeImmediate(oldValue: oldValue, newValue: newValue)
             Task {
                 try? await Task.sleep(for: swipeSettleDelay)
-                if self.selectedIndex == newValue {
-                     await handleIndexChangeDeferred(newValue: newValue)
-                } else {
-                    PagedDetailView.logger.debug("Deferred actions skipped for index \(newValue), selection changed again during settle delay.")
-                }
+                if self.selectedIndex == newValue { await handleIndexChangeDeferred(newValue: newValue) }
+                else { PagedDetailView.logger.debug("Deferred actions skipped for index \(newValue), selection changed again during settle delay.") }
             }
-             Task { await triggerLoadMoreIfNeeded(currentIndex: newValue) }
+            Task { await triggerLoadMoreIfNeeded(currentIndex: newValue) }
         }
         .onAppear { setupView() }
         .onDisappear { cleanupViewAndMarkVisited() }
-        .onChange(of: scenePhase) { oldPhase, newPhase in
-             handleScenePhaseChange(oldPhase: oldPhase, newPhase: newPhase)
+        .onChange(of: scenePhase) { oldPhase, newPhase in handleScenePhaseChange(oldPhase: oldPhase, newPhase: newPhase) }
+        .onChange(of: settings.commentSortOrder) { oldOrder, newOrder in handleSortOrderChange(newOrder: newOrder) }
+        .onChange(of: items.count) { _, newCount in PagedDetailView.logger.info("Detected change in items count from binding. New count: \(newCount)") }
+        // --- Observe vote state changes from AuthService ---
+        .onChange(of: authService.votedItemStates) { _, _ in
+            PagedDetailView.logger.trace("Detected change in authService.votedItemStates")
+            // No direct action needed here, the 'currentVote' passed to TabViewItem will update
         }
-        .onChange(of: settings.commentSortOrder) { oldOrder, newOrder in
-             handleSortOrderChange(newOrder: newOrder)
-        }
-        .onChange(of: items.count) { _, newCount in
-             PagedDetailView.logger.info("Detected change in items count from binding. New count: \(newCount)")
-         }
+        // --- End Observe ---
     }
 
     @ViewBuilder
@@ -226,10 +218,12 @@ struct PagedDetailView: View {
         if index >= 0 && index < items.count {
             let currentItem = items[index]
             let pageData = preparePageData(for: index)
+            let currentVote = authService.votedItemStates[currentItem.id] ?? 0
 
             if let data = pageData {
                  PagedDetailTabViewItem(
-                     item: currentItem,
+                     // Pass the item from the @Binding array directly
+                     item: items[index],
                      keyboardActionHandler: keyboardActionHandler,
                      playerManager: playerManager,
                      visibleFlatComments: data.visibleFlatComments,
@@ -242,25 +236,28 @@ struct PagedDetailView: View {
                      onWillEndFullScreen: handleEndFullScreen,
                      previewLinkTarget: $previewLinkTarget,
                      fullscreenImageTarget: $fullscreenImageTarget,
-                     isFavorited: isCurrentItemFavorited, // Use the updated computed property
+                     isFavorited: isCurrentItemFavorited,
                      toggleFavoriteAction: toggleFavorite,
                      showAllTagsAction: { showAllTagsForItem.insert(currentItem.id) },
                      collapsedCommentIDs: collapsedCommentIDs,
-                     toggleCollapseAction: toggleCollapse
+                     toggleCollapseAction: toggleCollapse,
+                     currentVote: currentVote,
+                     // --- Pass new handler functions ---
+                     upvoteAction: { Task { await handleVoteTap(voteType: 1) } },
+                     downvoteAction: { Task { await handleVoteTap(voteType: -1) } }
+                     // --- End Pass ---
                  )
                  .tag(index)
             } else {
-                EmptyView().tag(index)
-                     .onAppear { PagedDetailView.logger.warning("preparePageData returned nil for index \(index).") }
+                EmptyView().tag(index).onAppear { PagedDetailView.logger.warning("preparePageData returned nil for index \(index).") }
             }
         } else {
-             EmptyView().tag(index)
-                  .onAppear { PagedDetailView.logger.error("Attempted to render tabViewPage for invalid index \(index) (items.count: \(items.count)).") }
+             EmptyView().tag(index).onAppear { PagedDetailView.logger.error("Attempted to render tabViewPage for invalid index \(index) (items.count: \(items.count)).") }
         }
     }
 
 
-    // MARK: - Data Preparation and Loading
+    // MARK: - Data Preparation and Loading (Unchanged)
     private func preparePageData(for index: Int) -> ( currentItem: Item, status: InfoLoadingStatus, visibleFlatComments: [FlatCommentDisplayItem], totalCommentCount: Int, displayedTags: [ItemTag], totalTagCount: Int, showingAllTags: Bool )? {
         guard index >= 0 && index < items.count else { PagedDetailView.logger.warning("preparePageData: index \(index) out of bounds (items.count: \(items.count))."); return nil }
         let currentItem = items[index]
@@ -600,10 +597,88 @@ struct PagedDetailView: View {
             PagedDetailView.logger.trace("Collapsing comment \(commentID)")
         }
     }
-}
+
+    // --- NEW: Handle Vote Tap and Update Local Item ---
+    /// Handles the tap on an upvote or downvote button.
+    /// Calls the AuthService to perform the vote and updates the local item's score upon success.
+    private func handleVoteTap(voteType: Int) async {
+        guard selectedIndex >= 0 && selectedIndex < items.count else { return }
+        let itemIndex = selectedIndex // Capture index before async call
+        let itemId = items[itemIndex].id
+        let initialVoteState = authService.votedItemStates[itemId] ?? 0
+
+        // --- Store initial counts for potential rollback ---
+        let initialUp = items[itemIndex].up
+        let initialDown = items[itemIndex].down
+
+        // Perform the vote via AuthService (which handles optimistic state update internally)
+        await authService.performVote(itemId: itemId, voteType: voteType)
+
+        // --- Update local Item counts AFTER successful vote state change in AuthService ---
+        // Check the *new* confirmed vote state from AuthService
+        let newVoteState = authService.votedItemStates[itemId] ?? 0
+
+        // If the vote state actually changed after the API call (or optimistic update stuck)
+        if initialVoteState != newVoteState {
+            // Calculate the delta based on the transition
+            var deltaUp = 0
+            var deltaDown = 0
+
+            // Transition from initialVoteState to newVoteState
+            switch (initialVoteState, newVoteState) {
+                // Voting Up
+                case (0, 1): deltaUp = 1 // Neutral to Up
+                case (-1, 1): deltaUp = 1; deltaDown = -1 // Down to Up
+                // Un-Voting Up
+                case (1, 0): deltaUp = -1 // Up to Neutral
+                // Voting Down
+                case (0, -1): deltaDown = 1 // Neutral to Down
+                case (1, -1): deltaUp = -1; deltaDown = 1 // Up to Down
+                // Un-Voting Down
+                case (-1, 0): deltaDown = -1 // Down to Neutral
+                // No change or invalid transition (should not happen if logic is correct)
+                default: PagedDetailView.logger.warning("Unexpected vote state transition: \(initialVoteState) -> \(newVoteState) for item \(itemId)")
+            }
+
+            // Apply the delta to the specific item in the @Binding array
+            // Check index again in case it changed during await
+            if itemIndex == selectedIndex && itemIndex < items.count {
+                // Create a mutable copy to modify properties
+                var mutableItem = items[itemIndex]
+                mutableItem.up += deltaUp
+                mutableItem.down += deltaDown
+                // Assign the modified item back to the array to trigger UI update
+                items[itemIndex] = mutableItem
+                PagedDetailView.logger.info("Updated local item \(itemId) score: deltaUp=\(deltaUp), deltaDown=\(deltaDown). New counts: up=\(items[itemIndex].up), down=\(items[itemIndex].down)")
+            } else {
+                 PagedDetailView.logger.warning("Could not update local item score for \(itemId): selectedIndex changed during vote.")
+            }
+        } else {
+             // This can happen if the API call failed and AuthService rolled back the state
+             PagedDetailView.logger.info("Vote state for item \(itemId) did not change after handleVoteTap (API might have failed or state already correct). No local score update needed.")
+             // --- Optional: Revert local counts if API failed AND AuthService rolled back ---
+             // This check ensures we revert only if the state *actually* rolled back in AuthService.
+             // It handles the case where the initial optimistic update in AuthService succeeded,
+             // but the API call failed later.
+             let finalVoteStateInAuth = authService.votedItemStates[itemId] ?? 0
+             if finalVoteStateInAuth == initialVoteState && itemIndex == selectedIndex && itemIndex < items.count {
+                  // Check if local counts were changed by a failed optimistic path (unlikely with current flow, but safe)
+                 if items[itemIndex].up != initialUp || items[itemIndex].down != initialDown {
+                     PagedDetailView.logger.warning("Reverting local item counts for \(itemId) due to API failure and vote state rollback.")
+                     var mutableItem = items[itemIndex]
+                     mutableItem.up = initialUp
+                     mutableItem.down = initialDown
+                     items[itemIndex] = mutableItem
+                 }
+             }
+        }
+    }
+    // --- END NEW ---
+
+} // End PagedDetailView
 
 
-// MARK: - Wrapper View
+// MARK: - Wrapper View (Unchanged)
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
     @EnvironmentObject var settings: AppSettings
@@ -623,7 +698,7 @@ struct LinkedItemPreviewWrapperView: View {
     }
 }
 
-// MARK: - Preview Provider
+// MARK: - Preview Provider (Unchanged)
 #Preview("Preview") {
     struct PreviewWrapper: View {
          @State var previewItems: [Item] = [
@@ -643,8 +718,9 @@ struct LinkedItemPreviewWrapperView: View {
               previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
               previewAuthService.userNonce = "preview_nonce_12345"
               previewAuthService.favoritesCollectionId = 6749
-              // Populate global favorites for preview
-              previewAuthService.favoritedItemIDs = [2] // Mark item 2 as favorited
+              previewAuthService.favoritedItemIDs = [2]
+              // Add sample vote state for preview
+              previewAuthService.votedItemStates = [1: 1, 3: -1] // Item 1 upvoted, item 3 downvoted
               previewPlayerManager.configure(settings: previewSettings)
          }
 
