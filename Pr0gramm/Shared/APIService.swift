@@ -131,6 +131,33 @@ struct UserSyncResponse: Codable {
     let likeNonce: String?
 }
 
+// --- NEW: Structure for Comment Post Response ---
+// Matches the structure within CommentsPostSuccessResponse
+struct PostCommentResultComment: Codable, Identifiable, Hashable {
+    let id: Int
+    let parent: Int? // Can be 0 for top-level, or nil? API spec says CommentId (int64), 0 is valid int64. Let's assume 0 or nil means top-level reply.
+    let content: String
+    let created: Int
+    let up: Int
+    let down: Int
+    let confidence: Double
+    let name: String
+    let mark: Int
+}
+
+struct CommentsPostSuccessResponse: Codable {
+    let success: Bool = true // Explicitly true for success case
+    let commentId: Int // ID of the newly posted comment
+    let comments: [PostCommentResultComment] // The updated list of all comments for the item
+}
+
+struct CommentsPostErrorResponse: Codable {
+    let success: Bool = false // Explicitly false for error case
+    let error: String // e.g., "commentTooSoon", "commentEmpty", etc.
+    // Optional fields like 'report' if needed based on specific errors
+}
+// --- END NEW ---
+
 
 // MARK: - APIService Class Definition
 
@@ -143,7 +170,7 @@ class APIService {
     private let baseURL = URL(string: "https://pr0gramm.com/api")!
     private let decoder = JSONDecoder()
 
-    // MARK: - API Methods (Existing methods unchanged)
+    // MARK: - API Methods
 
     func fetchItems(flags: Int, promoted: Int? = nil, user: String? = nil, tags: String? = nil, olderThanId: Int? = nil) async throws -> [Item] {
         let endpoint = "/items/get"
@@ -159,13 +186,10 @@ class APIService {
             queryItems.append(URLQueryItem(name: "tags", value: tags))
             logDescription += ", tags='\(tags)'"
         }
-        // --- MODIFIED: Add 'promoted' parameter if provided, EVEN if user or tags are present ---
-        // According to user request, 'promoted' should now be included alongside 'tags' if desired.
         if let promoted = promoted {
             queryItems.append(URLQueryItem(name: "promoted", value: String(promoted)))
             logDescription += ", promoted=\(promoted)"
         }
-        // --- END MODIFICATION ---
         if let olderId = olderThanId {
             queryItems.append(URLQueryItem(name: "older", value: String(olderId)))
             logDescription += ", older=\(olderId)"
@@ -276,13 +300,6 @@ class APIService {
         catch { Self.logger.error("Failed to remove item \(itemId) from collection \(collectionId): \(error.localizedDescription)"); throw error }
     }
 
-    // --- NEW VOTING FUNCTION ---
-    /// Sends a vote for a specific item to the API.
-    /// - Parameters:
-    ///   - itemId: The ID of the item to vote on.
-    ///   - vote: The vote value (-1 for downvote, 0 for unvote, 1 for upvote).
-    ///   - nonce: The user's current nonce (required for POST requests).
-    /// - Throws: An error if the API call fails (e.g., network error, authentication error, bad response).
     func vote(itemId: Int, vote: Int, nonce: String) async throws {
         let endpoint = "/items/vote"
         Self.logger.info("Attempting to vote \(vote) on item \(itemId).")
@@ -290,8 +307,6 @@ class APIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-
-        // Build the request body
         var components = URLComponents()
         components.queryItems = [
             URLQueryItem(name: "id", value: String(itemId)),
@@ -299,22 +314,66 @@ class APIService {
             URLQueryItem(name: "_nonce", value: nonce)
         ]
         request.httpBody = components.query?.data(using: .utf8)
-
-        logRequestDetails(request, for: endpoint) // Log request before sending
-
+        logRequestDetails(request, for: endpoint)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
-            // The API spec indicates a simple success/error response for voting.
-            // We can use handleApiResponseVoid which checks for 2xx status codes.
             try handleApiResponseVoid(response: response, endpoint: endpoint + " (item: \(itemId), vote: \(vote))")
             Self.logger.info("Successfully sent vote (\(vote)) for item \(itemId).")
         } catch {
             Self.logger.error("Failed to vote (\(vote)) for item \(itemId): \(error.localizedDescription)")
-            // Re-throw the error so the caller can handle it (e.g., revert optimistic UI)
             throw error
         }
     }
-    // --- END NEW VOTING FUNCTION ---
+
+    func postComment(itemId: Int, parentId: Int, comment: String, nonce: String) async throws -> [PostCommentResultComment] {
+        let endpoint = "/comments/post"
+        Self.logger.info("Attempting to post comment to item \(itemId) (parent: \(parentId)).")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "itemId", value: String(itemId)),
+            URLQueryItem(name: "parentId", value: String(parentId)),
+            URLQueryItem(name: "comment", value: comment),
+            URLQueryItem(name: "_nonce", value: nonce)
+        ]
+        request.httpBody = components.query?.data(using: .utf8)
+        logRequestDetails(request, for: endpoint)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -999
+                 Self.logger.error("API Error (\(endpoint)): Invalid HTTP status code: \(statusCode).")
+                 if let errorResponse = try? decoder.decode(CommentsPostErrorResponse.self, from: data) {
+                     throw NSError(domain: "APIService.postComment", code: statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.error])
+                 } else if statusCode == 401 || statusCode == 403 {
+                     throw URLError(.userAuthenticationRequired)
+                 } else {
+                    throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(statusCode)"])
+                 }
+            }
+            do {
+                let successResponse = try decoder.decode(CommentsPostSuccessResponse.self, from: data)
+                Self.logger.info("Successfully posted comment \(successResponse.commentId) to item \(itemId). Received \(successResponse.comments.count) updated comments.")
+                return successResponse.comments
+            } catch {
+                 Self.logger.warning("Failed to decode CommentPostSuccessResponse, trying error response. Error: \(error)")
+                 do {
+                     let errorResponse = try decoder.decode(CommentsPostErrorResponse.self, from: data)
+                     Self.logger.error("Comment post failed with API error: \(errorResponse.error)")
+                     throw NSError(domain: "APIService.postComment", code: 1, userInfo: [NSLocalizedDescriptionKey: errorResponse.error])
+                 } catch let decodingError {
+                     Self.logger.error("Failed to decode BOTH success and error responses for comment post: \(decodingError)")
+                     throw decodingError
+                 }
+            }
+        } catch {
+            Self.logger.error("Failed to post comment to item \(itemId) (parent: \(parentId)): \(error.localizedDescription)")
+            throw error
+        }
+    }
 
 
     // MARK: - Helper Methods

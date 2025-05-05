@@ -21,6 +21,14 @@ struct CachedItemDetails {
     let totalCommentCount: Int
 }
 
+// --- NEW: Structure to hold reply context ---
+struct ReplyTarget: Identifiable {
+    let id = UUID() // Make identifiable for sheet
+    let itemId: Int
+    let parentId: Int // 0 for top-level
+}
+// --- END NEW ---
+
 
 // PagedDetailTabViewItem (Pass AuthService vote states/actions)
 @MainActor
@@ -45,10 +53,9 @@ struct PagedDetailTabViewItem: View {
     let collapsedCommentIDs: Set<Int>
     let toggleCollapseAction: (Int) -> Void
     let currentVote: Int
-    // --- MODIFIED: Actions now trigger parent update logic ---
     let upvoteAction: () -> Void
     let downvoteAction: () -> Void
-    // --- END MODIFIED ---
+    let showCommentInputAction: (Int) -> Void
 
     @EnvironmentObject private var settings: AppSettings
 
@@ -61,7 +68,6 @@ struct PagedDetailTabViewItem: View {
     }
 
     var body: some View {
-        // Pass item directly, DetailViewContent will calculate Benis from its up/down
         DetailViewContent(
             item: item,
             keyboardActionHandler: keyboardActionHandler,
@@ -80,7 +86,8 @@ struct PagedDetailTabViewItem: View {
             toggleCollapseAction: toggleCollapseAction,
             currentVote: currentVote,
             upvoteAction: upvoteAction,
-            downvoteAction: downvoteAction
+            downvoteAction: downvoteAction,
+            showCommentInputAction: showCommentInputAction
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -122,13 +129,15 @@ struct PagedDetailView: View {
     @State private var cachedDetails: [Int: CachedItemDetails] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
     @State private var showAllTagsForItem: Set<Int> = []
-    private let apiService = APIService() // Keep for info loading
+    private let apiService = APIService()
     @State private var previewLinkTarget: PreviewLinkTarget? = nil
     @State private var isTogglingFavorite = false
     @State private var fullscreenImageTarget: FullscreenImageTarget? = nil
     @State private var localFavoritedStatus: [Int: Bool] = [:]
     @State private var newlyVisitedItemIDsThisSession: Set<Int> = []
     @State private var collapsedCommentIDs: Set<Int> = []
+    @State private var commentReplyTarget: ReplyTarget? = nil
+
 
     let loadMoreAction: () async -> Void
     let commentMaxDepth = 5
@@ -153,7 +162,7 @@ struct PagedDetailView: View {
         return authService.favoritedItemIDs.contains(currentItemID)
     }
 
-    // MARK: - Body (Unchanged)
+    // MARK: - Body
     var body: some View {
         Group { tabViewContent }
         .background(KeyCommandView(handler: keyboardActionHandler))
@@ -161,14 +170,24 @@ struct PagedDetailView: View {
              LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
                  .environmentObject(settings).environmentObject(authService)
         }
+        .sheet(item: $fullscreenImageTarget) { targetWrapper in
+             FullscreenImageView(item: targetWrapper.item)
+        }
+        .sheet(item: $commentReplyTarget) { target in
+            CommentInputView(
+                itemId: target.itemId,
+                parentId: target.parentId,
+                onSubmit: { commentText in
+                    try await submitComment(text: commentText, itemId: target.itemId, parentId: target.parentId)
+                }
+            )
+             .presentationDetents([.medium, .large])
+        }
         .onChange(of: previewLinkTarget) { oldValue, newValue in
             if newValue != nil {
                 PagedDetailView.logger.info("Link preview requested for item ID \(newValue!.id). Pausing current video (if playing).")
                 playerManager.player?.pause()
             }
-        }
-        .sheet(item: $fullscreenImageTarget) { targetWrapper in
-             FullscreenImageView(item: targetWrapper.item)
         }
     }
 
@@ -205,12 +224,9 @@ struct PagedDetailView: View {
         .onChange(of: scenePhase) { oldPhase, newPhase in handleScenePhaseChange(oldPhase: oldPhase, newPhase: newPhase) }
         .onChange(of: settings.commentSortOrder) { oldOrder, newOrder in handleSortOrderChange(newOrder: newOrder) }
         .onChange(of: items.count) { _, newCount in PagedDetailView.logger.info("Detected change in items count from binding. New count: \(newCount)") }
-        // --- Observe vote state changes from AuthService ---
         .onChange(of: authService.votedItemStates) { _, _ in
             PagedDetailView.logger.trace("Detected change in authService.votedItemStates")
-            // No direct action needed here, the 'currentVote' passed to TabViewItem will update
         }
-        // --- End Observe ---
     }
 
     @ViewBuilder
@@ -222,7 +238,6 @@ struct PagedDetailView: View {
 
             if let data = pageData {
                  PagedDetailTabViewItem(
-                     // Pass the item from the @Binding array directly
                      item: items[index],
                      keyboardActionHandler: keyboardActionHandler,
                      playerManager: playerManager,
@@ -242,10 +257,12 @@ struct PagedDetailView: View {
                      collapsedCommentIDs: collapsedCommentIDs,
                      toggleCollapseAction: toggleCollapse,
                      currentVote: currentVote,
-                     // --- Pass new handler functions ---
                      upvoteAction: { Task { await handleVoteTap(voteType: 1) } },
-                     downvoteAction: { Task { await handleVoteTap(voteType: -1) } }
-                     // --- End Pass ---
+                     downvoteAction: { Task { await handleVoteTap(voteType: -1) } },
+                     showCommentInputAction: { parentId in
+                         self.commentReplyTarget = ReplyTarget(itemId: currentItem.id, parentId: parentId)
+                         PagedDetailView.logger.debug("Setting comment reply target: itemId=\(currentItem.id), parentId=\(parentId)")
+                     }
                  )
                  .tag(index)
             } else {
@@ -257,7 +274,7 @@ struct PagedDetailView: View {
     }
 
 
-    // MARK: - Data Preparation and Loading (Unchanged)
+    // MARK: - Data Preparation and Loading
     private func preparePageData(for index: Int) -> ( currentItem: Item, status: InfoLoadingStatus, visibleFlatComments: [FlatCommentDisplayItem], totalCommentCount: Int, displayedTags: [ItemTag], totalTagCount: Int, showingAllTags: Bool )? {
         guard index >= 0 && index < items.count else { PagedDetailView.logger.warning("preparePageData: index \(index) out of bounds (items.count: \(items.count))."); return nil }
         let currentItem = items[index]
@@ -554,10 +571,10 @@ struct PagedDetailView: View {
         let currentItem = items[selectedIndex]
         guard authService.isLoggedIn, let nonce = authService.userNonce, let collectionId = authService.favoritesCollectionId else { PagedDetailView.logger.warning("Favorite toggle skipped: User not logged in or nonce/collectionId missing."); return }
         let itemId = currentItem.id
-        let targetFavoriteState = !isCurrentItemFavorited // Determine target based on computed property
+        let targetFavoriteState = !isCurrentItemFavorited
 
         isTogglingFavorite = true
-        localFavoritedStatus[itemId] = targetFavoriteState // Optimistic local UI update
+        localFavoritedStatus[itemId] = targetFavoriteState
 
         do {
             if targetFavoriteState {
@@ -567,23 +584,14 @@ struct PagedDetailView: View {
                 try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
                 PagedDetailView.logger.info("Removed item \(itemId) from favorites via API.")
             }
-
-            // Update global state on success
-            if targetFavoriteState {
-                authService.favoritedItemIDs.insert(itemId)
-            } else {
-                authService.favoritedItemIDs.remove(itemId)
-            }
-
-            // Clear remote favorites cache (if needed, depends if other views rely on it)
+            if targetFavoriteState { authService.favoritedItemIDs.insert(itemId) }
+            else { authService.favoritedItemIDs.remove(itemId) }
             await localSettings.clearFavoritesCache()
             await localSettings.updateCacheSizes()
             PagedDetailView.logger.info("Favorite toggled successfully for item \(itemId). Global state updated. Cache cleared.")
-
         } catch {
             PagedDetailView.logger.error("Failed to toggle favorite for item \(itemId): \(error.localizedDescription)")
-            // Revert optimistic UI update on failure
-            localFavoritedStatus.removeValue(forKey: itemId) // Remove local override on error
+            localFavoritedStatus.removeValue(forKey: itemId)
         }
         isTogglingFavorite = false
     }
@@ -598,71 +606,42 @@ struct PagedDetailView: View {
         }
     }
 
-    // --- NEW: Handle Vote Tap and Update Local Item ---
-    /// Handles the tap on an upvote or downvote button.
-    /// Calls the AuthService to perform the vote and updates the local item's score upon success.
     private func handleVoteTap(voteType: Int) async {
         guard selectedIndex >= 0 && selectedIndex < items.count else { return }
-        let itemIndex = selectedIndex // Capture index before async call
+        let itemIndex = selectedIndex
         let itemId = items[itemIndex].id
         let initialVoteState = authService.votedItemStates[itemId] ?? 0
-
-        // --- Store initial counts for potential rollback ---
         let initialUp = items[itemIndex].up
         let initialDown = items[itemIndex].down
 
-        // Perform the vote via AuthService (which handles optimistic state update internally)
         await authService.performVote(itemId: itemId, voteType: voteType)
 
-        // --- Update local Item counts AFTER successful vote state change in AuthService ---
-        // Check the *new* confirmed vote state from AuthService
         let newVoteState = authService.votedItemStates[itemId] ?? 0
 
-        // If the vote state actually changed after the API call (or optimistic update stuck)
         if initialVoteState != newVoteState {
-            // Calculate the delta based on the transition
-            var deltaUp = 0
-            var deltaDown = 0
-
-            // Transition from initialVoteState to newVoteState
+            var deltaUp = 0; var deltaDown = 0
             switch (initialVoteState, newVoteState) {
-                // Voting Up
-                case (0, 1): deltaUp = 1 // Neutral to Up
-                case (-1, 1): deltaUp = 1; deltaDown = -1 // Down to Up
-                // Un-Voting Up
-                case (1, 0): deltaUp = -1 // Up to Neutral
-                // Voting Down
-                case (0, -1): deltaDown = 1 // Neutral to Down
-                case (1, -1): deltaUp = -1; deltaDown = 1 // Up to Down
-                // Un-Voting Down
-                case (-1, 0): deltaDown = -1 // Down to Neutral
-                // No change or invalid transition (should not happen if logic is correct)
+                case (0, 1): deltaUp = 1
+                case (-1, 1): deltaUp = 1; deltaDown = -1
+                case (1, 0): deltaUp = -1
+                case (0, -1): deltaDown = 1
+                case (1, -1): deltaUp = -1; deltaDown = 1
+                case (-1, 0): deltaDown = -1
                 default: PagedDetailView.logger.warning("Unexpected vote state transition: \(initialVoteState) -> \(newVoteState) for item \(itemId)")
             }
-
-            // Apply the delta to the specific item in the @Binding array
-            // Check index again in case it changed during await
             if itemIndex == selectedIndex && itemIndex < items.count {
-                // Create a mutable copy to modify properties
                 var mutableItem = items[itemIndex]
                 mutableItem.up += deltaUp
                 mutableItem.down += deltaDown
-                // Assign the modified item back to the array to trigger UI update
                 items[itemIndex] = mutableItem
                 PagedDetailView.logger.info("Updated local item \(itemId) score: deltaUp=\(deltaUp), deltaDown=\(deltaDown). New counts: up=\(items[itemIndex].up), down=\(items[itemIndex].down)")
             } else {
                  PagedDetailView.logger.warning("Could not update local item score for \(itemId): selectedIndex changed during vote.")
             }
         } else {
-             // This can happen if the API call failed and AuthService rolled back the state
              PagedDetailView.logger.info("Vote state for item \(itemId) did not change after handleVoteTap (API might have failed or state already correct). No local score update needed.")
-             // --- Optional: Revert local counts if API failed AND AuthService rolled back ---
-             // This check ensures we revert only if the state *actually* rolled back in AuthService.
-             // It handles the case where the initial optimistic update in AuthService succeeded,
-             // but the API call failed later.
              let finalVoteStateInAuth = authService.votedItemStates[itemId] ?? 0
              if finalVoteStateInAuth == initialVoteState && itemIndex == selectedIndex && itemIndex < items.count {
-                  // Check if local counts were changed by a failed optimistic path (unlikely with current flow, but safe)
                  if items[itemIndex].up != initialUp || items[itemIndex].down != initialDown {
                      PagedDetailView.logger.warning("Reverting local item counts for \(itemId) due to API failure and vote state rollback.")
                      var mutableItem = items[itemIndex]
@@ -673,12 +652,40 @@ struct PagedDetailView: View {
              }
         }
     }
-    // --- END NEW ---
+
+    private func submitComment(text: String, itemId: Int, parentId: Int) async throws {
+        guard authService.isLoggedIn, let nonce = authService.userNonce else {
+            PagedDetailView.logger.error("Cannot submit comment: User not logged in or nonce missing.")
+            throw NSError(domain: "PagedDetailView", code: 1, userInfo: [NSLocalizedDescriptionKey: "Nicht angemeldet"])
+        }
+
+        PagedDetailView.logger.info("Submitting comment via PagedDetailView for itemId: \(itemId), parentId: \(parentId)")
+        do {
+            let updatedComments = try await apiService.postComment(itemId: itemId, parentId: parentId, comment: text, nonce: nonce)
+            if var currentDetails = cachedDetails[itemId] {
+                PagedDetailView.logger.info("Updating cached comments for item \(itemId). Previous count: \(currentDetails.info.comments.count), New count: \(updatedComments.count)")
+                 let updatedItemComments = updatedComments.map {
+                    ItemComment(id: $0.id, parent: $0.parent, content: $0.content, created: $0.created, up: $0.up, down: $0.down, confidence: $0.confidence, name: $0.name, mark: $0.mark)
+                 }
+                let updatedInfo = ItemsInfoResponse(tags: currentDetails.info.tags, comments: updatedItemComments)
+                let newFlatList = prepareFlatDisplayComments(from: updatedItemComments, sortedBy: currentDetails.sortedBy, maxDepth: commentMaxDepth)
+                cachedDetails[itemId] = CachedItemDetails(info: updatedInfo, sortedBy: currentDetails.sortedBy, flatDisplayComments: newFlatList, totalCommentCount: updatedItemComments.count)
+                PagedDetailView.logger.info("Successfully updated cache and flat list for item \(itemId) after posting comment.")
+            } else {
+                PagedDetailView.logger.warning("Comment posted successfully for item \(itemId), but no cached details found to update.")
+                 infoLoadingStatus[itemId] = .idle
+                 Task { await loadInfoIfNeededAndPrepareHierarchy(for: items[selectedIndex]) }
+            }
+        } catch {
+            PagedDetailView.logger.error("Failed to submit comment for item \(itemId): \(error.localizedDescription)")
+            throw error
+        }
+    }
 
 } // End PagedDetailView
 
 
-// MARK: - Wrapper View (Unchanged)
+// MARK: - Wrapper View
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
     @EnvironmentObject var settings: AppSettings
@@ -698,7 +705,7 @@ struct LinkedItemPreviewWrapperView: View {
     }
 }
 
-// MARK: - Preview Provider (Unchanged)
+// MARK: - Preview Provider
 #Preview("Preview") {
     struct PreviewWrapper: View {
          @State var previewItems: [Item] = [
@@ -719,8 +726,7 @@ struct LinkedItemPreviewWrapperView: View {
               previewAuthService.userNonce = "preview_nonce_12345"
               previewAuthService.favoritesCollectionId = 6749
               previewAuthService.favoritedItemIDs = [2]
-              // Add sample vote state for preview
-              previewAuthService.votedItemStates = [1: 1, 3: -1] // Item 1 upvoted, item 3 downvoted
+              previewAuthService.votedItemStates = [1: 1, 3: -1]
               previewPlayerManager.configure(settings: previewSettings)
          }
 

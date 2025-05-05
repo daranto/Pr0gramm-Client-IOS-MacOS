@@ -8,7 +8,7 @@ import os
 import Kingfisher
 import UIKit // Für UIPasteboard
 
-// MARK: - DetailImageView (Unverändert)
+// MARK: - DetailImageView
 @MainActor
 struct DetailImageView: View {
     let item: Item
@@ -31,7 +31,7 @@ struct DetailImageView: View {
     }
 }
 
-// InfoLoadingStatus enum (unverändert)
+// InfoLoadingStatus enum
 enum InfoLoadingStatus: Equatable { case idle; case loading; case loaded; case error(String) }
 
 
@@ -62,11 +62,11 @@ struct DetailViewContent: View {
     let isCommentCollapsed: (Int) -> Bool
     let toggleCollapseAction: (Int) -> Void
 
-    // --- NEW: Add vote state and actions ---
-    let currentVote: Int // -1, 0, or 1
+    let currentVote: Int
     let upvoteAction: () -> Void
     let downvoteAction: () -> Void
-    // --- END NEW ---
+    let showCommentInputAction: (Int) -> Void
+
 
     @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var authService: AuthService
@@ -112,41 +112,36 @@ struct DetailViewContent: View {
 
     private let actionIconFont: Font = .title2
 
-    // --- MODIFICATION START: Interactive vote icons ---
     @ViewBuilder private var voteCounterView: some View {
         let benis = item.up - item.down
         HStack(spacing: 6) {
-            // Upvote Button
-            Button(action: upvoteAction) { // Call upvote action
-                Image(systemName: currentVote == 1 ? "arrow.up.circle.fill" : "arrow.up.circle") // Filled or outline
+            Button(action: upvoteAction) {
+                Image(systemName: currentVote == 1 ? "arrow.up.circle.fill" : "arrow.up.circle")
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(currentVote == 1 ? Color.white : Color.secondary, // Inner color
-                                     currentVote == 1 ? Color.green : Color.secondary) // Outer ring/fill
+                    .foregroundStyle(currentVote == 1 ? Color.white : Color.secondary,
+                                     currentVote == 1 ? Color.green : Color.secondary)
                     .font(actionIconFont)
             }
-            .buttonStyle(.plain) // Remove button styling
-            .disabled(!authService.isLoggedIn) // Disable if not logged in
+            .buttonStyle(.plain)
+            .disabled(!authService.isLoggedIn)
 
-            // Benis Score
             Text("\(benis)")
                 .font(UIConstants.titleFont.weight(.medium))
                 .foregroundColor(.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
 
-            // Downvote Button
-            Button(action: downvoteAction) { // Call downvote action
-                Image(systemName: currentVote == -1 ? "arrow.down.circle.fill" : "arrow.down.circle") // Filled or outline
+            Button(action: downvoteAction) {
+                Image(systemName: currentVote == -1 ? "arrow.down.circle.fill" : "arrow.down.circle")
                     .symbolRenderingMode(.palette)
-                     .foregroundStyle(currentVote == -1 ? Color.white : Color.secondary, // Inner color
-                                      currentVote == -1 ? Color.red : Color.secondary) // Outer ring/fill
+                     .foregroundStyle(currentVote == -1 ? Color.white : Color.secondary,
+                                      currentVote == -1 ? Color.red : Color.secondary)
                     .font(actionIconFont)
             }
-            .buttonStyle(.plain) // Remove button styling
-            .disabled(!authService.isLoggedIn) // Disable if not logged in
+            .buttonStyle(.plain)
+            .disabled(!authService.isLoggedIn)
         }
     }
-    // --- MODIFICATION END ---
 
     @ViewBuilder private var favoriteButton: some View {
         Button { Task { isProcessingFavorite = true; await toggleFavoriteAction(); try? await Task.sleep(for: .milliseconds(100)); isProcessingFavorite = false } }
@@ -172,11 +167,26 @@ struct DetailViewContent: View {
         .buttonStyle(.plain)
     }
 
+    @ViewBuilder private var addCommentButton: some View {
+        Button { showCommentInputAction(0) }
+        label: {
+            Image(systemName: "plus.message")
+                .font(actionIconFont)
+                .foregroundColor(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!authService.isLoggedIn)
+    }
+
+
     @ViewBuilder private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 15) {
                 voteCounterView
                 Spacer()
+                if authService.isLoggedIn { addCommentButton }
                 if authService.isLoggedIn { favoriteButton }
                 shareButton
             }
@@ -207,24 +217,25 @@ struct DetailViewContent: View {
         }
     }
 
-    struct TagView: View { // Unchanged
+    struct TagView: View {
         let tag: ItemTag; private let characterLimit = 25
         private var displayText: String { tag.tag.count > characterLimit ? String(tag.tag.prefix(characterLimit - 1)) + "…" : tag.tag }
         var body: some View { Text(displayText).font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.gray.opacity(0.2)).foregroundColor(.primary).clipShape(Capsule()) }
     }
 
-    @ViewBuilder private var commentsContent: some View { // Unchanged
+    @ViewBuilder private var commentsContent: some View {
         CommentsSection(
             flatComments: flatComments,
             totalCommentCount: totalCommentCount,
             status: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget,
             isCommentCollapsed: isCommentCollapsed,
-            toggleCollapseAction: toggleCollapseAction
+            toggleCollapseAction: toggleCollapseAction,
+            showCommentInputAction: showCommentInputAction
         )
     }
 
-    // MARK: - Body (Unchanged)
+    // MARK: - Body
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
@@ -258,7 +269,7 @@ struct DetailViewContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
         .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
-        .confirmationDialog( // Unchanged
+        .confirmationDialog(
             "Link kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
         ) {
             Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; Self.logger.info("Copied Post-Link to clipboard: \(urlString)") }
@@ -267,14 +278,14 @@ struct DetailViewContent: View {
     }
 
 
-    // MARK: - Helper Methods (Unchanged)
+    // MARK: - Helper Methods
     private func guessAspectRatio() -> CGFloat? {
         guard item.width > 0, item.height > 0 else { return 1.0 }
         return CGFloat(item.width) / CGFloat(item.height)
     }
 }
 
-// Helper Extension (Unchanged)
+// Helper Extension
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -295,7 +306,7 @@ fileprivate extension UIFont {
 }
 
 
-// MARK: - Previews (Unchanged)
+// MARK: - Previews
 #Preview("Compact - Limited Tags") {
     struct PreviewWrapper: View {
         @State var previewLinkTarget: PreviewLinkTarget? = nil
@@ -305,6 +316,7 @@ fileprivate extension UIFont {
         @StateObject var authService = AuthService(appSettings: AppSettings())
         @StateObject var navService = NavigationService()
         @StateObject var playerManager = VideoPlayerManager()
+        @State var showingCommentSheet = false
 
         func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
         func isCollapsed(_ id: Int) -> Bool { collapsedIDs.contains(id) }
@@ -336,17 +348,19 @@ fileprivate extension UIFont {
                     showAllTagsAction: {},
                     isCommentCollapsed: isCollapsed,
                     toggleCollapseAction: toggleCollapse,
-                    // --- Pass dummy values for preview ---
-                    currentVote: 1, // Example: Item is upvoted
+                    currentVote: 1,
                     upvoteAction: { print("Preview Upvote Tapped") },
-                    downvoteAction: { print("Preview Downvote Tapped") }
-                    // --- End Pass dummy ---
+                    downvoteAction: { print("Preview Downvote Tapped") },
+                    showCommentInputAction: { parentId in
+                         print("Preview Show Comment Input Tapped for parentId: \(parentId)")
+                         showingCommentSheet = true
+                    }
                 )
                 .environmentObject(navService)
                 .environmentObject(settings)
                 .environmentObject(authService)
                 .environmentObject(playerManager)
-                .environment(\.horizontalSizeClass, .compact) // Test compact layout
+                .environment(\.horizontalSizeClass, .compact)
                 .preferredColorScheme(.dark)
                 .task {
                     playerManager.configure(settings: settings)
@@ -354,16 +368,15 @@ fileprivate extension UIFont {
                          authService.isLoggedIn = true
                          authService.favoritesCollectionId = 1234
                          authService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil)
-                         // Mark seen items for preview state
-                         await settings.markItemsAsSeen(ids: [1,2]) // Mark items 1 and 2 as seen
+                         await settings.markItemsAsSeen(ids: [1,2])
                          print("Preview Task: AuthService configured and item marked as seen.")
                     }
                 }
+                 .sheet(isPresented: $showingCommentSheet) { Text("Dummy Comment Sheet") }
             }
         }
     }
 
-    // Helper function remains the same
     @MainActor func flattenHierarchyForPreview(comments: [ItemComment], maxDepth: Int = 5) -> [FlatCommentDisplayItem] {
         var flatList: [FlatCommentDisplayItem] = []
         let childrenByParentId = Dictionary(grouping: comments.filter { $0.parent != nil && $0.parent != 0 }, by: { $0.parent! })

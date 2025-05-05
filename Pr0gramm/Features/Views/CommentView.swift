@@ -17,6 +17,10 @@ struct CommentView: View {
     let isCollapsed: Bool
     /// Action to perform when the collapse toggle is tapped.
     let onToggleCollapse: () -> Void
+    /// Action to perform when reply button is tapped
+    let onReply: () -> Void
+
+    @EnvironmentObject var authService: AuthService // Check login status
 
     /// The user's rank/mark as an enum case.
     private var markEnum: Mark { Mark(rawValue: comment.mark) }
@@ -58,58 +62,51 @@ struct CommentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // --- MODIFIED: Header is now tappable if it has children ---
             HStack(spacing: 6) {
-                // Collapse/Expand Chevron (only if hasChildren)
+                // Collapse/Expand Chevron
                 if hasChildren {
                     Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                        .font(.caption.weight(.bold)) // Make chevron slightly bolder/smaller
+                        .font(.caption.weight(.bold))
                         .foregroundColor(.secondary)
-                        .frame(width: 12, height: 12) // Give it a consistent frame
+                        .frame(width: 12, height: 12)
                 } else {
-                    // Placeholder to maintain alignment
                     Spacer().frame(width: 12, height: 12)
                 }
 
-                Circle() // User mark indicator
-                    .fill(userMarkColor)
-                    .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
-                    .frame(width: 8, height: 8)
-                Text(comment.name)
-                    .font(UIConstants.captionFont.weight(.semibold))
+                // User Info Row
+                Circle().fill(userMarkColor).overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5)).frame(width: 8, height: 8)
+                Text(comment.name).font(UIConstants.captionFont.weight(.semibold))
                 Text("•").foregroundColor(.secondary)
-                Text("\(score)")
-                    .font(UIConstants.captionFont)
-                    .foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
+                Text("\(score)").font(UIConstants.captionFont).foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
                 Text("•").foregroundColor(.secondary)
-                Text(relativeTime)
-                     .font(UIConstants.captionFont)
-                    .foregroundColor(.secondary)
-                Spacer() // Push content to the left
-            }
-            .contentShape(Rectangle()) // Make the entire HStack tappable
-            .onTapGesture {
-                if hasChildren { // Only toggle if it has children
-                    onToggleCollapse()
+                Text(relativeTime).font(UIConstants.captionFont).foregroundColor(.secondary)
+                Spacer() // Push info to left
+
+                // Reply Button
+                if authService.isLoggedIn {
+                    Button(action: onReply) {
+                        Image(systemName: "arrowshape.turn.up.left")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 5)
                 }
             }
-            // --- END MODIFICATION ---
+            .contentShape(Rectangle())
+            .onTapGesture { if hasChildren { onToggleCollapse() } }
 
-            // --- MODIFIED: Comment Content only shown if not collapsed ---
+
             if !isCollapsed {
                 Text(attributedCommentContent)
                     .foregroundColor(.primary)
                     .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)
-                    // Add slight left padding to align with header text after chevron
-                    .padding(.leading, hasChildren ? 18 : 20) // Adjust padding based on chevron presence (approx.)
+                    .padding(.leading, hasChildren ? 18 : 20)
             }
-            // --- END MODIFICATION ---
         }
         .padding(.vertical, 6)
-        // --- MODIFIED: Optionally reduce opacity when collapsed ---
-        .opacity(isCollapsed ? 0.7 : 1.0) // Example: Slightly dim when collapsed
-        // ---------------------------------------------------------
+        .opacity(isCollapsed ? 0.7 : 1.0)
         .environment(\.openURL, OpenURLAction { url in
             if let itemID = parsePr0grammLink(url: url) {
                 print("Pr0gramm link tapped, attempting to preview item ID: \(itemID)")
@@ -130,7 +127,7 @@ struct CommentView: View {
     }
 }
 
-// Helper Extension (unverändert)
+// Helper Extension
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -154,26 +151,28 @@ fileprivate extension UIFont {
 
 
 // MARK: - Preview
-#Preview("Normal") {
-    // Use a wrapper to provide the Binding
+#Preview("Normal with Reply") {
     struct PreviewWrapper: View {
         @State var target: PreviewLinkTarget? = nil
         var body: some View {
             CommentView(
                 comment: ItemComment(id: 1, parent: 0, content: "Top comment http://pr0gramm.com/new/12345", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "UserA", mark: 2),
                 previewLinkTarget: $target,
-                hasChildren: true, // Simulate children
+                hasChildren: true,
                 isCollapsed: false,
-                onToggleCollapse: { print("Toggle tapped") }
+                onToggleCollapse: { print("Toggle tapped") },
+                onReply: { print("Reply Tapped") }
             )
             .padding()
+            .environmentObject(AuthService(appSettings: AppSettings()))
         }
     }
-    return PreviewWrapper()
+    let auth = AuthService(appSettings: AppSettings())
+    auth.isLoggedIn = true
+    return PreviewWrapper().environmentObject(auth)
 }
 
 #Preview("Collapsed") {
-    // Use a wrapper to provide the Binding
     struct PreviewWrapper: View {
         @State var target: PreviewLinkTarget? = nil
         var body: some View {
@@ -181,30 +180,37 @@ fileprivate extension UIFont {
                 comment: ItemComment(id: 2, parent: 0, content: "Collapsed comment", created: Int(Date().timeIntervalSince1970)-200, up: 5, down: 0, confidence: 0.9, name: "UserB", mark: 1),
                 previewLinkTarget: $target,
                 hasChildren: true,
-                isCollapsed: true, // Simulate collapsed
-                onToggleCollapse: { print("Toggle tapped") }
+                isCollapsed: true,
+                onToggleCollapse: { print("Toggle tapped") },
+                onReply: { print("Reply Tapped") }
             )
             .padding()
+            .environmentObject(AuthService(appSettings: AppSettings()))
         }
     }
-    return PreviewWrapper()
+    let auth = AuthService(appSettings: AppSettings())
+    auth.isLoggedIn = true
+    return PreviewWrapper().environmentObject(auth)
 }
 
 #Preview("No Children") {
-    // Use a wrapper to provide the Binding
     struct PreviewWrapper: View {
         @State var target: PreviewLinkTarget? = nil
         var body: some View {
             CommentView(
                 comment: ItemComment(id: 3, parent: 1, content: "Reply without children", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "UserC", mark: 7),
                 previewLinkTarget: $target,
-                hasChildren: false, // Simulate no children
+                hasChildren: false,
                 isCollapsed: false,
-                onToggleCollapse: { print("Toggle tapped") }
+                onToggleCollapse: { print("Toggle tapped") },
+                onReply: { print("Reply Tapped") }
             )
             .padding()
+            .environmentObject(AuthService(appSettings: AppSettings()))
         }
     }
-    return PreviewWrapper()
+    let auth = AuthService(appSettings: AppSettings())
+    auth.isLoggedIn = true
+    return PreviewWrapper().environmentObject(auth)
 }
 // --- END OF COMPLETE FILE ---
