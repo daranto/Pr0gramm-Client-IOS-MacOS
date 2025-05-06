@@ -2,26 +2,24 @@
 // --- START OF COMPLETE FILE ---
 
 import SwiftUI
-import Kingfisher // Import Kingfisher
+import Kingfisher
 
-// --- NEW: Define navigation targets ---
 enum ProfileNavigationTarget: Hashable {
     case uploads(username: String)
     case favoritedComments(username: String)
+    case allCollections(username: String)
+    case collectionItems(collection: ApiCollection, username: String)
 }
-// --- END NEW ---
 
 /// Displays the user's profile information when logged in, or prompts for login otherwise.
 struct ProfileView: View {
-    @EnvironmentObject var authService: AuthService // Access authentication state
-    @EnvironmentObject var settings: AppSettings // Required for preview setup
-    /// State to control the presentation of the login sheet.
+    @EnvironmentObject var authService: AuthService
+    @EnvironmentObject var settings: AppSettings
     @State private var showingLoginSheet = false
 
-    // Date formatter for German locale
     private let germanDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateStyle = .long // e.g., "3. Mai 2014"
+        formatter.dateStyle = .long
         formatter.timeStyle = .none
         formatter.locale = Locale(identifier: "de_DE")
         return formatter
@@ -29,142 +27,130 @@ struct ProfileView: View {
 
     var body: some View {
         NavigationStack {
-            // Use List directly for standard iOS profile appearance
             List {
-                // Show different content based on login status
                 if authService.isLoggedIn {
                     loggedInContent
                 } else {
-                    loggedOutContentSection // Embed logged out content in a section
+                    loggedOutContentSection
                 }
             }
             .navigationTitle(navigationTitleText)
-            // You might need to apply font modifiers to section headers too if they appear too small.
-            // SwiftUI doesn't offer a direct modifier for all section headers globally easily.
-            // Consider using .headerProminence(.increased) on Sections as done below.
             .sheet(isPresented: $showingLoginSheet) {
-                // Present the LoginView sheet
                 LoginView()
-                    .environmentObject(authService) // Pass only AuthService
+                    .environmentObject(authService)
             }
-            .overlay { // Show loading indicator during login/logout
+            .overlay {
                  if authService.isLoading {
                       ProgressView(authService.isLoggedIn ? "Aktion läuft..." : "Lade Status...")
                          .padding().background(Material.regular).cornerRadius(10)
                  }
             }
-            // --- MODIFIED: Use ProfileNavigationTarget ---
             .navigationDestination(for: ProfileNavigationTarget.self) { target in
                  switch target {
                  case .uploads(let username):
                      UserUploadsView(username: username)
                  case .favoritedComments(let username):
                      UserFavoritedCommentsView(username: username)
+                 case .allCollections(let username):
+                     UserCollectionsListView(username: username)
+                 case .collectionItems(let collection, let username):
+                     CollectionItemsView(collection: collection, username: username)
                  }
             }
-            // --- END MODIFICATION ---
         }
     }
 
-    /// Content displayed when the user is logged in. Structured as List Sections.
     @ViewBuilder
     private var loggedInContent: some View {
-        // Section for Badges (optional)
         if let user = authService.currentUser, let badges = user.badges, !badges.isEmpty {
-            Section { // No header text for badges section
+            Section {
                 badgeScrollView(badges: badges)
-                     .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0)) // Adjust insets
+                     .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
             }
         }
 
         Section("Benutzerinformationen") {
             if let user = authService.currentUser {
-                // HStacks with Spacer for right-alignment
                 HStack {
                     Text("Rang")
-                        .font(UIConstants.bodyFont) // Use adaptive font
+                        .font(UIConstants.bodyFont)
                     Spacer()
-                    UserMarkView(markValue: user.mark) // UserMarkView uses adaptive font now
+                    UserMarkView(markValue: user.mark)
                 }
                 HStack {
                     Text("Benis")
-                        .font(UIConstants.bodyFont) // Use adaptive font
+                        .font(UIConstants.bodyFont)
                     Spacer()
                     Text("\(user.score)")
-                        .font(UIConstants.bodyFont) // Values use the same font as labels
+                        .font(UIConstants.bodyFont)
                         .foregroundColor(.secondary)
                 }
                 HStack {
                     Text("Registriert seit")
-                        .font(UIConstants.bodyFont) // Use adaptive font
+                        .font(UIConstants.bodyFont)
                     Spacer()
                     Text(formatDateGerman(date: Date(timeIntervalSince1970: TimeInterval(user.registered))))
-                        .font(UIConstants.bodyFont) // Values use the same font as labels
+                        .font(UIConstants.bodyFont)
                         .foregroundColor(.secondary)
                 }
 
-                // --- MODIFIED: Use ProfileNavigationTarget for uploads ---
                 NavigationLink(value: ProfileNavigationTarget.uploads(username: user.name)) {
                     Text("Meine Uploads")
-                        .font(UIConstants.bodyFont) // Use adaptive font
+                        .font(UIConstants.bodyFont)
                 }
-                // --- END MODIFICATION ---
+                
+                if !authService.userCollections.isEmpty {
+                    NavigationLink(value: ProfileNavigationTarget.allCollections(username: user.name)) {
+                        Text("Meine Sammlungen (\(authService.userCollections.count))")
+                            .font(UIConstants.bodyFont)
+                    }
+                }
 
-                // --- NEW: NavigationLink for favorited comments ---
                 NavigationLink(value: ProfileNavigationTarget.favoritedComments(username: user.name)) {
                      Text("Favorisierte Kommentare")
                          .font(UIConstants.bodyFont)
                  }
-                // --- END NEW ---
 
             } else {
-                // Show placeholder while user data might still be loading initially
                 HStack { Spacer(); ProgressView(); Text("Lade Profildaten...")
-                        .font(UIConstants.footnoteFont) // Use footnote for placeholder
+                        .font(UIConstants.footnoteFont)
                         .foregroundColor(.secondary); Spacer() }.listRowSeparator(.hidden)
             }
         }
-        .headerProminence(.increased) // Make section header slightly more prominent
+        .headerProminence(.increased)
 
-        // Section for pr0mium Link
         Section("pr0gramm unterstützen") {
             VStack(alignment: .leading, spacing: 8) {
-                 // The descriptive text
                  Text("Wenn dir die App und pr0gramm gefallen, ziehe in Erwägung, die Plattform zu unterstützen. Diese App enthält keine Werbung und ist kostenlos.")
-                     .font(UIConstants.footnoteFont) // Use adaptive footnote font
+                     .font(UIConstants.footnoteFont)
                      .foregroundColor(.secondary)
-                     .padding(.bottom, 5) // Add some space below the text
-
-                 // The Link view
+                     .padding(.bottom, 5)
                  if let url = URL(string: "https://pr0mart.com/Nach-Kategorien/Sonstiges/pr0mium/") {
                      Link(destination: url) {
                          HStack {
                              Text("pr0mium über pr0mart erwerben")
-                                .font(UIConstants.bodyFont) // Use adaptive body font
-                                .foregroundColor(.accentColor) // Standard link color
+                                .font(UIConstants.bodyFont)
+                                .foregroundColor(.accentColor)
                              Spacer()
-                             Image(systemName: "arrow.up.right.square") // Indicate external link
+                             Image(systemName: "arrow.up.right.square")
                                 .foregroundColor(.secondary)
                          }
                      }
                  }
             }
         }
-        .headerProminence(.increased) // Make section header slightly more prominent
-
+        .headerProminence(.increased)
 
         Section {
-             // Logout button
              Button("Logout", role: .destructive) {
                  Task { await authService.logout() }
              }
              .disabled(authService.isLoading)
              .frame(maxWidth: .infinity, alignment: .center)
-             .font(UIConstants.bodyFont) // Use adaptive font
+             .font(UIConstants.bodyFont)
         }
     }
 
-    // Badge ScrollView
     @ViewBuilder
     private func badgeScrollView(badges: [ApiBadge]) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -181,30 +167,25 @@ struct ProfileView: View {
         }
     }
 
-
-    /// Content displayed when the user is logged out, now structured as a List Section.
     @ViewBuilder
     private var loggedOutContentSection: some View {
-        Section { // Wrap in Section for proper List display
+        Section {
             VStack(spacing: 20) {
                  Text("Du bist nicht angemeldet.")
-                     .font(UIConstants.headlineFont) // Use adaptive headline
+                     .font(UIConstants.headlineFont)
                      .foregroundColor(.secondary)
-                 // Button to open the login sheet
                  Button { showingLoginSheet = true } label: {
                      HStack { Image(systemName: "person.crop.circle.badge.plus"); Text("Anmelden") }.padding(.horizontal)
                  }
                  .buttonStyle(.borderedProminent)
                  .disabled(authService.isLoading)
-                 .font(UIConstants.bodyFont) // Use adaptive body for button text
+                 .font(UIConstants.bodyFont)
              }
-             .frame(maxWidth: .infinity, alignment: .center) // Center content within the VStack
-             .padding(.vertical) // Add some vertical padding
+             .frame(maxWidth: .infinity, alignment: .center)
+             .padding(.vertical)
         }
     }
 
-
-    /// Determines the navigation title based on login status and user data.
     private var navigationTitleText: String {
         if authService.isLoggedIn {
             return authService.currentUser?.name ?? "Profil"
@@ -213,13 +194,10 @@ struct ProfileView: View {
         }
     }
 
-    // Helper function for date formatting
     private func formatDateGerman(date: Date) -> String {
         return germanDateFormatter.string(from: date)
     }
 }
-
-// MARK: - Helper View: UserMarkView
 
 struct UserMarkView: View {
     let markValue: Int
@@ -235,15 +213,13 @@ struct UserMarkView: View {
                 .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
                 .frame(width: 8, height: 8)
             Text(markName)
-                .font(UIConstants.subheadlineFont) // Use adaptive subheadline
+                .font(UIConstants.subheadlineFont)
                 .foregroundColor(.secondary)
         }
     }
 }
 
 // MARK: - Previews
-
-/// Wrapper view for creating a logged-in state for the ProfileView preview.
 private struct LoggedInProfilePreviewWrapper: View {
     @StateObject private var settings: AppSettings
     @StateObject private var authService: AuthService
@@ -251,25 +227,24 @@ private struct LoggedInProfilePreviewWrapper: View {
     init() {
         let si = AppSettings()
         let ai = AuthService(appSettings: si)
-        ai.isLoggedIn = true // Simulate logged in
+        ai.isLoggedIn = true
 
-        // Sample badges using the updated structure
         let sampleBadges = [
-            ApiBadge(image: "pr0-coin.png", description: "Hat 1 Tag pr0mium erschürft", created: 1500688733, link: "#top/2043677", category: nil),
-            ApiBadge(image: "connect4-red.png", description: "Ging am 1. April 2018 siegreich hervor", created: 1522620001, link: "#top/2472492", category: nil),
-            ApiBadge(image: "krebs-donation.png", description: "Hat gegen Krebs gespendet", created: 1525794290, link: "#top/Das%20pr0%20spendet", category: nil),
-            ApiBadge(image: "benitrator-lose.png", description: "Hat im März 2019 nach 17 Drehs 16 Benis verzockt", created: 1554060600, link: "#top/3084263", category: nil),
-            ApiBadge(image: "shopping-cart.png", description: "Kommerzhure", created: 1569425891, link: "https://pr0mart.com", category: nil)
+            ApiBadge(image: "pr0-coin.png", description: "Hat 1 Tag pr0mium erschürft", created: 1500688733, link: "#top/2043677", category: nil)
+        ]
+        let sampleCollections = [
+            ApiCollection(id: 101, name: "Meine Favoriten", keyword: "favoriten", isPublic: 0, isDefault: 1, itemCount: 123),
+            ApiCollection(id: 102, name: "Lustige Katzen", keyword: "katzen", isPublic: 0, isDefault: 0, itemCount: 45)
         ]
 
         ai.currentUser = UserInfo(
-            id: 1,
-            name: "Daranto", // Use your name for preview consistency
-            registered: Int(Date().timeIntervalSince1970) - 500000,
-            score: 1337,
-            mark: 2,
-            badges: sampleBadges // Include badges in preview user
+            id: 1, name: "Daranto", registered: Int(Date().timeIntervalSince1970) - 500000,
+            score: 1337, mark: 2, badges: sampleBadges, collections: sampleCollections // Include collections here
         )
+        // Use the new #if DEBUG method to set collections for preview
+        #if DEBUG
+        ai.setUserCollectionsForPreview(sampleCollections)
+        #endif
 
         _settings = StateObject(wrappedValue: si)
         _authService = StateObject(wrappedValue: ai)
@@ -282,7 +257,7 @@ private struct LoggedInProfilePreviewWrapper: View {
     }
 }
 
-#Preview("Logged In with Badges") {
+#Preview("Logged In with Badges & Collections") {
     LoggedInProfilePreviewWrapper()
 }
 

@@ -110,9 +110,7 @@ struct DetailViewContent: View {
         }
     }
 
-    // --- MODIFIED: Font size changed ---
-    private let actionIconFont: Font = .title2 // Changed from .title
-    // --- END MODIFICATION ---
+    private let actionIconFont: Font = .title2
 
     @ViewBuilder private var voteCounterView: some View {
         let benis = item.up - item.down
@@ -122,13 +120,13 @@ struct DetailViewContent: View {
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(currentVote == 1 ? Color.white : Color.secondary,
                                      currentVote == 1 ? Color.green : Color.secondary)
-                    .font(actionIconFont) // Uses the updated font size
+                    .font(actionIconFont)
             }
             .buttonStyle(.plain)
             .disabled(!authService.isLoggedIn)
 
             Text("\(benis)")
-                .font(.title.weight(.bold)) // Keep benis score large
+                .font(.title.weight(.bold))
                 .foregroundColor(.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -138,7 +136,7 @@ struct DetailViewContent: View {
                     .symbolRenderingMode(.palette)
                      .foregroundStyle(currentVote == -1 ? Color.white : Color.secondary,
                                       currentVote == -1 ? Color.red : Color.secondary)
-                    .font(actionIconFont) // Uses the updated font size
+                    .font(actionIconFont)
             }
             .buttonStyle(.plain)
             .disabled(!authService.isLoggedIn)
@@ -149,9 +147,9 @@ struct DetailViewContent: View {
         Button { Task { isProcessingFavorite = true; await toggleFavoriteAction(); try? await Task.sleep(for: .milliseconds(100)); isProcessingFavorite = false } }
         label: {
             Image(systemName: isFavorited ? "heart.fill" : "heart")
-                .font(actionIconFont) // Uses the updated font size
+                .font(actionIconFont)
                 .foregroundColor(isFavorited ? .pink : .secondary)
-                .frame(width: 44, height: 44) // Keep frame for consistent spacing
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(isProcessingFavorite || !authService.isLoggedIn)
@@ -161,9 +159,9 @@ struct DetailViewContent: View {
         Button { showingShareOptions = true }
         label: {
             Image(systemName: "square.and.arrow.up")
-                .font(actionIconFont) // Uses the updated font size
+                .font(actionIconFont)
                 .foregroundColor(.secondary)
-                .frame(width: 44, height: 44) // Keep frame for consistent spacing
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -173,9 +171,9 @@ struct DetailViewContent: View {
         Button { showCommentInputAction(item.id, 0) }
         label: {
             Image(systemName: "plus.message")
-                .font(actionIconFont) // Uses the updated font size
+                .font(actionIconFont)
                 .foregroundColor(.secondary)
-                .frame(width: 44, height: 44) // Keep frame for consistent spacing
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -192,7 +190,7 @@ struct DetailViewContent: View {
                 if authService.isLoggedIn { favoriteButton }
                 shareButton
             }
-            .frame(minHeight: 44) // Keep minHeight
+            .frame(minHeight: 44)
 
             Group {
                 switch infoLoadingStatus {
@@ -211,7 +209,7 @@ struct DetailViewContent: View {
                     }
                 case .loading: ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .error: Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5) // Placeholder for consistent spacing
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -287,7 +285,7 @@ struct DetailViewContent: View {
     }
 }
 
-// Helper Extension
+// Helper Extension (Unverändert)
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -314,11 +312,21 @@ fileprivate extension UIFont {
         @State var previewLinkTarget: PreviewLinkTarget? = nil
         @State var fullscreenTarget: FullscreenImageTarget? = nil
         @State var collapsedIDs: Set<Int> = []
+        // --- MODIFIED: Use AppSettings directly for the preview wrapper ---
         @StateObject var settings = AppSettings()
-        @StateObject var authService = AuthService(appSettings: AppSettings())
+        @StateObject var authService: AuthService
+        // --- END MODIFICATION ---
         @StateObject var navService = NavigationService()
         @StateObject var playerManager = VideoPlayerManager()
         @State private var commentReplyTarget: ReplyTarget? = nil
+
+        // --- NEW: Initializer for PreviewWrapper ---
+        init() {
+            let tempSettings = AppSettings() // Create AppSettings instance first
+            _settings = StateObject(wrappedValue: tempSettings) // Initialize @StateObject
+            _authService = StateObject(wrappedValue: AuthService(appSettings: tempSettings)) // Pass it to AuthService
+        }
+        // --- END NEW ---
 
         func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
         func isCollapsed(_ id: Int) -> Bool { collapsedIDs.contains(id) }
@@ -350,7 +358,7 @@ fileprivate extension UIFont {
                     showAllTagsAction: {},
                     isCommentCollapsed: isCollapsed,
                     toggleCollapseAction: toggleCollapse,
-                    currentVote: 1, // Voted up
+                    currentVote: 1,
                     upvoteAction: { print("Preview Upvote Tapped") },
                     downvoteAction: { print("Preview Downvote Tapped") },
                     showCommentInputAction: { itemId, parentId in
@@ -359,8 +367,8 @@ fileprivate extension UIFont {
                     }
                 )
                 .environmentObject(navService)
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environmentObject(settings) // Pass the initialized settings
+                .environmentObject(authService) // Pass the initialized authService
                 .environmentObject(playerManager)
                 .environment(\.horizontalSizeClass, .compact)
                 .preferredColorScheme(.dark)
@@ -368,7 +376,9 @@ fileprivate extension UIFont {
                     playerManager.configure(settings: settings)
                     if authService.currentUser == nil {
                          authService.isLoggedIn = true
-                         authService.favoritesCollectionId = 1234
+                         // --- MODIFIED: Use AppSettings for collection ID ---
+                         settings.selectedCollectionIdForFavorites = 1234
+                         // --- END MODIFICATION ---
                          authService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil)
                          await settings.markItemsAsSeen(ids: [1,2])
                          print("Preview Task: AuthService configured and item marked as seen.")

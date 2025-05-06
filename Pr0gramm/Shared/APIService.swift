@@ -5,7 +5,7 @@ import Foundation
 import os
 import UIKit // For UIImage in CaptchaResponse
 
-// MARK: - API Data Structures (Top Level) - Unverändert bis Inbox
+// MARK: - API Data Structures (Top Level)
 
 /// Response structure for the `/items/info` endpoint.
 struct ItemsInfoResponse: Codable {
@@ -83,7 +83,6 @@ struct CaptchaResponse: Codable {
     let captcha: String
 }
 
-// MARK: - Badge Structure --- Unverändert
 struct ApiBadge: Codable, Identifiable, Hashable {
     var id: String { image }
     let image: String
@@ -96,17 +95,15 @@ struct ApiBadge: Codable, Identifiable, Hashable {
         return URL(string: "https://pr0gramm.com/media/badges/")?.appendingPathComponent(image)
     }
 }
-// --- END Badge Structure ---
 
-/// Response structure for the `/profile/info` endpoint. - Unverändert
 struct ProfileInfoResponse: Codable {
     let user: ApiProfileUser
     let badges: [ApiBadge]?
     let commentCount: Int?
     let uploadCount: Int?
     let tagCount: Int?
+    let collections: [ApiCollection]?
 }
-/// Represents user profile details as returned by the `/profile/info` API. - Unverändert
 struct ApiProfileUser: Codable, Hashable {
     let id: Int
     let name: String
@@ -118,7 +115,6 @@ struct ApiProfileUser: Codable, Hashable {
     let banned: Int?
     let bannedUntil: Int?
 }
-/// Simplified user info structure used within the app (e.g., `AuthService.currentUser`). - Unverändert
 struct UserInfo: Codable, Hashable {
     let id: Int
     let name: String
@@ -126,26 +122,25 @@ struct UserInfo: Codable, Hashable {
     let score: Int
     let mark: Int
     let badges: [ApiBadge]?
+    var collections: [ApiCollection]?
 }
-/// Response structure for the `/collections/get` endpoint. - Unverändert
 struct CollectionsResponse: Codable {
     let collections: [ApiCollection]
 }
-/// Represents a user collection (e.g., Favorites). - Unverändert
-struct ApiCollection: Codable, Identifiable {
+struct ApiCollection: Codable, Identifiable, Hashable {
     let id: Int
     let name: String
-    let keyword: String?
+    let keyword: String? // This is the "name" used in the `collection` API parameter
     let isPublic: Int
     let isDefault: Int
     let itemCount: Int
+    var isActuallyPublic: Bool { isPublic == 1 }
+    var isActuallyDefault: Bool { isDefault == 1 }
 }
-/// Response structure for the `/user/sync` endpoint. - Unverändert
 struct UserSyncResponse: Codable {
     let likeNonce: String?
 }
 
-// Structure for Comment Post Response - Unverändert
 struct PostCommentResultComment: Codable, Identifiable, Hashable {
     let id: Int
     let parent: Int?
@@ -169,18 +164,15 @@ struct CommentsPostErrorResponse: Codable {
     let error: String
 }
 
-// Structure for Comment Likes Response - Unverändert
 struct ProfileCommentLikesResponse: Codable {
     let comments: [ItemComment]
     let hasOlder: Bool
     let hasNewer: Bool
 }
 
-// --- NEW: Structures for Inbox ---
 struct InboxResponse: Codable {
     let messages: [InboxMessage]
-    let atEnd: Bool // Indicates if the end of the inbox has been reached
-    // API Spec mentions 'queue' but example response doesn't have it, make optional
+    let atEnd: Bool
     let queue: InboxQueueInfo?
 }
 
@@ -194,32 +186,37 @@ struct InboxQueueInfo: Codable {
 }
 
 struct InboxMessage: Codable, Identifiable {
-    let id: Int // ID of the message/notification/comment itself
-    let type: String // "comment", "notification", "message", "follow"
-    let itemId: Int? // ID of the post if type is "comment"
-    let thumb: String? // Thumbnail of the post if type is "comment"
-    let flags: Int? // Flags of the post if type is "comment"
-    let name: String? // Username of the sender (commenter, PM sender, follower)
-    let mark: Int? // Mark of the sender
-    let senderId: Int // User ID of the sender (0 for system notifications)
-    let score: Int // Score of the comment (if type="comment"), otherwise likely 0
-    let created: Int // Timestamp when the notification/message was created
-    let message: String? // Content of the comment, notification, or PM
-    let read: Int // 0 (unread) or 1 (read)
-    let blocked: Int // 0 or 1
+    let id: Int
+    let type: String
+    let itemId: Int?
+    let thumb: String?
+    let flags: Int?
+    let name: String?
+    let mark: Int?
+    let senderId: Int
+    let score: Int
+    let created: Int
+    let message: String?
+    let read: Int
+    let blocked: Int
 
-    // Computed property for thumbnail URL (similar to ItemComment)
     var itemThumbnailUrl: URL? {
         guard let thumb = thumb, !thumb.isEmpty else { return nil }
         return URL(string: "https://thumb.pr0gramm.com/")?.appendingPathComponent(thumb)
     }
 }
-// --- END NEW ---
+
+// Helper to remove duplicate query items by name, as URLComponents.queryItems can have duplicates
+extension Array where Element == URLQueryItem {
+    func removingDuplicatesByName() -> [URLQueryItem] {
+        var addedDict = [String: Bool]()
+        return filter {
+            addedDict.updateValue(true, forKey: $0.name) == nil
+        }
+    }
+}
 
 
-// MARK: - APIService Class Definition
-
-/// Handles communication with the pr0gramm API.
 class APIService {
     struct LoginRequest { let username: String; let password: String; let captcha: String?; let token: String? }
 
@@ -227,24 +224,51 @@ class APIService {
     private let baseURL = URL(string: "https://pr0gramm.com/api")!
     private let decoder = JSONDecoder()
 
-    // MARK: - API Methods
-
-    // ... (fetchItems, fetchItem, fetchFavorites, searchItems, fetchItemInfo, login, logout, fetchCaptcha, getProfileInfo, getUserCollections, syncUser, addToCollection, removeFromCollection, vote, postComment, fetchFavoritedComments, favComment, unfavComment - unverändert) ...
-    func fetchItems(flags: Int, promoted: Int? = nil, user: String? = nil, tags: String? = nil, olderThanId: Int? = nil) async throws -> [Item] {
+    // --- MODIFIED: fetchItems signature and logic ---
+    func fetchItems(
+        flags: Int,
+        promoted: Int? = nil,                  // For feed type (0=new, 1=promoted)
+        user: String? = nil,                   // For user's uploads, OR for collection owner if collectionIsSelf=true
+        tags: String? = nil,                   // For tag search
+        olderThanId: Int? = nil,               // For pagination
+        collectionNameForUser: String? = nil,  // Name/keyword of the collection
+        isOwnCollection: Bool = false          // True if 'user' owns 'collectionNameForUser' and is logged in
+        // collectionId: Int? = nil,           // Potentially for future use or admin actions, not for general item fetching
+                                               // as it seems to have pagination issues or returns limited results.
+    ) async throws -> [Item] {
         let endpoint = "/items/get"
-        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
-        var queryItems = [ URLQueryItem(name: "flags", value: String(flags)) ]
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        var queryItems = [URLQueryItem(name: "flags", value: String(flags))]
         var logDescription = "flags=\(flags)"
 
-        if let user = user {
-            queryItems.append(URLQueryItem(name: "user", value: user))
-            logDescription += ", user=\(user)"
+        // Handle Collection first as it might also set 'user' and 'self'
+        if let name = collectionNameForUser {
+            queryItems.append(URLQueryItem(name: "collection", value: name))
+            logDescription += ", collectionName=\(name)"
+            if isOwnCollection {
+                guard let ownerUsername = user else {
+                    Self.logger.error("Error: isOwnCollection is true, but no user (owner) provided for collection '\(name)'.")
+                    throw NSError(domain: "APIService", code: 1, userInfo: [NSLocalizedDescriptionKey: "Benutzer für eigene Sammlung nicht angegeben."])
+                }
+                queryItems.append(URLQueryItem(name: "user", value: ownerUsername))
+                queryItems.append(URLQueryItem(name: "self", value: "true"))
+                logDescription += ", collectionOwner=\(ownerUsername), self=true"
+            }
+            // If not isOwnCollection, 'user' and 'self' are not added; implies public collection of 'user' (if 'user' is also set for that purpose)
+            // or just a public collection by 'name' if 'user' is not otherwise specified.
+        } else if let regularUser = user { // This 'user' is for uploads or general feed if not a collection fetch
+            queryItems.append(URLQueryItem(name: "user", value: regularUser))
+            logDescription += ", user=\(regularUser) (for uploads/feed)"
         }
+
+
         if let tags = tags {
             queryItems.append(URLQueryItem(name: "tags", value: tags))
             logDescription += ", tags='\(tags)'"
         }
-        if let promoted = promoted {
+        if let promoted = promoted, collectionNameForUser == nil { // 'promoted' usually not used with 'collection'
             queryItems.append(URLQueryItem(name: "promoted", value: String(promoted)))
             logDescription += ", promoted=\(promoted)"
         }
@@ -252,22 +276,25 @@ class APIService {
             queryItems.append(URLQueryItem(name: "older", value: String(olderId)))
             logDescription += ", older=\(olderId)"
         }
-
-        urlComponents.queryItems = queryItems
+        
+        urlComponents.queryItems = queryItems.removingDuplicatesByName() // Ensure no duplicate param names
         guard let url = urlComponents.url else { throw URLError(.badURL) }
+        
+        Self.logger.info("Fetching items from \(endpoint) with params: [\(logDescription)] URL: \(url.absoluteString)")
         let request = URLRequest(url: url)
-        Self.logger.info("Fetching items from \(endpoint) with params: [\(logDescription)]")
+
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "\(endpoint) (\(logDescription))")
             Self.logger.info("API fetch completed for [\(logDescription)]: \(apiResponse.items.count) items received. atEnd: \(apiResponse.atEnd ?? false)")
             return apiResponse.items
-        }
-        catch {
+        } catch {
             Self.logger.error("Error during \(endpoint) (\(logDescription)): \(error.localizedDescription)")
             throw error
         }
     }
+    // --- END MODIFICATION ---
+
 
     func fetchItem(id: Int, flags: Int) async throws -> Item? {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
@@ -277,17 +304,24 @@ class APIService {
         catch { Self.logger.error("Error during /items/get (single item) for ID \(id): \(error.localizedDescription)"); throw error }
     }
 
-    func fetchFavorites(username: String, flags: Int, olderThanId: Int? = nil) async throws -> [Item] {
-        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
-        var queryItems = [ URLQueryItem(name: "flags", value: String(flags)), URLQueryItem(name: "user", value: username), URLQueryItem(name: "collection", value: "favoriten"), URLQueryItem(name: "self", value: "true") ]
-        if let olderId = olderThanId { queryItems.append(URLQueryItem(name: "older", value: String(olderId))) }; urlComponents.queryItems = queryItems; guard let url = urlComponents.url else { throw URLError(.badURL) }
-        Self.logger.debug("Fetching favorites for user \(username) with flags \(flags), olderThan: \(olderThanId ?? -1)"); let request = URLRequest(url: url)
-        do { let (data, response) = try await URLSession.shared.data(for: request); let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (favorites)"); Self.logger.info("Successfully fetched \(apiResponse.items.count) favorite items for user \(username). atEnd: \(apiResponse.atEnd ?? false)"); let favoritedItems = apiResponse.items.map { item -> Item in var mutableItem = item; mutableItem.favorited = true; return mutableItem }; return favoritedItems }
-        catch { Self.logger.error("Error during /items/get (favorites) for user \(username): \(error.localizedDescription)"); if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { Self.logger.warning("Fetching favorites failed: User authentication required.") }; throw error }
+    // --- MODIFIED: fetchFavorites to use collectionNameForUser and isOwnCollection ---
+    func fetchFavorites(username: String, collectionKeyword: String, flags: Int, olderThanId: Int? = nil) async throws -> [Item] {
+        Self.logger.debug("Fetching favorites for user \(username), collectionKeyword '\(collectionKeyword)', flags \(flags), olderThan: \(olderThanId ?? -1)")
+        return try await fetchItems(
+            flags: flags,
+            user: username, // Pass username for the 'user' parameter when collectionIsSelf=true
+            olderThanId: olderThanId,
+            collectionNameForUser: collectionKeyword,
+            isOwnCollection: true // Favorites are always the user's own collection
+        )
     }
+    // --- END MODIFICATION ---
+
 
     @available(*, deprecated, message: "Use fetchItems(tags:flags:promoted:olderThanId:) instead")
-    func searchItems(tags: String, flags: Int) async throws -> [Item] { return try await fetchItems(flags: flags, tags: tags) }
+    func searchItems(tags: String, flags: Int) async throws -> [Item] {
+        return try await fetchItems(flags: flags, user: nil, tags: tags) // Ensure user is nil if not for specific user uploads
+    }
 
     func fetchItemInfo(itemId: Int) async throws -> ItemsInfoResponse {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/info"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
@@ -314,7 +348,7 @@ class APIService {
     }
 
     func fetchCaptcha() async throws -> CaptchaResponse {
-        let endpoint = "/user/captcha"; let url = baseURL.appendingPathComponent(endpoint); let request = URLRequest(url: url); Self.logger.info("Fetching new captcha...") // Use let for request
+        let endpoint = "/user/captcha"; let url = baseURL.appendingPathComponent(endpoint); let request = URLRequest(url: url); Self.logger.info("Fetching new captcha...")
         do { let (data, response) = try await URLSession.shared.data(for: request); let captchaResponse: CaptchaResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint); Self.logger.info("Successfully fetched captcha with token: \(captchaResponse.token)"); return captchaResponse }
         catch { Self.logger.error("Error fetching or decoding captcha: \(error.localizedDescription)"); throw error }
     }
@@ -322,21 +356,21 @@ class APIService {
     func getProfileInfo(username: String, flags: Int = 31) async throws -> ProfileInfoResponse {
         let endpoint = "/profile/info"; guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
         urlComponents.queryItems = [ URLQueryItem(name: "name", value: username), URLQueryItem(name: "flags", value: String(flags)) ]; guard let url = urlComponents.url else { throw URLError(.badURL) }
-        let request = URLRequest(url: url) // Use let
+        let request = URLRequest(url: url)
         Self.logger.info("Fetching profile info for user: \(username) with flags \(flags)")
-        do { let (data, response) = try await URLSession.shared.data(for: request); let profileInfoResponse: ProfileInfoResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint); Self.logger.info("Successfully fetched profile info for: \(profileInfoResponse.user.name) (Badges found: \(profileInfoResponse.badges?.count ?? 0))"); return profileInfoResponse }
+        do { let (data, response) = try await URLSession.shared.data(for: request); let profileInfoResponse: ProfileInfoResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint); Self.logger.info("Successfully fetched profile info for: \(profileInfoResponse.user.name) (Badges: \(profileInfoResponse.badges?.count ?? 0), Collections: \(profileInfoResponse.collections?.count ?? 0))"); return profileInfoResponse }
         catch { if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { Self.logger.warning("Fetching profile info failed for \(username): Session likely invalid.") } else if error is DecodingError { Self.logger.error("Failed to decode /profile/info response for \(username): \(error.localizedDescription)") } else { Self.logger.error("Error during \(endpoint) for \(username): \(error.localizedDescription)") }; throw error }
     }
 
     func getUserCollections() async throws -> CollectionsResponse {
-        let endpoint = "/collections/get"; Self.logger.info("Fetching user collections..."); let url = baseURL.appendingPathComponent(endpoint); let request = URLRequest(url: url); // Use let for request
+        let endpoint = "/collections/get"; Self.logger.info("Fetching user collections (old API)..."); let url = baseURL.appendingPathComponent(endpoint); let request = URLRequest(url: url);
         do { let (data, response) = try await URLSession.shared.data(for: request); return try handleApiResponse(data: data, response: response, endpoint: endpoint) }
-        catch { Self.logger.error("Failed to fetch user collections: \(error.localizedDescription)"); throw error }
+        catch { Self.logger.error("Failed to fetch user collections (old API): \(error.localizedDescription)"); throw error }
     }
 
     func syncUser(offset: Int = 0) async throws -> UserSyncResponse {
         let endpoint = "/user/sync"; Self.logger.info("Performing user sync with offset \(offset)..."); guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
-        urlComponents.queryItems = [ URLQueryItem(name: "offset", value: String(offset)) ]; guard let url = urlComponents.url else { throw URLError(.badURL) }; let request = URLRequest(url: url); // Use let for request
+        urlComponents.queryItems = [ URLQueryItem(name: "offset", value: String(offset)) ]; guard let url = urlComponents.url else { throw URLError(.badURL) }; let request = URLRequest(url: url);
         logRequestDetails(request, for: endpoint)
         do { let (data, response) = try await URLSession.shared.data(for: request); return try handleApiResponse(data: data, response: response, endpoint: endpoint + " (offset: \(offset))") }
         catch { Self.logger.error("Failed to sync user (offset \(offset)): \(error.localizedDescription)"); throw error }
@@ -383,7 +417,6 @@ class APIService {
         }
     }
 
-    // --- NEW: Function to vote on comments ---
     func voteComment(commentId: Int, vote: Int, nonce: String) async throws {
         let endpoint = "/comments/vote"
         Self.logger.info("Attempting to vote \(vote) on comment \(commentId).")
@@ -394,7 +427,7 @@ class APIService {
         var components = URLComponents()
         components.queryItems = [
             URLQueryItem(name: "id", value: String(commentId)),
-            URLQueryItem(name: "vote", value: String(vote)), // vote = 1 (up), -1 (down), 0 (clear)
+            URLQueryItem(name: "vote", value: String(vote)),
             URLQueryItem(name: "_nonce", value: nonce)
         ]
         request.httpBody = components.query?.data(using: .utf8)
@@ -402,16 +435,13 @@ class APIService {
 
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
-            // The API seems to just return 200 OK on success, no body content needed.
             try handleApiResponseVoid(response: response, endpoint: endpoint + " (comment: \(commentId), vote: \(vote))")
             Self.logger.info("Successfully sent vote (\(vote)) for comment \(commentId).")
         } catch {
             Self.logger.error("Failed to vote (\(vote)) for comment \(commentId): \(error.localizedDescription)")
-            // Propagate the error so AuthService can handle rollbacks/auth issues
             throw error
         }
     }
-    // --- END NEW ---
 
     func postComment(itemId: Int, parentId: Int, comment: String, nonce: String) async throws -> [PostCommentResultComment] {
         let endpoint = "/comments/post"
@@ -503,7 +533,7 @@ class APIService {
         }
     }
 
-    func favComment(commentId: Int, nonce: String) async throws { // Unverändert
+    func favComment(commentId: Int, nonce: String) async throws {
         let endpoint = "/comments/fav"
         Self.logger.info("Attempting to favorite comment \(commentId).")
         let url = baseURL.appendingPathComponent(endpoint)
@@ -527,7 +557,7 @@ class APIService {
         }
     }
 
-    func unfavComment(commentId: Int, nonce: String) async throws { // Unverändert
+    func unfavComment(commentId: Int, nonce: String) async throws {
         let endpoint = "/comments/unfav"
         Self.logger.info("Attempting to unfavorite comment \(commentId).")
         let url = baseURL.appendingPathComponent(endpoint)
@@ -551,7 +581,6 @@ class APIService {
         }
     }
 
-    // --- NEW: Inbox API Function ---
     func fetchInboxMessages(older: Int? = nil) async throws -> InboxResponse {
         let endpoint = "/inbox/all"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
@@ -582,10 +611,6 @@ class APIService {
             throw error
         }
     }
-    // --- END NEW ---
-
-
-    // MARK: - Helper Methods (unverändert)
 
     private func handleApiResponse<T: Decodable>(data: Data, response: URLResponse, endpoint: String) throws -> T {
         guard let httpResponse = response as? HTTPURLResponse else { Self.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }

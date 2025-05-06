@@ -7,6 +7,7 @@ import os
 /// View for displaying and modifying application settings, including cache management.
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var authService: AuthService
     @State private var showingClearAllCacheAlert = false
     @State private var showingClearSeenItemsAlert = false
 
@@ -21,7 +22,6 @@ struct SettingsView: View {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
                         .font(UIConstants.bodyFont)
 
-                    // Subtitle Settings Picker
                     Picker("Untertitel anzeigen", selection: $settings.subtitleActivationMode) {
                         ForEach(SubtitleActivationMode.allCases) { mode in
                              Text(mode.displayName).tag(mode)
@@ -50,6 +50,32 @@ struct SettingsView: View {
                     .font(UIConstants.bodyFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+
+                // Section for Favorites Collection
+                if authService.isLoggedIn && !authService.userCollections.isEmpty {
+                    Section("Favoriten-Standardordner") {
+                        Picker("Als Favoriten verwenden", selection: $settings.selectedCollectionIdForFavorites) {
+                            ForEach(authService.userCollections) { collection in
+                                // --- MODIFIED: Item count removed ---
+                                Text(collection.name).tag(collection.id as Int?)
+                                // --- END MODIFICATION ---
+                                    .font(UIConstants.bodyFont)
+                            }
+                        }
+                        .font(UIConstants.bodyFont)
+                        .onChange(of: settings.selectedCollectionIdForFavorites) { _, newId in
+                            SettingsView.logger.info("User selected collection ID \(newId != nil ? String(newId!) : "nil") as favorite default.")
+                            if newId == nil && !authService.userCollections.isEmpty {
+                                SettingsView.logger.warning("selectedCollectionIdForFavorites became nil unexpectedly. Attempting to re-select default.")
+                                if let defaultColl = authService.userCollections.first(where: { $0.isActuallyDefault }) ?? authService.userCollections.first {
+                                    settings.selectedCollectionIdForFavorites = defaultColl.id
+                                }
+                            }
+                        }
+                    }
+                    .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+                }
+
 
                 // Section for Experimental Features
                 Section {
@@ -160,10 +186,41 @@ struct SettingsView: View {
 // MARK: - Preview
 
 #Preview {
-    SettingsView().environmentObject(AppSettings())
+    struct SettingsPreviewWrapper: View {
+        @StateObject private var settings: AppSettings
+        @StateObject private var authService: AuthService
+
+        init() {
+            let appSettings = AppSettings()
+            let authSvc = AuthService(appSettings: appSettings)
+            
+            authSvc.isLoggedIn = true
+            let sampleCollections = [
+                ApiCollection(id: 101, name: "Meine Favoriten", keyword: "favoriten", isPublic: 0, isDefault: 1, itemCount: 123),
+                ApiCollection(id: 102, name: "Lustige Katzen", keyword: "katzen", isPublic: 0, isDefault: 0, itemCount: 45)
+            ]
+            authSvc.currentUser = UserInfo(id: 1, name: "PreviewUser", registered: 1, score: 1000, mark: 2, badges: [], collections: sampleCollections)
+            #if DEBUG
+            authSvc.setUserCollectionsForPreview(sampleCollections)
+            #endif
+            
+            if let firstCollectionId = sampleCollections.first?.id {
+                appSettings.selectedCollectionIdForFavorites = firstCollectionId
+            }
+
+            _settings = StateObject(wrappedValue: appSettings)
+            _authService = StateObject(wrappedValue: authSvc)
+        }
+
+        var body: some View {
+            SettingsView()
+                .environmentObject(settings)
+                .environmentObject(authService)
+        }
+    }
+    return SettingsPreviewWrapper()
 }
 
-// LicenseAndDependenciesView
 struct LicenseAndDependenciesView: View {
     var body: some View {
         ScrollView {
@@ -193,16 +250,13 @@ struct LicenseAndDependenciesView: View {
                 """)
                 .font(.footnote)
                 .textSelection(.enabled)
-
                 Divider()
-
                 Text("Verwendete Swift Packages")
                     .font(.title2).bold()
                 VStack(alignment: .leading, spacing: 8) {
                     Link("Kingfisher", destination: URL(string: "https://github.com/onevcat/Kingfisher")!)
                         .font(UIConstants.bodyFont)
                 }
-
                 Spacer()
             }
             .padding()

@@ -4,16 +4,14 @@
 import SwiftUI
 import os
 import AVKit
-import Kingfisher // Import Kingfisher for Prefetcher
+import Kingfisher
 
-// PreviewLinkTarget and FullscreenImageTarget remain unchanged
 struct PreviewLinkTarget: Identifiable, Equatable { let id: Int }
 struct FullscreenImageTarget: Identifiable, Equatable {
     let item: Item; var id: Int { item.id }
     static func == (lhs: FullscreenImageTarget, rhs: FullscreenImageTarget) -> Bool { lhs.item.id == rhs.item.id }
 }
 
-// Cache Structure for Item Details remains unchanged
 struct CachedItemDetails {
     let info: ItemsInfoResponse
     let sortedBy: CommentSortOrder
@@ -21,15 +19,12 @@ struct CachedItemDetails {
     let totalCommentCount: Int
 }
 
-// Structure to hold reply context
 struct ReplyTarget: Identifiable {
-    let id = UUID() // Make identifiable for sheet
+    let id = UUID()
     let itemId: Int
-    let parentId: Int // 0 for top-level
+    let parentId: Int
 }
 
-
-// PagedDetailTabViewItem (Pass AuthService vote states/actions)
 @MainActor
 struct PagedDetailTabViewItem: View {
     let item: Item
@@ -54,7 +49,7 @@ struct PagedDetailTabViewItem: View {
     let currentVote: Int
     let upvoteAction: () -> Void
     let downvoteAction: () -> Void
-    let showCommentInputAction: (Int, Int) -> Void // Takes itemId, parentId
+    let showCommentInputAction: (Int, Int) -> Void
 
     @EnvironmentObject private var settings: AppSettings
 
@@ -111,11 +106,9 @@ struct PagedDetailTabViewItem: View {
     }
 }
 
-
-// MARK: - PagedDetailView
 @MainActor
 struct PagedDetailView: View {
-    @Binding var items: [Item] // Keep the binding
+    @Binding var items: [Item]
     @State private var selectedIndex: Int
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var settings: AppSettings
@@ -155,7 +148,6 @@ struct PagedDetailView: View {
         PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex)")
     }
 
-    // MARK: - Body
     var body: some View {
         Group { tabViewContent }
         .background(KeyCommandView(handler: keyboardActionHandler))
@@ -184,7 +176,6 @@ struct PagedDetailView: View {
         }
     }
 
-    // MARK: - TabView Content and Page Generation
     private var tabViewContent: some View {
         TabView(selection: $selectedIndex) {
             ForEach(items.indices, id: \.self) { index in
@@ -246,7 +237,7 @@ struct PagedDetailView: View {
                      onWillEndFullScreen: handleEndFullScreen,
                      previewLinkTarget: $previewLinkTarget,
                      fullscreenImageTarget: $fullscreenImageTarget,
-                     isFavorited: calculatedIsFavorited, // Pass calculated value
+                     isFavorited: calculatedIsFavorited,
                      toggleFavoriteAction: toggleFavorite,
                      showAllTagsAction: { showAllTagsForItem.insert(currentItem.id) },
                      collapsedCommentIDs: collapsedCommentIDs,
@@ -268,8 +259,6 @@ struct PagedDetailView: View {
         }
     }
 
-
-    // MARK: - Data Preparation and Loading
     private func preparePageData(for index: Int) -> ( currentItem: Item, status: InfoLoadingStatus, visibleFlatComments: [FlatCommentDisplayItem], totalCommentCount: Int, displayedTags: [ItemTag], totalTagCount: Int, showingAllTags: Bool )? {
         guard index >= 0 && index < items.count else { PagedDetailView.logger.warning("preparePageData: index \(index) out of bounds (items.count: \(items.count))."); return nil }
         let currentItem = items[index]
@@ -392,7 +381,6 @@ struct PagedDetailView: View {
          return visibleList
     }
 
-    // MARK: - View Lifecycle and State Handling Helpers
     private func setupView() {
         PagedDetailView.logger.info("PagedDetailView appeared.")
         if isFullscreen { isFullscreen = false }
@@ -458,18 +446,15 @@ struct PagedDetailView: View {
          let currentItem = items[newValue]
          await loadInfoIfNeededAndPrepareHierarchy(for: currentItem)
 
-         // --- FIX: Wrap load calls in Task {} instead of Task.detached ---
-         Task { // Start background task for next item
+         Task {
              let nextIndex = newValue + 1
              if nextIndex < self.items.count { await self.loadInfoIfNeededAndPrepareHierarchy(for: self.items[nextIndex]) }
          }
-         Task { // Start background task for previous item
+         Task {
              let prevIndex = newValue - 1
              if prevIndex >= 0 { await self.loadInfoIfNeededAndPrepareHierarchy(for: self.items[prevIndex]) }
          }
-         // --- END FIX ---
 
-         // Prefetching logic remains the same
          var urlsToPrefetch: [URL] = []
          let startIndex = max(0, newValue - prefetchLookahead)
          let endIndex = min(items.count - 1, newValue + prefetchLookahead)
@@ -547,7 +532,6 @@ struct PagedDetailView: View {
           await loadMoreAction()
      }
 
-    // MARK: - Navigation and Actions
     private func selectNext() {
         guard selectedIndex < items.count - 1 else { return }
         selectedIndex += 1
@@ -571,39 +555,46 @@ struct PagedDetailView: View {
     }
 
     private func toggleFavorite() async {
-        let localSettings = self.settings
+        let localSettings = self.settings // Capture for use in async context
         guard !isTogglingFavorite else { PagedDetailView.logger.debug("Favorite toggle skipped: Already processing."); return }
         guard selectedIndex >= 0 && selectedIndex < items.count else { PagedDetailView.logger.warning("Favorite toggle skipped: Invalid selectedIndex \(selectedIndex)."); return }
         let currentItem = items[selectedIndex]
-        guard authService.isLoggedIn, let nonce = authService.userNonce, let collectionId = authService.favoritesCollectionId else { PagedDetailView.logger.warning("Favorite toggle skipped: User not logged in or nonce/collectionId missing."); return }
+        // --- MODIFIED: Use appSettings.selectedCollectionIdForFavorites ---
+        guard authService.isLoggedIn, let nonce = authService.userNonce, let collectionId = localSettings.selectedCollectionIdForFavorites else {
+            PagedDetailView.logger.warning("Favorite toggle skipped: User not logged in, nonce missing, or no favorite collection selected in AppSettings.");
+            return
+        }
+        // --- END MODIFICATION ---
         let itemId = currentItem.id
-        let currentIsFavorited: Bool // Calculate locally
+        let currentIsFavorited: Bool
         if let localStatus = localFavoritedStatus[itemId] { currentIsFavorited = localStatus }
         else { currentIsFavorited = authService.favoritedItemIDs.contains(itemId) }
         let targetFavoriteState = !currentIsFavorited
 
         isTogglingFavorite = true
-        localFavoritedStatus[itemId] = targetFavoriteState // Optimistic UI update
+        localFavoritedStatus[itemId] = targetFavoriteState
 
         do {
             if targetFavoriteState {
-                try await apiService.addToCollection(itemId: itemId, nonce: nonce)
+                try await apiService.addToCollection(itemId: itemId, nonce: nonce) // Default collection is handled by API if no collectionId is passed
                 PagedDetailView.logger.info("Added item \(itemId) to favorites via API.")
             } else {
                 try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
-                PagedDetailView.logger.info("Removed item \(itemId) from favorites via API.")
+                PagedDetailView.logger.info("Removed item \(itemId) from collection \(collectionId) via API.")
             }
             if targetFavoriteState { authService.favoritedItemIDs.insert(itemId) }
             else { authService.favoritedItemIDs.remove(itemId) }
-            await localSettings.clearFavoritesCache()
+            // --- MODIFIED: Pass username and collectionId to clearFavoritesCache ---
+            await localSettings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collectionId)
+            // --- END MODIFICATION ---
             await localSettings.updateCacheSizes()
-            PagedDetailView.logger.info("Favorite toggled successfully for item \(itemId). Global state updated. Cache cleared.")
+            PagedDetailView.logger.info("Favorite toggled successfully for item \(itemId). Global state updated. Cache for collection \(collectionId) cleared.")
         } catch {
             PagedDetailView.logger.error("Failed to toggle favorite for item \(itemId): \(error.localizedDescription)")
-            localFavoritedStatus.removeValue(forKey: itemId) // Rollback optimistic UI
+            localFavoritedStatus.removeValue(forKey: itemId)
             if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
                  PagedDetailView.logger.warning("Favorite toggle failed due to auth error. Logging out.")
-                 await authService.logout() // await added previously
+                 await authService.logout()
             }
         }
         isTogglingFavorite = false
@@ -627,9 +618,7 @@ struct PagedDetailView: View {
         let initialUp = items[itemIndex].up
         let initialDown = items[itemIndex].down
 
-        // --- FIX: Ensure await is present ---
         await authService.performVote(itemId: itemId, voteType: voteType)
-        // --- END FIX ---
 
         let newVoteState = authService.votedItemStates[itemId] ?? 0
 
@@ -648,7 +637,7 @@ struct PagedDetailView: View {
                 var mutableItem = items[itemIndex]
                 mutableItem.up += deltaUp
                 mutableItem.down += deltaDown
-                items[itemIndex] = mutableItem // Assign back to the binding
+                items[itemIndex] = mutableItem
                 PagedDetailView.logger.info("Updated local item \(itemId) score: deltaUp=\(deltaUp), deltaDown=\(deltaDown). New counts: up=\(items[itemIndex].up), down=\(items[itemIndex].down)")
             } else {
                  PagedDetailView.logger.warning("Could not update local item score for \(itemId): selectedIndex changed during vote or index out of bounds.")
@@ -662,7 +651,7 @@ struct PagedDetailView: View {
                      var mutableItem = items[itemIndex]
                      mutableItem.up = initialUp
                      mutableItem.down = initialDown
-                     items[itemIndex] = mutableItem // Assign back to the binding
+                     items[itemIndex] = mutableItem
                  }
              }
         }
@@ -680,8 +669,7 @@ struct PagedDetailView: View {
             if let currentDetails = cachedDetails[itemId] {
                 PagedDetailView.logger.info("Updating cached comments for item \(itemId). Previous count: \(currentDetails.info.comments.count), New count: \(updatedComments.count)")
                  let updatedItemComments = updatedComments.map {
-                    // Use the explicit initializer for ItemComment
-                    ItemComment(id: $0.id, parent: $0.parent, content: $0.content, created: $0.created, up: $0.up, down: $0.down, confidence: $0.confidence, name: $0.name, mark: $0.mark, itemId: itemId) // <-- Pass itemId here if relevant
+                    ItemComment(id: $0.id, parent: $0.parent, content: $0.content, created: $0.created, up: $0.up, down: $0.down, confidence: $0.confidence, name: $0.name, mark: $0.mark, itemId: itemId)
                  }
                 let updatedInfo = ItemsInfoResponse(tags: currentDetails.info.tags, comments: updatedItemComments)
                 let newFlatList = prepareFlatDisplayComments(from: updatedItemComments, sortedBy: currentDetails.sortedBy, maxDepth: commentMaxDepth)
@@ -702,10 +690,8 @@ struct PagedDetailView: View {
         }
     }
 
-} // End PagedDetailView
+}
 
-
-// MARK: - Wrapper View
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
     @EnvironmentObject var settings: AppSettings
@@ -725,7 +711,6 @@ struct LinkedItemPreviewWrapperView: View {
     }
 }
 
-// MARK: - Preview Provider
 #Preview("Preview") {
     struct PreviewWrapper: View {
          @State var previewItems: [Item] = [
@@ -734,21 +719,31 @@ struct LinkedItemPreviewWrapperView: View {
              Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: 3, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil, subtitles: nil, favorited: nil),
              Item(id: 4, promoted: 1004, userId: 3, down: 1, up: 10, created: 4, image: "img3.gif", thumb: "t4.gif", fullsize: nil, preview: nil, width: 500, height: 300, audio: false, source: nil, flags: 1, user: "UserC", mark: 0, repost: nil, variants: nil, subtitles: nil, favorited: false)
          ]
-         @StateObject var previewSettings = AppSettings()
-         @StateObject var previewAuthService = AuthService(appSettings: AppSettings())
+         @StateObject var previewSettings: AppSettings
+         @StateObject var previewAuthService: AuthService
          @StateObject var previewPlayerManager = VideoPlayerManager()
 
-         func dummyLoadMore() async { print("Preview: Dummy Load More Action Triggered") }
+        // --- MODIFIED: Initialize AppSettings first ---
+        init() {
+            let tempSettings = AppSettings()
+            _previewSettings = StateObject(wrappedValue: tempSettings)
+            _previewAuthService = StateObject(wrappedValue: AuthService(appSettings: tempSettings))
+            
+            // Configure after init
+            previewAuthService.isLoggedIn = true
+            previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
+            previewAuthService.userNonce = "preview_nonce_12345"
+            // --- MODIFIED: Use AppSettings for collection ID ---
+            previewSettings.selectedCollectionIdForFavorites = 6749
+            // --- END MODIFICATION ---
+            previewAuthService.favoritedItemIDs = [2]
+            previewAuthService.votedItemStates = [1: 1, 3: -1]
+            previewPlayerManager.configure(settings: tempSettings) // Pass the same settings instance
+        }
+        // --- END MODIFICATION ---
 
-         init() {
-              previewAuthService.isLoggedIn = true
-              previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
-              previewAuthService.userNonce = "preview_nonce_12345"
-              previewAuthService.favoritesCollectionId = 6749
-              previewAuthService.favoritedItemIDs = [2]
-              previewAuthService.votedItemStates = [1: 1, 3: -1]
-              previewPlayerManager.configure(settings: previewSettings)
-         }
+
+         func dummyLoadMore() async { print("Preview: Dummy Load More Action Triggered") }
 
          var body: some View {
              NavigationStack {

@@ -20,15 +20,12 @@ class AuthService: ObservableObject {
     private let sessionCookieName = "me"
     private let userVotesKey = "pr0grammUserVotes_v1"
     private let favoritedCommentsKey = "pr0grammFavoritedComments_v1"
-    // --- NEW: Key for comment votes ---
     private let userCommentVotesKey = "pr0grammUserCommentVotes_v1"
-    // --- END NEW ---
 
     // MARK: - Published Properties
     @Published var isLoggedIn: Bool = false
     @Published var currentUser: UserInfo? = nil
     @Published var userNonce: String? = nil
-    @Published var favoritesCollectionId: Int? = nil
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var loginError: String? = nil
     @Published private(set) var needsCaptcha: Bool = false
@@ -42,12 +39,11 @@ class AuthService: ObservableObject {
     @Published var favoritedCommentIDs: Set<Int> = []
     @Published private(set) var isFavoritingComment: [Int: Bool] = [:]
 
-    // --- NEW: State for comment votes ---
     @Published var votedCommentStates: [Int: Int] = [:]
     @Published private(set) var isVotingComment: [Int: Bool] = [:]
-    // --- END NEW ---
-
+    
     @Published var unreadMessageCount: Int = 0
+    @Published private(set) var userCollections: [ApiCollection] = []
 
     nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AuthService")
 
@@ -55,30 +51,32 @@ class AuthService: ObservableObject {
         self.appSettings = appSettings
         loadVotedStates()
         loadFavoritedCommentIDs()
-        // --- NEW: Load comment votes ---
         loadVotedCommentStates()
         AuthService.logger.info("AuthService initialized. Loaded \(self.votedItemStates.count) item vote states, \(self.votedCommentStates.count) comment vote states, and \(self.favoritedCommentIDs.count) favorited comment IDs.")
-        // --- END NEW ---
     }
 
-    // MARK: - Public Methods (Login, Logout, Check Status etc.)
+    #if DEBUG
+    func setUserCollectionsForPreview(_ collections: [ApiCollection]) {
+        self.userCollections = collections
+    }
+    #endif
 
-    func fetchInitialCaptcha() async { // Unverändert
+
+    func fetchInitialCaptcha() async {
         AuthService.logger.info("fetchInitialCaptcha called by LoginView.")
         await MainActor.run { self.needsCaptcha = true }
         await _fetchCaptcha()
     }
 
-    func login(username: String, password: String, captchaAnswer: String? = nil) async { // Unverändert
+    func login(username: String, password: String, captchaAnswer: String? = nil) async {
         guard !isLoading else { AuthService.logger.warning("Login attempt skipped: Already loading."); return }
         AuthService.logger.info("Attempting login for user: \(username)")
         await MainActor.run {
-            isLoading = true; loginError = nil; self.userNonce = nil; self.favoritesCollectionId = nil; self.favoritedItemIDs = []; self.votedItemStates = [:]; self.isVoting = [:]
+            isLoading = true; loginError = nil; self.userNonce = nil; self.favoritedItemIDs = []; self.votedItemStates = [:]; self.isVoting = [:]
             self.favoritedCommentIDs = []; self.isFavoritingComment = [:]
-            // --- NEW: Reset comment votes ---
             self.votedCommentStates = [:]; self.isVotingComment = [:]
-            // --- END NEW ---
-            self.unreadMessageCount = 0 // Reset count on login attempt
+            self.unreadMessageCount = 0
+            self.userCollections = []
             AuthService.logger.debug("Resetting user-specific states for login.")
         }
 
@@ -106,23 +104,43 @@ class AuthService: ObservableObject {
 
             if loginResponse.success {
                 AuthService.logger.info("Login successful via API for user: \(username)")
-                let profileLoaded = await loadProfileInfo(username: username, setLoadingState: false)
-                var collectionLoaded = false
+                let profileAndCollectionsLoaded = await loadProfileInfoAndCollections(username: username, setLoadingState: false)
                 var favoritesLoaded = false
-                var countLoaded = false // Track count loading
-                if profileLoaded {
-                    collectionLoaded = await fetchUserCollections()
-                    if collectionLoaded {
-                        favoritesLoaded = await loadInitialFavorites()
-                        loadVotedStates()
-                        loadFavoritedCommentIDs()
-                        loadVotedCommentStates() // Load comment votes
-                        countLoaded = await updateUnreadCount() // Load count after success
-                        AuthService.logger.info("Loaded states after successful login. Votes: \(self.votedItemStates.count), Comment Favs: \(self.favoritedCommentIDs.count), Comment Votes: \(self.votedCommentStates.count), Unread: \(self.unreadMessageCount)")
+                var countLoaded = false
+
+                if profileAndCollectionsLoaded {
+                    if let defaultCollection = self.userCollections.first(where: { $0.isActuallyDefault }) {
+                        self.appSettings.selectedCollectionIdForFavorites = defaultCollection.id
+                        AuthService.logger.info("Default collection ID \(defaultCollection.id) ('\(defaultCollection.name)') set in AppSettings.")
+                    } else if let firstCollection = self.userCollections.first {
+                        self.appSettings.selectedCollectionIdForFavorites = firstCollection.id
+                        AuthService.logger.warning("No default collection found. Using first available collection ID \(firstCollection.id) ('\(firstCollection.name)') for AppSettings.")
+                    } else {
+                        self.appSettings.selectedCollectionIdForFavorites = nil
+                        AuthService.logger.warning("No collections found for user. selectedCollectionIdForFavorites set to nil.")
                     }
+                    // --- MODIFIED: Set isLoggedIn earlier ---
+                    await MainActor.run { self.isLoggedIn = true } // Set preliminary loggedIn status
+                    // --- END MODIFICATION ---
+
+                    if self.appSettings.selectedCollectionIdForFavorites != nil {
+                        favoritesLoaded = await loadInitialFavorites()
+                    } else {
+                        favoritesLoaded = true
+                        AuthService.logger.info("Skipping initial favorites load as no collection ID is selected.")
+                    }
+                    loadVotedStates()
+                    loadFavoritedCommentIDs()
+                    loadVotedCommentStates()
+                    countLoaded = await updateUnreadCount() // Now isLoggedIn should be true here
+                    AuthService.logger.info("Loaded states after successful login. Votes: \(self.votedItemStates.count), Comment Favs: \(self.favoritedCommentIDs.count), Comment Votes: \(self.votedCommentStates.count), Unread: \(self.unreadMessageCount), Collections: \(self.userCollections.count)")
                 }
 
-                if profileLoaded && collectionLoaded && favoritesLoaded && countLoaded && self.userNonce != nil { // Check countLoaded too
+                // Final check if all steps were successful
+                let finalLoginSuccess = profileAndCollectionsLoaded && favoritesLoaded && countLoaded && self.userNonce != nil
+                await MainActor.run { self.isLoggedIn = finalLoginSuccess } // Set final isLoggedIn status
+
+                if finalLoginSuccess {
                     AuthService.logger.debug("[LOGIN SUCCESS] Cookies BEFORE saving to Keychain:")
                     await logAllCookiesForPr0gramm()
                     let cookieSaved = await findAndSaveSessionCookie()
@@ -131,21 +149,20 @@ class AuthService: ObservableObject {
                     await MainActor.run {
                         if cookieSaved && usernameSaved { AuthService.logger.info("Session cookie and username saved to keychain.") }
                         else { AuthService.logger.warning("Failed to save session cookie (\(cookieSaved)) or username (\(usernameSaved)) to keychain.") }
-                        self.isLoggedIn = true
+                        // self.isLoggedIn = true // Already set above
                         self.needsCaptcha = false; self.captchaToken = nil; self.captchaImage = nil
-                        AuthService.logger.info("User \(self.currentUser!.name) is now logged in. Nonce: \(self.userNonce != nil), FavCol: \(self.favoritesCollectionId ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), Unread: \(self.unreadMessageCount)")
+                        AuthService.logger.info("User \(self.currentUser!.name) is now logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), Unread: \(self.unreadMessageCount), Collections: \(self.userCollections.count)")
                     }
                 } else {
                     await MainActor.run {
-                        self.isLoggedIn = false
-                        if !profileLoaded { self.loginError = "Login erfolgreich, aber Profildaten konnten nicht geladen werden." }
-                        else if !collectionLoaded { self.loginError = "Login erfolgreich, aber Favoriten-Ordner konnte nicht ermittelt werden." }
+                        // self.isLoggedIn = false; // Already set to false by finalLoginSuccess
+                        if !profileAndCollectionsLoaded { self.loginError = "Login erfolgreich, aber Profildaten/Sammlungen konnten nicht geladen werden." }
                         else if !favoritesLoaded { self.loginError = "Login erfolgreich, aber Favoriten konnten nicht initial geladen werden." }
-                        else if !countLoaded { self.loginError = "Login erfolgreich, aber Nachrichtenzähler konnte nicht geladen werden." } // Add check
+                        else if !countLoaded { self.loginError = "Login erfolgreich, aber Nachrichtenzähler konnte nicht geladen werden." }
                         else { self.loginError = "Login erfolgreich, aber Session-Daten (Nonce) konnten nicht gelesen werden." }
-                        AuthService.logger.error("Login sequence failed. Profile: \(profileLoaded), Collections: \(collectionLoaded), Favorites: \(favoritesLoaded), Count: \(countLoaded), Nonce: \(self.userNonce != nil)")
+                        AuthService.logger.error("Login sequence failed. Profile/Collections: \(profileAndCollectionsLoaded), Favorites: \(favoritesLoaded), Count: \(countLoaded), Nonce: \(self.userNonce != nil)")
                     }
-                    await performLogoutCleanup()
+                    await performLogoutCleanup() // This will also set isLoggedIn to false
                 }
             } else {
                  if loginResponse.ban?.banned == true {
@@ -173,7 +190,7 @@ class AuthService: ObservableObject {
          AuthService.logger.debug("Login attempt finished for \(username). isLoading: \(self.isLoading)")
     }
 
-    func logout() async { // Unverändert
+    func logout() async {
          var shouldProceed = false
          await MainActor.run {
              if self.isLoggedIn && !isLoading {
@@ -194,17 +211,18 @@ class AuthService: ObservableObject {
          AuthService.logger.info("Logout process finished.")
     }
 
-    func checkInitialLoginStatus() async { // Unverändert
+    func checkInitialLoginStatus() async {
         AuthService.logger.info("Checking initial login status...")
         await MainActor.run {
-            isLoading = true; self.userNonce = nil; self.favoritesCollectionId = nil; self.favoritedItemIDs = []
+            isLoading = true; self.userNonce = nil; self.favoritedItemIDs = []
+            self.isLoggedIn = false // Start with logged out state
         }
 
-        var sessionValidAndProfileLoaded = false
-        var collectionLoaded = false
+        var profileAndCollectionsLoaded = false
         var nonceAvailable = false
         var favoritesLoaded = false
-        var countLoaded = false // Track count loading
+        var countLoaded = false
+        var finalIsLoggedIn = false // Variable to determine the final login state
 
         AuthService.logger.debug("[SESSION RESTORE START] Cookies BEFORE restoring from Keychain:")
         await logAllCookiesForPr0gramm()
@@ -217,40 +235,56 @@ class AuthService: ObservableObject {
              await MainActor.run { self.userNonce = extractedNonce }
              nonceAvailable = (self.userNonce != nil)
 
-             sessionValidAndProfileLoaded = await loadProfileInfo(username: username, setLoadingState: false)
-             if sessionValidAndProfileLoaded {
-                 collectionLoaded = await fetchUserCollections()
-                 if collectionLoaded {
-                      favoritesLoaded = await loadInitialFavorites()
-                      countLoaded = await updateUnreadCount() // Load count
-                 }
-             }
+             profileAndCollectionsLoaded = await loadProfileInfoAndCollections(username: username, setLoadingState: false)
+             if profileAndCollectionsLoaded && nonceAvailable { // Only proceed if profile and nonce are good
+                // --- MODIFIED: Set isLoggedIn to true before loading dependent data ---
+                await MainActor.run { self.isLoggedIn = true }
+                // --- END MODIFICATION ---
 
-             if !sessionValidAndProfileLoaded || !collectionLoaded || !favoritesLoaded || !nonceAvailable || !countLoaded { // Check countLoaded
-                 AuthService.logger.warning("Cookie/Username loaded, but subsequent fetch failed. Profile: \(sessionValidAndProfileLoaded), Collections: \(collectionLoaded), Favorites: \(favoritesLoaded), Nonce: \(nonceAvailable), Count: \(countLoaded). Session invalid.")
-                 await performLogoutCleanup()
-                 sessionValidAndProfileLoaded = false; collectionLoaded = false; nonceAvailable = false; favoritesLoaded = false; countLoaded = false
+                 if self.appSettings.selectedCollectionIdForFavorites == nil {
+                     if let defaultCollection = self.userCollections.first(where: { $0.isActuallyDefault }) {
+                         self.appSettings.selectedCollectionIdForFavorites = defaultCollection.id
+                         AuthService.logger.info("Default collection ID \(defaultCollection.id) ('\(defaultCollection.name)') set in AppSettings during initial check.")
+                     } else if let firstCollection = self.userCollections.first {
+                         self.appSettings.selectedCollectionIdForFavorites = firstCollection.id
+                         AuthService.logger.warning("No default collection found. Using first available collection ID \(firstCollection.id) ('\(firstCollection.name)') for AppSettings during initial check.")
+                     } else {
+                         AuthService.logger.warning("No collections found for user during initial check. selectedCollectionIdForFavorites remains nil.")
+                     }
+                 } else {
+                      AuthService.logger.info("Using previously selected collection ID \(self.appSettings.selectedCollectionIdForFavorites!) from AppSettings during initial check.")
+                 }
+
+                 if self.appSettings.selectedCollectionIdForFavorites != nil {
+                     favoritesLoaded = await loadInitialFavorites()
+                 } else {
+                     favoritesLoaded = true
+                     AuthService.logger.info("Skipping initial favorites load as no collection ID is selected during initial check.")
+                 }
+                 countLoaded = await updateUnreadCount() // Now isLoggedIn should be true here
+                 
+                 finalIsLoggedIn = profileAndCollectionsLoaded && favoritesLoaded && nonceAvailable && countLoaded
              }
-        } else {
-             AuthService.logger.info("No session cookie or username found in keychain.")
-             await MainActor.run { self.currentUser = nil }
-             sessionValidAndProfileLoaded = false; collectionLoaded = false; nonceAvailable = false; favoritesLoaded = false; countLoaded = false
-             await performLogoutCleanup()
+        }
+        
+        if !finalIsLoggedIn { // If any step failed or no initial session
+            AuthService.logger.info("Initial login check determined user is NOT logged in or session data incomplete.")
+            await performLogoutCleanup() // Ensure clean state if not fully logged in
         }
 
-         let finalIsLoggedIn = sessionValidAndProfileLoaded && collectionLoaded && favoritesLoaded && nonceAvailable && countLoaded
          await MainActor.run {
-             self.isLoggedIn = finalIsLoggedIn
+             self.isLoggedIn = finalIsLoggedIn // Set the final determined state
              if self.isLoggedIn {
-                  AuthService.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce: \(self.userNonce != nil), FavCol: \(self.favoritesCollectionId ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), Unread: \(self.unreadMessageCount)")
+                  AuthService.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), Unread: \(self.unreadMessageCount), Collections: \(self.userCollections.count)")
              } else {
-                 AuthService.logger.info("Initial check: User is not logged in.")
+                 AuthService.logger.info("Initial check: User is not logged in (final determination).")
              }
              isLoading = false
          }
     }
 
-    // MARK: - Voting Method (Items) (Unverändert)
+    // ... (Rest of AuthService, including performVote, performCommentFavToggle, etc., unchanged from previous correct version) ...
+
     func performVote(itemId: Int, voteType: Int) async {
         guard isLoggedIn, let nonce = userNonce else {
             AuthService.logger.warning("Voting skipped: User not logged in or nonce missing.")
@@ -292,7 +326,6 @@ class AuthService: ObservableObject {
         }
     }
 
-    // MARK: - Comment Favoriting Method (Unverändert)
     func performCommentFavToggle(commentId: Int) async {
         guard isLoggedIn, let nonce = userNonce else {
             AuthService.logger.warning("Comment favoriting skipped: User not logged in or nonce missing.")
@@ -345,7 +378,6 @@ class AuthService: ObservableObject {
         }
     }
 
-    // --- NEW: Voting Method (Comments) ---
     func performCommentVote(commentId: Int, voteType: Int) async {
         guard isLoggedIn, let nonce = userNonce else {
             AuthService.logger.warning("Comment voting skipped: User not logged in or nonce missing.")
@@ -359,21 +391,17 @@ class AuthService: ObservableObject {
         let currentVote = votedCommentStates[commentId] ?? 0
         let targetVote: Int
 
-        // Determine the target vote state (1 for up, -1 for down, 0 for clear)
-        if voteType == 1 { targetVote = (currentVote == 1) ? 0 : 1 }        // Upvote or clear upvote
-        else if voteType == -1 { targetVote = (currentVote == -1) ? 0 : -1 } // Downvote or clear downvote
+        if voteType == 1 { targetVote = (currentVote == 1) ? 0 : 1 }
+        else if voteType == -1 { targetVote = (currentVote == -1) ? 0 : -1 }
         else { AuthService.logger.error("Invalid voteType \(voteType) passed to performCommentVote."); return }
 
-        // Store previous state for potential rollback
         let previousVoteState = votedCommentStates[commentId]
 
-        // Optimistic UI update
         AuthService.logger.debug("Setting isVotingComment=true for comment \(commentId)")
         isVotingComment[commentId] = true
         votedCommentStates[commentId] = targetVote
         AuthService.logger.debug("Optimistic UI: Set comment vote state for \(commentId) to \(targetVote).")
 
-        // Ensure loading state is reset
         defer {
             Task { @MainActor in
                 AuthService.logger.debug("Setting isVotingComment=false for comment \(commentId) in defer block")
@@ -381,42 +409,35 @@ class AuthService: ObservableObject {
             }
         }
 
-        // Perform API call
         do {
             try await apiService.voteComment(commentId: commentId, vote: targetVote, nonce: nonce)
             AuthService.logger.info("Successfully voted \(targetVote) for comment \(commentId).")
-            saveVotedCommentStates() // Persist the successful vote state
+            saveVotedCommentStates()
         } catch let error as URLError where error.code == .userAuthenticationRequired {
             AuthService.logger.error("Comment voting failed for comment \(commentId): Authentication required. Session might be invalid.")
-            // Rollback optimistic update
             votedCommentStates[commentId] = previousVoteState
             saveVotedCommentStates()
-            await logout() // Log out if auth failed
+            await logout()
         } catch {
             AuthService.logger.error("Comment voting failed for comment \(commentId): \(error.localizedDescription)")
-            // Rollback optimistic update
             votedCommentStates[commentId] = previousVoteState
             saveVotedCommentStates()
         }
     }
-    // --- END NEW ---
 
 
-    // MARK: - Private Helper Methods
-
-    @discardableResult // Unverändert
+    @discardableResult
     func updateUnreadCount() async -> Bool {
         guard isLoggedIn else {
             AuthService.logger.debug("Skipping unread count update: User not logged in.")
             if unreadMessageCount != 0 {
-                await MainActor.run { self.unreadMessageCount = 0 } // Ensure count is 0 if logged out
+                await MainActor.run { self.unreadMessageCount = 0 }
             }
-            return true // Considered success in this context
+            return true
         }
         AuthService.logger.debug("Updating unread message count...")
         do {
-            // Fetch inbox data (we need the 'queue' part of the response)
-            let response = try await apiService.fetchInboxMessages(older: nil) // Fetch newest page
+            let response = try await apiService.fetchInboxMessages(older: nil)
             guard !Task.isCancelled else { return false }
             let newCount = response.queue?.total ?? 0
             await MainActor.run {
@@ -430,12 +451,11 @@ class AuthService: ObservableObject {
             return true
         } catch {
             AuthService.logger.error("Failed to update unread message count: \(error.localizedDescription)")
-            // Don't reset count on error, keep last known value
             return false
         }
     }
 
-    private func loadVotedStates() { // Unverändert
+    private func loadVotedStates() {
         if let savedVotes = UserDefaults.standard.dictionary(forKey: userVotesKey) as? [String: Int] {
             let loadedStates = Dictionary(uniqueKeysWithValues: savedVotes.compactMap { (key: String, value: Int) -> (Int, Int)? in
                 guard let intKey = Int(key) else { return nil }
@@ -449,13 +469,12 @@ class AuthService: ObservableObject {
         }
     }
 
-    private func saveVotedStates() { // Unverändert
+    private func saveVotedStates() {
         let stringKeyedVotes = Dictionary(uniqueKeysWithValues: votedItemStates.map { (String($0.key), $0.value) })
         UserDefaults.standard.set(stringKeyedVotes, forKey: userVotesKey)
         AuthService.logger.trace("Saved \(stringKeyedVotes.count) vote states to UserDefaults.")
     }
 
-    // --- NEW: Load/Save Comment Votes ---
     private func loadVotedCommentStates() {
         if let savedVotes = UserDefaults.standard.dictionary(forKey: userCommentVotesKey) as? [String: Int] {
             let loadedStates = Dictionary(uniqueKeysWithValues: savedVotes.compactMap { (key: String, value: Int) -> (Int, Int)? in
@@ -475,10 +494,9 @@ class AuthService: ObservableObject {
         UserDefaults.standard.set(stringKeyedVotes, forKey: userCommentVotesKey)
         AuthService.logger.trace("Saved \(stringKeyedVotes.count) comment vote states to UserDefaults.")
     }
-    // --- END NEW ---
 
 
-    private func loadFavoritedCommentIDs() { // Unverändert
+    private func loadFavoritedCommentIDs() {
         if let savedIDs = UserDefaults.standard.array(forKey: favoritedCommentsKey) as? [Int] {
             self.favoritedCommentIDs = Set(savedIDs)
             AuthService.logger.debug("Loaded \(self.favoritedCommentIDs.count) favorited comment IDs from UserDefaults.")
@@ -488,20 +506,23 @@ class AuthService: ObservableObject {
         }
     }
 
-    private func saveFavoritedCommentIDs() { // Unverändert
+    private func saveFavoritedCommentIDs() {
         let idsToSave = Array(self.favoritedCommentIDs)
         UserDefaults.standard.set(idsToSave, forKey: favoritedCommentsKey)
         AuthService.logger.trace("Saved \(idsToSave.count) favorited comment IDs to UserDefaults.")
     }
 
     @discardableResult
-    private func loadInitialFavorites() async -> Bool { // Unverändert
+    private func loadInitialFavorites() async -> Bool {
         AuthService.logger.info("Loading initial set of favorite item IDs...")
-        guard let username = self.currentUser?.name else {
-             AuthService.logger.warning("Cannot load initial favorites: currentUser is nil.")
-             return false
+        guard let username = self.currentUser?.name,
+              let selectedCollectionID = self.appSettings.selectedCollectionIdForFavorites,
+              let selectedCollection = self.userCollections.first(where: { $0.id == selectedCollectionID }),
+              let collectionKeyword = selectedCollection.keyword else {
+            AuthService.logger.warning("Cannot load initial favorites: currentUser, selectedCollectionIdForFavorites, or collection keyword is nil.")
+            return false
         }
-        await MainActor.run { self.favoritedItemIDs = [] } // Reset before loading
+        await MainActor.run { self.favoritedItemIDs = [] }
 
         var allFavorites: [Item] = []
         var olderThanId: Int? = nil
@@ -511,81 +532,98 @@ class AuthService: ObservableObject {
 
         do {
             while pagesFetched < maxPages {
-                 AuthService.logger.debug("Fetching favorites page \(pagesFetched + 1) for initial load (older: \(olderThanId ?? -1))...")
-                 let fetchedItems = try await apiService.fetchFavorites(username: username, flags: 1, olderThanId: olderThanId)
-                 if fetchedItems.isEmpty {
-                      AuthService.logger.debug("Reached end of favorites feed during initial load.")
-                      break
-                 }
-                 allFavorites.append(contentsOf: fetchedItems)
-                 olderThanId = fetchedItems.last?.id
-                 pagesFetched += 1
+                AuthService.logger.debug("Fetching favorites page \(pagesFetched + 1) for collection '\(collectionKeyword)' (older: \(olderThanId ?? -1))...")
+                let fetchedItems = try await apiService.fetchFavorites(
+                    username: username,
+                    collectionKeyword: collectionKeyword,
+                    flags: 1,
+                    olderThanId: olderThanId
+                )
+                if fetchedItems.isEmpty {
+                    AuthService.logger.debug("Reached end of favorites feed (collection '\(collectionKeyword)') during initial load.")
+                    break
+                }
+                allFavorites.append(contentsOf: fetchedItems)
+                olderThanId = fetchedItems.last?.id
+                pagesFetched += 1
             }
         } catch {
-            AuthService.logger.error("Error fetching favorites during initial load: \(error.localizedDescription)")
+            AuthService.logger.error("Error fetching favorites (collection '\(collectionKeyword)') during initial load: \(error.localizedDescription)")
             fetchError = error
         }
 
         let finalIDs = Set(allFavorites.map { $0.id })
         await MainActor.run { self.favoritedItemIDs = finalIDs }
-        AuthService.logger.info("Finished loading initial favorites. Loaded \(finalIDs.count) IDs across \(pagesFetched) pages. Error encountered: \(fetchError != nil)")
+        AuthService.logger.info("Finished loading initial favorites for collection '\(collectionKeyword)'. Loaded \(finalIDs.count) IDs across \(pagesFetched) pages. Error encountered: \(fetchError != nil)")
         return fetchError == nil || !finalIDs.isEmpty
     }
 
     @discardableResult
-    private func loadProfileInfo(username: String, setLoadingState: Bool = true) async -> Bool { // Unverändert
-        AuthService.logger.debug("Attempting to load profile info for \(username)...")
+    private func loadProfileInfoAndCollections(username: String, setLoadingState: Bool = true) async -> Bool {
+        AuthService.logger.debug("Attempting to load profile info and collections for \(username)...")
         if setLoadingState { await MainActor.run { isLoading = true } }
-        await MainActor.run { loginError = nil; self.currentUser = nil }
+        await MainActor.run { loginError = nil; self.currentUser = nil; self.userCollections = [] }
 
         do {
             let profileInfoResponse = try await apiService.getProfileInfo(username: username, flags: 31)
+            
             let newUserInfo = UserInfo(
                 id: profileInfoResponse.user.id, name: profileInfoResponse.user.name,
                 registered: profileInfoResponse.user.registered, score: profileInfoResponse.user.score,
-                mark: profileInfoResponse.user.mark, badges: profileInfoResponse.badges
+                mark: profileInfoResponse.user.mark, badges: profileInfoResponse.badges,
+                collections: nil
             )
-            await MainActor.run { self.currentUser = newUserInfo }
-            AuthService.logger.info("Successfully created UserInfo for: \(newUserInfo.name) with \(newUserInfo.badges?.count ?? 0) badges.")
+            
+            await MainActor.run {
+                self.currentUser = newUserInfo
+                self.userCollections = profileInfoResponse.collections ?? []
+                self.currentUser?.collections = self.userCollections
+            }
+            AuthService.logger.info("Successfully created UserInfo for: \(newUserInfo.name) with \(newUserInfo.badges?.count ?? 0) badges and \(self.userCollections.count) collections.")
             if setLoadingState { await MainActor.run { isLoading = false } }
             return true
         } catch {
-            AuthService.logger.warning("Failed to load or create profile info for \(username): \(error.localizedDescription).")
-            await MainActor.run { self.currentUser = nil; if setLoadingState { isLoading = false } }
+            AuthService.logger.warning("Failed to load or create profile info/collections for \(username): \(error.localizedDescription).")
+            await MainActor.run { self.currentUser = nil; self.userCollections = []; if setLoadingState { isLoading = false } }
             return false
         }
     }
-
+    
     @discardableResult
-    private func fetchUserCollections() async -> Bool { // Unverändert
-        AuthService.logger.info("Fetching user collections to find favorites ID...")
-        await MainActor.run { self.favoritesCollectionId = nil }
+    private func fetchUserCollections() async -> Bool {
+        AuthService.logger.info("Fetching user collections (via dedicated call if needed)...")
+        guard let username = currentUser?.name else {
+             AuthService.logger.warning("Cannot fetch user collections: currentUser is nil.")
+             return false
+        }
+        if !self.userCollections.isEmpty {
+            AuthService.logger.info("User collections already loaded (\(self.userCollections.count) found). Skipping redundant fetchUserCollections call.")
+            return true
+        }
+        
+        AuthService.logger.warning("User collections were not loaded via profile/info. Attempting old /collections/get.")
+        await MainActor.run { self.userCollections = [] }
 
         do {
             let response = try await apiService.getUserCollections()
-            var foundId: Int? = nil
-            if let favCollection = response.collections.first(where: { $0.isDefault == 1 }) {
-                foundId = favCollection.id
-                AuthService.logger.info("Found default favorites collection: ID \(favCollection.id), Name '\(favCollection.name)'")
+            await MainActor.run { self.userCollections = response.collections }
+            AuthService.logger.info("Fetched \(response.collections.count) collections using OLD /collections/get API for \(username).")
+            
+            if self.currentUser != nil {
+                self.currentUser?.collections = response.collections
             }
-            else if let favCollectionByKeyword = response.collections.first(where: { $0.keyword == "favoriten"}) {
-                foundId = favCollectionByKeyword.id
-                AuthService.logger.warning("Found favorites collection by keyword 'favoriten' (not marked as default): ID \(favCollectionByKeyword.id), Name '\(favCollectionByKeyword.name)'")
-            }
-            else { AuthService.logger.error("Could not find default favorites collection (isDefault=1 or keyword='favoriten') in user collections response.") }
-
-            if let id = foundId { await MainActor.run { self.favoritesCollectionId = id }; return true }
-            else { return false }
+            return true
         } catch let error as URLError where error.code == .userAuthenticationRequired {
-            AuthService.logger.error("Failed to fetch user collections: Authentication required. Session might be invalid.")
+            AuthService.logger.error("Failed to fetch user collections (old API): Authentication required. Session might be invalid.")
             return false
         } catch {
-            AuthService.logger.error("Failed to fetch user collections: \(error.localizedDescription)")
+            AuthService.logger.error("Failed to fetch user collections (old API): \(error.localizedDescription)")
             return false
         }
     }
 
-    private func _fetchCaptcha() async { // Unverändert
+
+    private func _fetchCaptcha() async {
         AuthService.logger.info("Fetching new captcha data...")
         await MainActor.run { self.captchaImage = nil; self.captchaToken = nil; self.loginError = nil }
         do {
@@ -608,18 +646,21 @@ class AuthService: ObservableObject {
         }
     }
 
-    private func performLogoutCleanup() async { // Updated to reset comment votes
+    private func performLogoutCleanup() async {
         AuthService.logger.debug("Performing local logout cleanup.")
+        let usernameToClearCache = self.currentUser?.name
+        let collectionIdToClearCache = self.appSettings.selectedCollectionIdForFavorites
+
         await MainActor.run {
             self.isLoggedIn = false; self.currentUser = nil; self.userNonce = nil;
-            self.favoritesCollectionId = nil; self.needsCaptcha = false; self.captchaToken = nil;
+            self.needsCaptcha = false; self.captchaToken = nil;
             self.captchaImage = nil; self.favoritedItemIDs = [];
             self.votedItemStates = [:]; self.isVoting = [:]
             self.favoritedCommentIDs = []; self.isFavoritingComment = [:]
-            // --- NEW: Reset comment votes ---
             self.votedCommentStates = [:]; self.isVotingComment = [:]
-            // --- END NEW ---
-            self.unreadMessageCount = 0 // Reset count on logout
+            self.unreadMessageCount = 0
+            self.userCollections = []
+            self.appSettings.selectedCollectionIdForFavorites = nil
             self.appSettings.showSFW = true; self.appSettings.showNSFW = false; self.appSettings.showNSFL = false;
             self.appSettings.showNSFP = false; self.appSettings.showPOL = false
         }
@@ -628,13 +669,13 @@ class AuthService: ObservableObject {
         _ = keychainService.deleteUsername(forKey: sessionUsernameKey)
         UserDefaults.standard.removeObject(forKey: userVotesKey)
         UserDefaults.standard.removeObject(forKey: favoritedCommentsKey)
-        // --- NEW: Clear comment votes ---
         UserDefaults.standard.removeObject(forKey: userCommentVotesKey)
-        AuthService.logger.info("Reset content filters to SFW-only and cleared persisted item votes, comment favorites, and comment votes.")
-        // --- END NEW ---
+        
+        await self.appSettings.clearFavoritesCache(username: usernameToClearCache, collectionId: collectionIdToClearCache)
+        AuthService.logger.info("Reset content filters to SFW-only and cleared persisted item votes, comment favorites, and comment votes. Cleared collections data and favorites cache.")
     }
 
-    private func clearCookies() async { // Unverändert
+    private func clearCookies() async {
         AuthService.logger.debug("Clearing cookies for pr0gramm.com domain.")
         guard let url = URL(string: "https://pr0gramm.com") else { return }
         await MainActor.run {
@@ -649,7 +690,7 @@ class AuthService: ObservableObject {
     }
 
     @discardableResult
-    private func findAndSaveSessionCookie() async -> Bool { // Unverändert
+    private func findAndSaveSessionCookie() async -> Bool {
          AuthService.logger.debug("Attempting to find and save session cookie '\(self.sessionCookieName)'...")
          guard let url = URL(string: "https://pr0gramm.com") else { return false }
          guard let sessionCookie = await MainActor.run(body: { HTTPCookieStorage.shared.cookies(for: url)?.first(where: { $0.name == self.sessionCookieName }) }) else { AuthService.logger.warning("Could not retrieve cookies or session cookie '\(self.sessionCookieName)' not found."); return false }
@@ -660,7 +701,7 @@ class AuthService: ObservableObject {
          return keychainService.saveCookieProperties(properties, forKey: sessionCookieKey)
     }
 
-    private func loadAndRestoreSessionCookie() async -> Bool { // Unverändert
+    private func loadAndRestoreSessionCookie() async -> Bool {
         AuthService.logger.debug("Attempting to load and restore session cookie from keychain...")
         guard let loadedProperties = keychainService.loadCookieProperties(forKey: sessionCookieKey) else { return false }
         guard let restoredCookie = HTTPCookie(properties: loadedProperties) else { AuthService.logger.error("Failed to create HTTPCookie from keychain properties."); _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey); return false }
@@ -670,7 +711,7 @@ class AuthService: ObservableObject {
         return true
     }
 
-    private func extractNonceFromCookieStorage() async -> String? { // Unverändert
+    private func extractNonceFromCookieStorage() async -> String? {
         AuthService.logger.debug("Attempting to extract nonce from cookie storage (trying JSON format first, then shorten)...")
          guard let url = URL(string: "https://pr0gramm.com") else { return nil }
          guard let sessionCookie = await MainActor.run(body: { HTTPCookieStorage.shared.cookies(for: url)?.first(where: { $0.name == self.sessionCookieName }) }) else { AuthService.logger.warning("Could not find session cookie named '\(self.sessionCookieName)' in storage."); return nil }
@@ -687,7 +728,7 @@ class AuthService: ObservableObject {
         } else { AuthService.logger.warning("[EXTRACT NONCE] Failed to URL-decode cookie value or convert to Data."); return nil }
     }
 
-    private func logAllCookiesForPr0gramm() async { // Unverändert
+    private func logAllCookiesForPr0gramm() async {
         guard let url = URL(string: "https://pr0gramm.com") else { return }
          AuthService.logger.debug("--- Current Cookies for \(url.host ?? "pr0gramm.com") ---")
          let cookies = await MainActor.run { HTTPCookieStorage.shared.cookies(for: url) }

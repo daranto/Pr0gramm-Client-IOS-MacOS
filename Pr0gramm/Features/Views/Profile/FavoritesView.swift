@@ -10,13 +10,17 @@ import Kingfisher
 struct FavoritesView: View {
 
     @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService // Use AuthService directly
+    @EnvironmentObject var authService: AuthService
+    // --- NEW: Add NavigationService ---
+    @EnvironmentObject var navigationService: NavigationService
+    // --- END NEW ---
     @State private var items: [Item] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
     @State private var showNoFilterMessage = false
+    @State private var showNoCollectionSelectedMessage = false
 
     @State private var navigationPath = NavigationPath()
     @State private var showingFilterSheet = false
@@ -33,8 +37,14 @@ struct FavoritesView: View {
     }
 
     private var favoritesCacheKey: String? {
-        guard let username = authService.currentUser?.name.lowercased() else { return nil }
-        return "favorites_\(username)"
+        guard let username = authService.currentUser?.name.lowercased(),
+              let collectionId = settings.selectedCollectionIdForFavorites else { return nil }
+        let selectedCollection = authService.userCollections.first { $0.id == collectionId }
+        guard let keyword = selectedCollection?.keyword else {
+            FavoritesView.logger.warning("Could not find keyword for selected favorite collection ID \(collectionId). Using ID in cache key.")
+            return "favorites_\(username)_collectionID_\(collectionId)"
+        }
+        return "favorites_\(username)_collection_\(keyword.replacingOccurrences(of: " ", with: "_"))"
     }
 
     var body: some View {
@@ -71,8 +81,12 @@ struct FavoritesView: View {
         .sheet(isPresented: $showingFilterSheet) {
             FilterView().environmentObject(settings).environmentObject(authService)
         }
-        .task(id: authService.isLoggedIn) { // Re-run when login status changes
+        .task(id: authService.isLoggedIn) {
             playerManager.configure(settings: settings)
+            await handleLoginOrFilterChange()
+        }
+        .task(id: settings.selectedCollectionIdForFavorites) {
+            FavoritesView.logger.info("Detected change in selectedCollectionIdForFavorites: \(settings.selectedCollectionIdForFavorites ?? -1). Refreshing favorites.")
             await handleLoginOrFilterChange()
         }
         .onChange(of: settings.showSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
@@ -87,12 +101,14 @@ struct FavoritesView: View {
     private var favoritesContentView: some View {
         Group {
             if authService.isLoggedIn {
-                if showNoFilterMessage {
+                if showNoCollectionSelectedMessage {
+                    noCollectionSelectedContentView
+                } else if showNoFilterMessage {
                     noFilterContentView
                 } else if isLoading && items.isEmpty {
                     ProgressView("Lade Favoriten...").frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if items.isEmpty && !isLoading && errorMessage == nil && !showNoFilterMessage {
-                    Text("Du hast noch keine Favoriten markiert (oder sie passen nicht zum Filter).")
+                } else if items.isEmpty && !isLoading && errorMessage == nil && !showNoFilterMessage && !showNoCollectionSelectedMessage {
+                    Text("Du hast noch keine Favoriten in dieser Sammlung (oder sie passen nicht zum Filter).")
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                         .padding()
@@ -142,11 +158,32 @@ struct FavoritesView: View {
             Spacer()
             Image(systemName: "line.3.horizontal.decrease.circle")
                 .font(.largeTitle).foregroundColor(.secondary).padding(.bottom, 5)
-            Text("Keine Favoriten ausgewählt").font(UIConstants.headlineFont)
+            Text("Keine Favoriten für Filter").font(UIConstants.headlineFont)
             Text("Bitte passe deine Filter an, um deine Favoriten zu sehen.")
                 .font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
             Button("Filter anpassen") { showingFilterSheet = true }
                 .buttonStyle(.bordered).padding(.top)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .refreshable { await refreshFavorites() }
+    }
+    
+    private var noCollectionSelectedContentView: some View {
+        VStack {
+            Spacer()
+            Image(systemName: "square.stack.3d.up.slash.fill")
+                .font(.largeTitle).foregroundColor(.secondary).padding(.bottom, 5)
+            Text("Kein Favoriten-Ordner ausgewählt").font(UIConstants.headlineFont)
+            Text("Bitte wähle in den Einstellungen einen Ordner aus, der als Standard für deine Favoriten verwendet werden soll.")
+                .font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
+            Button("Zu den Einstellungen") {
+                // --- MODIFIED: Use NavigationService to switch tab ---
+                FavoritesView.logger.info("User tapped 'Zu den Einstellungen'. Navigating to Settings tab.")
+                navigationService.selectedTab = .settings
+                // --- END MODIFICATION ---
+            }
+            .buttonStyle(.bordered).padding(.top)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -169,8 +206,32 @@ struct FavoritesView: View {
     // MARK: - Logic Methods
 
     private func handleLoginOrFilterChange() async {
-        if authService.isLoggedIn { await refreshFavorites() }
-        else { await MainActor.run { items = []; errorMessage = nil; isLoading = false; canLoadMore = true; isLoadingMore = false; showNoFilterMessage = false }; FavoritesView.logger.info("User logged out, cleared favorites list.") }
+        if authService.isLoggedIn {
+            if settings.selectedCollectionIdForFavorites != nil {
+                self.showNoCollectionSelectedMessage = false
+                await refreshFavorites()
+            } else {
+                FavoritesView.logger.warning("Cannot refresh favorites: No collection selected in AppSettings.")
+                self.items = []
+                self.errorMessage = nil
+                self.isLoading = false
+                self.canLoadMore = false
+                self.isLoadingMore = false
+                self.showNoFilterMessage = false
+                self.showNoCollectionSelectedMessage = true
+            }
+        } else {
+            await MainActor.run {
+                items = []
+                errorMessage = nil
+                isLoading = false
+                canLoadMore = true
+                isLoadingMore = false
+                showNoFilterMessage = false
+                showNoCollectionSelectedMessage = false
+            }
+            FavoritesView.logger.info("User logged out, cleared favorites list.")
+        }
     }
 
     @MainActor
@@ -178,9 +239,18 @@ struct FavoritesView: View {
         FavoritesView.logger.info("Refreshing favorites...")
         guard authService.isLoggedIn, let username = authService.currentUser?.name else {
             FavoritesView.logger.warning("Cannot refresh favorites: User not logged in or username unavailable.")
-            self.errorMessage = "Bitte anmelden."; self.items = []; self.showNoFilterMessage = false
+            self.errorMessage = "Bitte anmelden."; self.items = []; self.showNoFilterMessage = false; self.showNoCollectionSelectedMessage = false
             return
         }
+        guard let selectedCollectionID = settings.selectedCollectionIdForFavorites,
+              let selectedCollection = authService.userCollections.first(where: { $0.id == selectedCollectionID }),
+              let collectionKeyword = selectedCollection.keyword else {
+            FavoritesView.logger.warning("Cannot refresh favorites: No collection selected in AppSettings or keyword missing for ID \(settings.selectedCollectionIdForFavorites ?? -1).")
+            self.items = []; self.errorMessage = nil; self.isLoading = false; self.canLoadMore = false; self.isLoadingMore = false; self.showNoFilterMessage = false; self.showNoCollectionSelectedMessage = true
+            return
+        }
+        self.showNoCollectionSelectedMessage = false
+
         guard settings.hasActiveContentFilter else {
             FavoritesView.logger.warning("Refresh favorites blocked: No active content filter selected.")
             self.items = []; self.showNoFilterMessage = true; self.canLoadMore = false; self.isLoadingMore = false; self.errorMessage = nil
@@ -197,32 +267,34 @@ struct FavoritesView: View {
         if items.isEmpty {
              initialItemsFromCache = await settings.loadItemsFromCache(forKey: cacheKey)
              if let cached = initialItemsFromCache, !cached.isEmpty {
-                 self.items = cached.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem } // Pre-mark cached as favorited
-                 FavoritesView.logger.info("Found \(self.items.count) favorite items in cache initially.")
+                 self.items = cached.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
+                 FavoritesView.logger.info("Found \(self.items.count) favorite items in cache initially for collection '\(collectionKeyword)'.")
              }
-             else { FavoritesView.logger.info("No usable cache for favorites.") }
+             else { FavoritesView.logger.info("No usable cache for favorites in collection '\(collectionKeyword)'.") }
         }
         let oldFirstItemId = items.first?.id
 
-        FavoritesView.logger.info("Performing API fetch for favorites refresh (Flags: \(settings.apiFlags))...")
+        FavoritesView.logger.info("Performing API fetch for favorites refresh (Collection Keyword: '\(collectionKeyword)', User: \(username), Flags: \(settings.apiFlags))...")
         do {
-            let fetchedItemsFromAPI = try await apiService.fetchFavorites(username: username, flags: settings.apiFlags);
-            FavoritesView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) fresh favorites.");
+            let fetchedItemsFromAPI = try await apiService.fetchFavorites(
+                username: username,
+                collectionKeyword: collectionKeyword,
+                flags: settings.apiFlags
+            )
+            FavoritesView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) fresh favorites for collection '\(collectionKeyword)'.");
             guard !Task.isCancelled else { FavoritesView.logger.info("Refresh task cancelled."); return }
 
             let newFirstItemId = fetchedItemsFromAPI.first?.id
             let contentChanged = initialItemsFromCache == nil || initialItemsFromCache?.count != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId
-            self.items = fetchedItemsFromAPI.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem } // Mark as favorited
+            self.items = fetchedItemsFromAPI.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
             self.canLoadMore = !fetchedItemsFromAPI.isEmpty;
             FavoritesView.logger.info("FavoritesView updated. Total: \(self.items.count).");
 
-            // --- Update global favorite set ---
             authService.favoritedItemIDs = Set(self.items.map { $0.id })
-            FavoritesView.logger.info("Updated global favorite ID set in AuthService (\(authService.favoritedItemIDs.count) IDs).")
-            // --- END NEW ---
+            FavoritesView.logger.info("Updated global favorite ID set in AuthService (\(authService.favoritedItemIDs.count) IDs) based on collection '\(collectionKeyword)'.")
 
             if !navigationPath.isEmpty && contentChanged { navigationPath = NavigationPath(); FavoritesView.logger.info("Popped navigation.") }
-            await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey); // Save raw API items
+            await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
             await settings.updateCacheSizes()
         }
         catch let error as URLError where error.code == .userAuthenticationRequired {
@@ -238,15 +310,27 @@ struct FavoritesView: View {
     func loadMoreFavorites() async {
         guard settings.hasActiveContentFilter else { FavoritesView.logger.warning("Skipping loadMore: No active filter."); self.canLoadMore = false; return }
         guard authService.isLoggedIn, let username = authService.currentUser?.name else { return }
+        guard let selectedCollectionID = settings.selectedCollectionIdForFavorites,
+              let selectedCollection = authService.userCollections.first(where: { $0.id == selectedCollectionID }),
+              let collectionKeyword = selectedCollection.keyword else {
+            FavoritesView.logger.warning("Cannot load more favorites: No collection selected or keyword missing.")
+            self.canLoadMore = false
+            return
+        }
         guard !isLoadingMore && canLoadMore && !isLoading else { return }
         guard let lastItemId = items.last?.id else { return }
         guard let cacheKey = favoritesCacheKey else { return }
-        FavoritesView.logger.info("--- Starting loadMoreFavorites older than \(lastItemId) ---");
+        FavoritesView.logger.info("--- Starting loadMoreFavorites for collection '\(collectionKeyword)' older than \(lastItemId) ---");
         self.isLoadingMore = true;
-        defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; FavoritesView.logger.info("--- Finished loadMoreFavorites ---") } } }
+        defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; FavoritesView.logger.info("--- Finished loadMoreFavorites for collection '\(collectionKeyword)' ---") } } }
         do {
-            let newItems = try await apiService.fetchFavorites(username: username, flags: settings.apiFlags, olderThanId: lastItemId);
-            FavoritesView.logger.info("Loaded \(newItems.count) more favorite items from API.");
+            let newItems = try await apiService.fetchFavorites(
+                username: username,
+                collectionKeyword: collectionKeyword,
+                flags: settings.apiFlags,
+                olderThanId: lastItemId
+            )
+            FavoritesView.logger.info("Loaded \(newItems.count) more favorite items from API for collection '\(collectionKeyword)'.");
             var appendedItemCount = 0;
             guard !Task.isCancelled else { FavoritesView.logger.info("Load more cancelled."); return }
             guard self.isLoadingMore else { FavoritesView.logger.info("Load more cancelled before UI update."); return };
@@ -257,21 +341,18 @@ struct FavoritesView: View {
                 let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) };
                 if uniqueNewItems.isEmpty { self.canLoadMore = false; FavoritesView.logger.warning("All loaded items were duplicates.") }
                 else {
-                    let markedNewItems = uniqueNewItems.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem } // Mark as favorited
+                    let markedNewItems = uniqueNewItems.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
                     self.items.append(contentsOf: markedNewItems)
                     appendedItemCount = uniqueNewItems.count
                     FavoritesView.logger.info("Appended \(uniqueNewItems.count) unique items. Total: \(self.items.count)")
                     self.canLoadMore = true
-
-                    // --- Update global favorite set ---
                     authService.favoritedItemIDs.formUnion(uniqueNewItems.map { $0.id })
-                    FavoritesView.logger.info("Added \(uniqueNewItems.count) IDs to global favorite set (\(authService.favoritedItemIDs.count) total).")
-                    // --- END NEW ---
+                    FavoritesView.logger.info("Added \(uniqueNewItems.count) IDs to global favorite set (\(authService.favoritedItemIDs.count) total) from collection '\(collectionKeyword)'.")
                 }
             }
 
             if appendedItemCount > 0 {
-                let itemsToSave = self.items.map { var mutableItem = $0; mutableItem.favorited = nil; return mutableItem } // Save raw API items
+                let itemsToSave = self.items.map { var mutableItem = $0; mutableItem.favorited = nil; return mutableItem }
                 await settings.saveItemsToCache(itemsToSave, forKey: cacheKey);
                 await settings.updateCacheSizes()
             }
@@ -287,20 +368,50 @@ struct FavoritesView: View {
 }
 
 // Previews
-#Preview("Logged In") {
+#Preview("Logged In - Collection Selected") {
     let previewSettings = AppSettings()
+    previewSettings.selectedCollectionIdForFavorites = 101
     let previewAuthService = AuthService(appSettings: previewSettings)
+    let previewNavigationService = NavigationService() // Add for preview
     previewAuthService.isLoggedIn = true
-    previewAuthService.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2, badges: [])
-    // Optionally pre-populate some favorite IDs for the preview
-    previewAuthService.favoritedItemIDs = [2, 4] // Example IDs
+    let sampleCollections = [
+        ApiCollection(id: 101, name: "Meine Favoriten", keyword: "favoriten", isPublic: 0, isDefault: 1, itemCount: 123),
+        ApiCollection(id: 102, name: "Lustige Katzen", keyword: "katzen", isPublic: 0, isDefault: 0, itemCount: 45)
+    ]
+    previewAuthService.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2, badges: [], collections: sampleCollections)
+    #if DEBUG
+    previewAuthService.setUserCollectionsForPreview(sampleCollections)
+    #endif
+    previewAuthService.favoritedItemIDs = [2, 4]
+
     return FavoritesView()
         .environmentObject(previewSettings)
         .environmentObject(previewAuthService)
+        .environmentObject(previewNavigationService) // Provide NavigationService
 }
+
+#Preview("Logged In - No Collection Selected") {
+    let previewSettings = AppSettings()
+    previewSettings.selectedCollectionIdForFavorites = nil
+    let previewAuthService = AuthService(appSettings: previewSettings)
+    let previewNavigationService = NavigationService() // Add for preview
+    previewAuthService.isLoggedIn = true
+    previewAuthService.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2, badges: [])
+    #if DEBUG
+    previewAuthService.setUserCollectionsForPreview([])
+    #endif
+
+    return FavoritesView()
+        .environmentObject(previewSettings)
+        .environmentObject(previewAuthService)
+        .environmentObject(previewNavigationService) // Provide NavigationService
+}
+
+
 #Preview("Logged Out") {
     FavoritesView()
         .environmentObject(AppSettings())
         .environmentObject(AuthService(appSettings: AppSettings()))
+        .environmentObject(NavigationService()) // Provide NavigationService
 }
 // --- END OF COMPLETE FILE ---
