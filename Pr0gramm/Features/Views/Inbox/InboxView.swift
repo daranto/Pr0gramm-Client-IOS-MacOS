@@ -83,13 +83,15 @@ struct InboxView: View {
     private var listContent: some View {
         List {
             ForEach(messages) { message in
-                Button {
-                    Task { await handleMessageTap(message) }
-                } label: {
-                    InboxMessageRow(message: message)
-                }
-                .buttonStyle(.plain)
-                .disabled(isLoadingNavigationTarget || message.type == "notification") // Deaktiviere Klick für reine Notifications
+                InboxMessageRow(message: message)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard !isLoadingNavigationTarget, message.type != "notification" else {
+                            InboxView.logger.debug("Tap ignored for message \(message.id): isLoadingNavigationTarget=\(isLoadingNavigationTarget) or type=\(message.type)")
+                            return
+                        }
+                        Task { await handleMessageTap(message) }
+                    }
                 .listRowInsets(EdgeInsets(top: 10, leading: 15, bottom: 10, trailing: 15))
                 .id(message.id)
                 .onAppear {
@@ -115,35 +117,28 @@ struct InboxView: View {
     // MARK: - Navigation Helper
     @MainActor
     private func handleMessageTap(_ message: InboxMessage) async {
-        guard !isLoadingNavigationTarget else { return }
-        errorMessage = nil // Clear previous errors
+        guard !isLoadingNavigationTarget else {
+            InboxView.logger.debug("handleMessageTap skipped for \(message.id): Already loading target.")
+            return
+        }
+        errorMessage = nil
+        InboxView.logger.info("Handling tap for message ID: \(message.id), Type: \(message.type)")
 
         switch message.type {
         case "comment":
             if let itemId = message.itemId {
-                navigationTargetId = itemId // Track what we are loading
-                isLoadingNavigationTarget = true
-                do {
-                    let fetchedItem = try await apiService.fetchItem(id: itemId, flags: settings.apiFlags)
-                    guard navigationTargetId == itemId else { // Check if still relevant
-                         InboxView.logger.info("Navigation target changed while item \(itemId) was loading.")
-                         isLoadingNavigationTarget = false; navigationTargetId = nil; return
-                    }
-                    if let item = fetchedItem { itemToNavigate = item /* Trigger Navigation */ }
-                    else { errorMessage = "Post \(itemId) konnte nicht geladen werden." }
-                } catch { errorMessage = "Fehler beim Laden von Post \(itemId): \(error.localizedDescription)" }
-                isLoadingNavigationTarget = false; navigationTargetId = nil
+                InboxView.logger.info("Message type is 'comment', preparing navigation for item \(itemId)")
+                await prepareAndNavigateToItem(itemId)
             } else { InboxView.logger.warning("Comment message type tapped, but itemId is nil.") }
 
         case "message", "follow":
-             // Für PMs oder Follows wollen wir zum Profil des Senders navigieren
              if let senderName = message.name, !senderName.isEmpty {
-                 profileToNavigate = senderName // Trigger Navigation via .navigationDestination(for: String.self)
+                 InboxView.logger.info("Message type is '\(message.type)', navigating to profile: \(senderName)")
+                 profileToNavigate = senderName
              } else { InboxView.logger.warning("\(message.type) message type tapped, but sender name is nil or empty.") }
 
         case "notification":
              InboxView.logger.debug("Notification message tapped - no navigation action defined.")
-             // Hier könnte man ggf. Links im Notification-Text parsen und öffnen
              break
 
         default:
@@ -151,7 +146,58 @@ struct InboxView: View {
         }
     }
 
-    // MARK: - Data Loading Methods
+    // MARK: - prepareAndNavigateToItem (Flags fixed)
+    @MainActor
+    private func prepareAndNavigateToItem(_ itemId: Int?) async {
+        guard let id = itemId else {
+            InboxView.logger.warning("Attempted to navigate, but itemId was nil.")
+            return
+        }
+        guard !self.isLoadingNavigationTarget else {
+            InboxView.logger.debug("Skipping navigation preparation for \(id): Already loading another target.")
+            return
+        }
+
+        InboxView.logger.info("Preparing navigation for item ID: \(id)")
+        self.isLoadingNavigationTarget = true
+        self.navigationTargetId = id
+        self.errorMessage = nil
+
+        do {
+            // --- MODIFICATION: Use flags = 31 to fetch item regardless of global filters ---
+            let flagsToFetchWith = 31 // SFW(1)+NSFW(2)+NSFL(4)+NSFP(8)+POL(16) = 31
+            InboxView.logger.debug("Fetching item \(id) for navigation using flags: \(flagsToFetchWith) (ignoring global settings)")
+            let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
+            // --- END MODIFICATION ---
+
+            guard self.navigationTargetId == id else {
+                 InboxView.logger.info("Navigation target changed while item \(id) was loading. Discarding result.")
+                 self.isLoadingNavigationTarget = false; self.navigationTargetId = nil; return
+            }
+            if let item = fetchedItem {
+                 InboxView.logger.info("Successfully fetched item \(id) for navigation.")
+                 self.itemToNavigate = item // Trigger Navigation
+            } else {
+                 // This should ideally not happen anymore if flags=31 is used, unless the item was deleted.
+                 InboxView.logger.warning("Could not fetch item \(id) for navigation even with flags=31. Item might be deleted.")
+                 self.errorMessage = "Post \(id) konnte nicht gefunden werden (möglicherweise gelöscht)."
+            }
+        } catch is CancellationError {
+             InboxView.logger.info("Item fetch for navigation cancelled (ID: \(id)).")
+        } catch {
+            InboxView.logger.error("Failed to fetch item \(id) for navigation: \(error.localizedDescription)")
+            if self.navigationTargetId == id { // Show error only if still relevant
+                self.errorMessage = "Post \(id) konnte nicht geladen werden: \(error.localizedDescription)"
+            }
+        }
+        if self.navigationTargetId == id { // Reset state only if still relevant
+             self.isLoadingNavigationTarget = false
+             self.navigationTargetId = nil
+        }
+    }
+
+
+    // MARK: - Data Loading Methods (Unchanged)
       @MainActor
       func refreshMessages() async {
           InboxView.logger.info("Refreshing inbox messages...")
@@ -164,9 +210,7 @@ struct InboxView: View {
           self.isLoadingNavigationTarget = false; self.navigationTargetId = nil
           self.isLoading = true; self.errorMessage = nil
 
-          // --- NEW: Trigger count update on refresh ---
           Task { await authService.updateUnreadCount() }
-          // --- END NEW ---
 
           defer { Task { @MainActor in self.isLoading = false } }
 
@@ -176,8 +220,6 @@ struct InboxView: View {
 
               self.messages = response.messages.sorted { $0.created > $1.created }
               self.canLoadMore = !response.atEnd
-              // --- We already update the count via the separate task ---
-              // self.authService.unreadMessageCount = response.queue?.total ?? 0 // Remove direct update here
               InboxView.logger.info("Fetched \(response.messages.count) initial inbox messages. AtEnd: \(response.atEnd)")
 
           } catch let error as URLError where error.code == .userAuthenticationRequired {
@@ -189,7 +231,7 @@ struct InboxView: View {
               self.errorMessage = "Fehler: \(error.localizedDescription)"; self.messages = []; self.canLoadMore = false
           }
       }
-    
+
     @MainActor
     func loadMoreMessages() async {
         guard authService.isLoggedIn else { return }
@@ -220,9 +262,8 @@ struct InboxView: View {
                     InboxView.logger.warning("All loaded inbox messages were duplicates.")
                     self.canLoadMore = !response.atEnd
                 } else {
-                    // Füge neue Nachrichten hinzu und sortiere erneut
                     self.messages.append(contentsOf: uniqueNewMessages)
-                    self.messages.sort { $0.created > $1.created } // Nach Datum absteigend sortieren
+                    self.messages.sort { $0.created > $1.created }
                     InboxView.logger.info("Appended \(uniqueNewMessages.count) unique inbox messages. Total: \(self.messages.count)")
                     self.canLoadMore = !response.atEnd
                 }
@@ -240,7 +281,7 @@ struct InboxView: View {
     }
 }
 
-// MARK: - Inbox Message Row View
+// MARK: - Inbox Message Row View (Unchanged)
 struct InboxMessageRow: View {
     let message: InboxMessage
 
@@ -255,7 +296,6 @@ struct InboxMessageRow: View {
         return Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date())
     }
 
-    // Bestimme den Titel basierend auf dem Typ
     private var title: String {
         switch message.type {
         case "comment": return message.name ?? "Kommentar"
@@ -266,7 +306,6 @@ struct InboxMessageRow: View {
         }
     }
 
-    // Bestimme die Farbe für den Titel oder den Mark-Indikator
     private var titleOrMarkColor: Color {
         if message.type == "comment" || message.type == "message" || message.type == "follow" {
             return Mark(rawValue: message.mark ?? -1).displayColor
@@ -276,30 +315,27 @@ struct InboxMessageRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // Thumbnail (nur für Kommentare)
-            if message.type == "comment" {
-                KFImage(message.itemThumbnailUrl)
+            // Thumbnail
+            if message.type == "comment", let thumbUrl = message.itemThumbnailUrl {
+                KFImage(thumbUrl)
                     .resizable().placeholder { Color.gray.opacity(0.1) }
                     .aspectRatio(contentMode: .fill).frame(width: 50, height: 50)
                     .clipped().cornerRadius(4)
             } else if message.type == "follow" {
-                // Platzhalter-Icon oder User-Icon (wenn verfügbar)
                  Image(systemName: "person.crop.circle.fill")
                      .resizable().scaledToFit().frame(width: 50, height: 50)
                      .foregroundColor(.secondary)
             } else {
-                // Platzhalter für Notifications/Messages ohne Bild
-                Image(systemName: "bell.circle.fill")
+                 Image(systemName: "bell.circle.fill")
                     .resizable().scaledToFit().frame(width: 50, height: 50)
                     .foregroundColor(.secondary)
             }
 
             // Inhalt und Metadaten
             VStack(alignment: .leading, spacing: 4) {
-                // Titelzeile (Username oder Typ)
+                // Titelzeile
                 HStack {
                      if message.type != "notification" && message.type != "follow" {
-                         // Zeige Mark-Punkt für User-Aktionen
                          Circle().fill(titleOrMarkColor)
                              .frame(width: 8, height: 8)
                              .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
@@ -307,40 +343,33 @@ struct InboxMessageRow: View {
                      Text(title).font(.headline).lineLimit(1)
                      Spacer()
                      Text(relativeTime).font(.caption).foregroundColor(.secondary)
-                     if message.read == 0 { // Ungelesen-Indikator
+                     if message.read == 0 {
                          Circle().fill(Color.accentColor).frame(width: 8, height: 8).padding(.leading, 4)
                      }
                 }
-
-                // Nachrichteninhalt (nicht mehr abgeschnitten)
+                // Nachrichteninhalt
                 Text(message.message ?? "")
                     .font(.subheadline)
                     .foregroundColor(.primary)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 5)
-        // .opacity(message.read == 1 ? 0.8 : 1.0) // Gelesene Nachrichten leicht transparenter (ENTFERNT)
     }
 }
 
-// MARK: - Wrapper View für User Profile Navigation
-// Wird benötigt, falls ProfileView nicht direkt einen Usernamen annimmt
+
+// MARK: - UserProfileViewWrapper (Unchanged)
 struct UserProfileViewWrapper: View {
     let username: String
     var body: some View {
-        // Hier müsstest du eine View einfügen, die das Profil für den `username` anzeigt.
-        // Beispiel: Text("Profil von \(username)")
-        // Wenn deine ProfileView bereits so angepasst ist, dass sie einen Usernamen
-        // annehmen kann (oder wenn sie nur das eingeloggte Profil anzeigt),
-        // musst du hier entsprechend anpassen.
-        // Vorerst ein Platzhalter:
         Text("Profilansicht für: \(username)")
              .navigationTitle(username)
     }
 }
 
-
-// MARK: - Preview
+// MARK: - Preview (Unchanged)
 #Preview {
     InboxPreviewWrapper()
 }

@@ -8,7 +8,7 @@ import os
 import Kingfisher
 import UIKit // Für UIPasteboard
 
-// MARK: - DetailImageView
+// MARK: - DetailImageView (Unchanged)
 @MainActor
 struct DetailImageView: View {
     let item: Item
@@ -31,7 +31,7 @@ struct DetailImageView: View {
     }
 }
 
-// InfoLoadingStatus enum
+// InfoLoadingStatus enum (Unchanged)
 enum InfoLoadingStatus: Equatable { case idle; case loading; case loaded; case error(String) }
 
 
@@ -76,9 +76,8 @@ struct DetailViewContent: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
     @State private var isProcessingFavorite = false
     @State private var showingShareOptions = false
-    // @State private var showingUploaderProfileSheet: String? = nil // Gesteuert durch userProfileSheetTarget
 
-    // MARK: - Computed View Properties
+    // MARK: - Computed View Properties (mediaContentInternal, actionIconFont, voteCounterView, favoriteButton, shareButton, addCommentButton are Unchanged)
     @ViewBuilder private var mediaContentInternal: some View {
         ZStack(alignment: .bottom) {
             Group {
@@ -181,9 +180,12 @@ struct DetailViewContent: View {
         .disabled(!authService.isLoggedIn)
     }
 
+
     @ViewBuilder private var uploaderInfoView: some View {
         HStack(spacing: 6) {
-            UserMarkView(markValue: item.mark)
+            // --- MODIFIED: Pass showName: false ---
+            UserMarkView(markValue: item.mark, showName: false)
+            // --- END MODIFICATION ---
             Text(item.user)
                 .font(UIConstants.subheadlineFont.weight(.medium))
                 .foregroundColor(.primary)
@@ -197,11 +199,16 @@ struct DetailViewContent: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
+            guard authService.isLoggedIn else {
+                DetailViewContent.logger.info("Uploader info tapped, but user is not logged in. Ignoring.")
+                return
+            }
             DetailViewContent.logger.info("Uploader info tapped for user: \(item.user)")
             self.userProfileSheetTarget = UserProfileSheetTarget(username: item.user)
         }
     }
 
+    // MARK: - infoAndTagsContent, TagView, commentsContent (Unchanged)
     @ViewBuilder private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 15) {
@@ -250,7 +257,7 @@ struct DetailViewContent: View {
             flatComments: flatComments,
             totalCommentCount: totalCommentCount,
             status: infoLoadingStatus,
-            uploaderName: item.user, // Uploader name here
+            uploaderName: item.user,
             previewLinkTarget: $previewLinkTarget,
             userProfileSheetTarget: $userProfileSheetTarget,
             isCommentCollapsed: isCommentCollapsed,
@@ -259,7 +266,7 @@ struct DetailViewContent: View {
         )
     }
 
-    // MARK: - Body
+    // MARK: - Body (Unchanged)
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
@@ -299,16 +306,16 @@ struct DetailViewContent: View {
             Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)") }
             Button("Direkter Medien-Link") { if let urlString = item.imageUrl?.absoluteString { UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)") } else { DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)") } }
         } message: { Text("Welchen Link möchtest du in die Zwischenablage kopieren?") }
-        // Das Sheet für Uploader-Profile wird von der Parent-View (PagedDetailView) gehandhabt
     }
 
+    // MARK: - guessAspectRatio (Unchanged)
     private func guessAspectRatio() -> CGFloat? {
         guard item.width > 0, item.height > 0 else { return 1.0 }
         return CGFloat(item.width) / CGFloat(item.height)
     }
 }
 
-// Helper Extension (Unverändert)
+// Helper Extension (Unchanged)
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -329,114 +336,110 @@ fileprivate extension UIFont {
 }
 
 
-// MARK: - Preview
-#Preview("Compact - Limited Tags") {
-    struct PreviewWrapper: View {
-        @State var previewLinkTarget: PreviewLinkTarget? = nil
-        @State var userProfileSheetTarget: UserProfileSheetTarget? = nil // Hinzugefügt für Preview
-        @State var fullscreenTarget: FullscreenImageTarget? = nil
-        @State var collapsedIDs: Set<Int> = []
-        @StateObject var settings = AppSettings()
-        @StateObject var authService: AuthService
-        @StateObject var navService = NavigationService()
-        @StateObject var playerManager = VideoPlayerManager()
-        @State private var commentReplyTarget: ReplyTarget? = nil
+// MARK: - Previews (Unchanged)
+@MainActor
+struct PreviewWrapper: View {
+    @State var previewLinkTarget: PreviewLinkTarget? = nil
+    @State var userProfileSheetTarget: UserProfileSheetTarget? = nil
+    @State var fullscreenTarget: FullscreenImageTarget? = nil
+    @State var collapsedIDs: Set<Int> = []
+    @StateObject var settings = AppSettings()
+    @StateObject var authService: AuthService
+    @StateObject var navService = NavigationService()
+    @StateObject var playerManager = VideoPlayerManager()
+    @State private var commentReplyTarget: ReplyTarget? = nil
 
-        init() {
-            let tempSettings = AppSettings()
-            _settings = StateObject(wrappedValue: tempSettings)
-            _authService = StateObject(wrappedValue: AuthService(appSettings: tempSettings))
+    let sampleItem: Item
+
+    init(isLoggedIn: Bool = true) {
+        let tempSettings = AppSettings()
+        _settings = StateObject(wrappedValue: tempSettings)
+        let tempAuthService = AuthService(appSettings: tempSettings)
+
+        tempAuthService.isLoggedIn = isLoggedIn
+        if isLoggedIn {
+            tempAuthService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil)
+            tempAuthService.favoritedItemIDs = [2]
+            tempAuthService.votedItemStates = [1: 1]
+            tempSettings.selectedCollectionIdForFavorites = 1234
         }
+         _authService = StateObject(wrappedValue: tempAuthService)
+         self.sampleItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, subtitles: nil, favorited: isLoggedIn ? true : false)
+    }
 
-        func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
-        func isCollapsed(_ id: Int) -> Bool { collapsedIDs.contains(id) }
+    func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
+    func isCollapsed(_ id: Int) -> Bool { collapsedIDs.contains(id) }
 
-        var body: some View {
-            let sampleVideoItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, subtitles: nil, favorited: true)
-            let previewHandler = KeyboardActionHandler()
-            let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "TopTag1"), ItemTag(id: 2, confidence: 0.8, tag: "TopTag2"), ItemTag(id: 3, confidence: 0.7, tag: "TopTag3"), ItemTag(id: 4, confidence: 0.6, tag: "beim lesen programmieren gelernt") ]
-            let sampleComments = [ ItemComment(id: 1, parent: 0, content: "Kommentar 1 http://pr0gramm.com/new/54321", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1, itemId: 2), ItemComment(id: 2, parent: 1, content: "Antwort 1.1", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "User2", mark: 2, itemId: 2) ]
-            let previewFlatComments = flattenHierarchyForPreview(comments: sampleComments)
+    var body: some View {
+        let previewHandler = KeyboardActionHandler()
+        let previewTags: [ItemTag] = [ ItemTag(id: 1, confidence: 0.9, tag: "TopTag1"), ItemTag(id: 2, confidence: 0.8, tag: "TopTag2"), ItemTag(id: 3, confidence: 0.7, tag: "TopTag3"), ItemTag(id: 4, confidence: 0.6, tag: "beim lesen programmieren gelernt") ]
+        let sampleComments = [ ItemComment(id: 1, parent: 0, content: "Kommentar 1 http://pr0gramm.com/new/54321", created: Int(Date().timeIntervalSince1970)-100, up: 5, down: 0, confidence: 0.9, name: "User", mark: 1, itemId: 2), ItemComment(id: 2, parent: 1, content: "Antwort 1.1", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "User2", mark: 2, itemId: 2) ]
+        let previewFlatComments = flattenHierarchyForPreview(comments: sampleComments)
 
-            NavigationStack {
-                DetailViewContent(
-                    item: sampleVideoItem,
-                    keyboardActionHandler: previewHandler,
-                    playerManager: playerManager,
-                    currentSubtitleText: "Dies ist ein Test-Untertitel",
-                    onWillBeginFullScreen: {}, onWillEndFullScreen: {},
-                    displayedTags: Array(previewTags.prefix(4)),
-                    totalTagCount: previewTags.count,
-                    showingAllTags: false,
-                    flatComments: previewFlatComments,
-                    totalCommentCount: previewFlatComments.count,
-                    infoLoadingStatus: .loaded,
-                    previewLinkTarget: $previewLinkTarget,
-                    userProfileSheetTarget: $userProfileSheetTarget, // Übergeben
-                    fullscreenImageTarget: $fullscreenTarget,
-                    isFavorited: true,
-                    toggleFavoriteAction: {},
-                    showAllTagsAction: {},
-                    isCommentCollapsed: isCollapsed,
-                    toggleCollapseAction: toggleCollapse,
-                    currentVote: 1,
-                    upvoteAction: { print("Preview Upvote Tapped") },
-                    downvoteAction: { print("Preview Downvote Tapped") },
-                    showCommentInputAction: { itemId, parentId in
-                         print("Preview Show Comment Input Tapped for itemId: \(itemId), parentId: \(parentId)")
-                         self.commentReplyTarget = ReplyTarget(itemId: itemId, parentId: parentId)
-                    }
-                )
-                .environmentObject(navService)
-                .environmentObject(settings)
-                .environmentObject(authService)
-                .environment(\.horizontalSizeClass, .compact)
-                .preferredColorScheme(.dark)
-                .task {
-                    playerManager.configure(settings: settings)
-                    if authService.currentUser == nil {
-                         authService.isLoggedIn = true
-                         settings.selectedCollectionIdForFavorites = 1234
-                         authService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil)
-                         await settings.markItemsAsSeen(ids: [1,2])
-                         print("Preview Task: AuthService configured and item marked as seen.")
-                    }
+        NavigationStack {
+            DetailViewContent(
+                item: sampleItem,
+                keyboardActionHandler: previewHandler,
+                playerManager: playerManager,
+                currentSubtitleText: "Dies ist ein Test-Untertitel",
+                onWillBeginFullScreen: {}, onWillEndFullScreen: {},
+                displayedTags: Array(previewTags.prefix(4)),
+                totalTagCount: previewTags.count,
+                showingAllTags: false,
+                flatComments: previewFlatComments,
+                totalCommentCount: previewFlatComments.count,
+                infoLoadingStatus: .loaded,
+                previewLinkTarget: $previewLinkTarget,
+                userProfileSheetTarget: $userProfileSheetTarget,
+                fullscreenImageTarget: $fullscreenTarget,
+                isFavorited: authService.favoritedItemIDs.contains(sampleItem.id),
+                toggleFavoriteAction: { Task { print("Preview Toggle Fav") } },
+                showAllTagsAction: {},
+                isCommentCollapsed: isCollapsed,
+                toggleCollapseAction: toggleCollapse,
+                currentVote: authService.votedItemStates[sampleItem.id] ?? 0,
+                upvoteAction: { print("Preview Upvote Tapped") },
+                downvoteAction: { print("Preview Downvote Tapped") },
+                showCommentInputAction: { itemId, parentId in
+                     print("Preview Show Comment Input Tapped for itemId: \(itemId), parentId: \(parentId)")
+                     self.commentReplyTarget = ReplyTarget(itemId: itemId, parentId: parentId)
                 }
-                 .sheet(item: $commentReplyTarget) { target in
-                     CommentInputView(
-                         itemId: target.itemId,
-                         parentId: target.parentId,
-                         onSubmit: { commentText in
-                             print("Preview Submit: \(commentText) for itemId \(target.itemId), parent \(target.parentId)")
-                             try await Task.sleep(for: .seconds(1))
-                         }
-                     )
-                     .environmentObject(authService)
-                 }
-                 // Preview für das User-Profil-Sheet
-                 .sheet(item: $userProfileSheetTarget) { target in
-                     Text("Preview: User Profile Sheet for \(target.username)")
-                 }
-            }
+            )
+            .sheet(item: $commentReplyTarget) { target in CommentInputView(itemId: target.itemId, parentId: target.parentId, onSubmit: { _ in }) }
+            .sheet(item: $userProfileSheetTarget) { target in Text("Preview: User Profile Sheet for \(target.username)") }
+            .sheet(item: $fullscreenTarget) { target in FullscreenImageView(item: target.item) }
+            .environmentObject(navService)
+            .environmentObject(settings)
+            .environmentObject(authService)
+            .environment(\.horizontalSizeClass, .compact)
+            .preferredColorScheme(.dark)
+            .task { playerManager.configure(settings: settings) }
         }
     }
+}
 
-    @MainActor func flattenHierarchyForPreview(comments: [ItemComment], maxDepth: Int = 5) -> [FlatCommentDisplayItem] {
-        var flatList: [FlatCommentDisplayItem] = []
-        let childrenByParentId = Dictionary(grouping: comments.filter { $0.parent != nil && $0.parent != 0 }, by: { $0.parent! })
-        let commentDict = Dictionary(uniqueKeysWithValues: comments.map { ($0.id, $0) })
-        func traverse(commentId: Int, currentLevel: Int) {
-            guard currentLevel <= maxDepth, let comment = commentDict[commentId] else { return }
-            let children = childrenByParentId[commentId] ?? []
-            let hasChildren = !children.isEmpty
-            flatList.append(FlatCommentDisplayItem(id: comment.id, comment: comment, level: currentLevel, hasChildren: hasChildren))
-            guard currentLevel < maxDepth else { return }
-            children.forEach { traverse(commentId: $0.id, currentLevel: currentLevel + 1) }
-        }
-        let topLevelComments = comments.filter { $0.parent == nil || $0.parent == 0 }
-        topLevelComments.forEach { traverse(commentId: $0.id, currentLevel: 0) }
-        return flatList
+@MainActor func flattenHierarchyForPreview(comments: [ItemComment], maxDepth: Int = 5) -> [FlatCommentDisplayItem] {
+    var flatList: [FlatCommentDisplayItem] = []
+    let childrenByParentId = Dictionary(grouping: comments.filter { $0.parent != nil && $0.parent != 0 }, by: { $0.parent! })
+    let commentDict = Dictionary(uniqueKeysWithValues: comments.map { ($0.id, $0) })
+    func traverse(commentId: Int, currentLevel: Int) {
+        guard currentLevel <= maxDepth, let comment = commentDict[commentId] else { return }
+        let children = childrenByParentId[commentId] ?? []
+        let hasChildren = !children.isEmpty
+        flatList.append(FlatCommentDisplayItem(id: comment.id, comment: comment, level: currentLevel, hasChildren: hasChildren))
+        guard currentLevel < maxDepth else { return }
+        children.forEach { traverse(commentId: $0.id, currentLevel: currentLevel + 1) }
     }
-    return PreviewWrapper()
+    let topLevelComments = comments.filter { $0.parent == nil || $0.parent == 0 }
+    topLevelComments.forEach { traverse(commentId: $0.id, currentLevel: 0) }
+    return flatList
+}
+
+#Preview("Compact - Limited Tags (Logged In)") {
+    PreviewWrapper(isLoggedIn: true)
+}
+
+#Preview("Compact - Limited Tags (Logged Out)") {
+     PreviewWrapper(isLoggedIn: false)
 }
 // --- END OF COMPLETE FILE ---

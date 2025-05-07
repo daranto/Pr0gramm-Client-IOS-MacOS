@@ -48,7 +48,7 @@ struct UserFavoritedCommentsView: View {
         .onChange(of: settings.showNSFP) { _, _ in Task { await refreshComments() } }
         .onChange(of: settings.showPOL) { _, _ in Task { await refreshComments() } }
         .navigationDestination(item: $itemToNavigate) { loadedItem in
-             PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager)
+             PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager) // Use the shared wrapper
                  .environmentObject(settings)
                  .environmentObject(authService)
         }
@@ -93,8 +93,6 @@ struct UserFavoritedCommentsView: View {
                 Button {
                     Task { await prepareAndNavigateToItem(comment.itemId) }
                 } label: {
-                    // Hier werden keine Overrides benötigt, da Favoriten von verschiedenen Usern stammen können
-                    // und die Infos direkt im ItemComment-Objekt sind (oder sein sollten).
                     FavoritedCommentRow(comment: comment)
                 }
                 .buttonStyle(.plain)
@@ -276,15 +274,13 @@ struct FavoritedCommentRow: View {
 
     private var score: Int { comment.up - comment.down }
 
-    // --- MODIFIED: Use displayName and displayMark consistently ---
     private var displayName: String {
         overrideUsername ?? comment.name ?? "Unbekannt"
     }
 
-    private var displayMarkValue: Int { // Renamed to avoid conflict with comment.mark
+    private var displayMarkValue: Int {
         overrideUserMark ?? comment.mark ?? -1
     }
-    // --- END MODIFICATION ---
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -302,12 +298,8 @@ struct FavoritedCommentRow: View {
                     .lineLimit(4)
 
                 HStack(spacing: 6) {
-                    // --- MODIFIED: Pass displayMarkValue to UserMarkView ---
                     UserMarkView(markValue: displayMarkValue)
-                    // --- END MODIFICATION ---
-                    // --- MODIFIED: Show displayName next to the mark dot ---
-                    Text(displayName) // Explicitly show the determined name
-                    // --- END MODIFICATION ---
+                    Text(displayName)
                     Text("•")
                     Text("\(score)")
                         .foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
@@ -322,55 +314,36 @@ struct FavoritedCommentRow: View {
     }
 }
 
-@MainActor
-struct PagedDetailViewWrapperForItem: View {
-    @State var items: [Item]
-    @ObservedObject var playerManager: VideoPlayerManager
-
-    init(item: Item, playerManager: VideoPlayerManager) {
-        self._items = State(initialValue: [item])
-        self.playerManager = playerManager
-    }
-
-    func dummyLoadMore() async {}
-
-    var body: some View {
-        PagedDetailView(
-            items: $items,
-            selectedIndex: 0,
-            playerManager: playerManager,
-            loadMoreAction: dummyLoadMore
-        )
-    }
-}
-
 #Preview {
-    PreviewWrapper()
-}
+    // The preview wrapper is now defined *inside* the #Preview block
+    // to avoid redeclaration issues if this pattern is used elsewhere.
+    struct UserFavoritedCommentsPreviewWrapper: View {
+        @StateObject private var previewSettings = AppSettings()
+        @StateObject private var previewAuthService: AuthService
 
-private struct PreviewWrapper: View {
-    @StateObject private var previewSettings = AppSettings()
-    @StateObject private var previewAuthService: AuthService
+        init() {
+            let settings = AppSettings()
+            let authService = AuthService(appSettings: settings)
+            authService.isLoggedIn = true
+            authService.currentUser = UserInfo(id: 1, name: "Daranto", registered: 1, score: 1337, mark: 2, badges: [])
+            _previewAuthService = StateObject(wrappedValue: authService)
+            _previewSettings = StateObject(wrappedValue: settings)
+        }
 
-    init() {
-        let settings = AppSettings()
-        let authService = AuthService(appSettings: settings)
-        authService.isLoggedIn = true
-        authService.currentUser = UserInfo(id: 1, name: "Daranto", registered: 1, score: 1337, mark: 2, badges: [])
-        _previewAuthService = StateObject(wrappedValue: authService)
-        _previewSettings = StateObject(wrappedValue: settings)
-    }
-
-    var body: some View {
-        // Simuliere die Kommentare für die Vorschau direkt im State der PreviewWrapper
-        // Da UserFavoritedCommentsView @State private var comments hat, können wir sie nicht direkt von außen setzen
-        // für eine echte Preview. In einer echten App würden die Daten durch die Ladefunktionen befüllt.
-        // Für die Preview zeigen wir es einfach ohne initial geladene Kommentare.
-        NavigationStack {
-            UserFavoritedCommentsView(username: "Daranto")
-                .environmentObject(previewSettings)
-                .environmentObject(previewAuthService)
+        var body: some View {
+            NavigationStack {
+                UserFavoritedCommentsView(username: "Daranto")
+                    .environmentObject(previewSettings)
+                    .environmentObject(previewAuthService)
+            }
         }
     }
+    return UserFavoritedCommentsPreviewWrapper()
 }
+
+// --- REMOVED Preview Wrapper Struct ---
+// The struct PreviewWrapper definition that was here previously
+// has been removed to fix the redeclaration error.
+// --- END REMOVED ---
+
 // --- END OF COMPLETE FILE ---

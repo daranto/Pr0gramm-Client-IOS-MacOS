@@ -19,9 +19,7 @@ struct UserProfileCommentsView: View {
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
-    // --- NEW: State to store the profile user's mark ---
     @State private var profileUserMark: Int? = nil
-    // --- END NEW ---
 
     @State private var itemToNavigate: Item? = nil
     @State private var isLoadingNavigationTarget: Bool = false
@@ -53,7 +51,7 @@ struct UserProfileCommentsView: View {
         .onChange(of: settings.showNSFP) { _, _ in Task { await refreshComments() } }
         .onChange(of: settings.showPOL) { _, _ in Task { await refreshComments() } }
         .navigationDestination(item: $itemToNavigate) { loadedItem in
-             PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager)
+             PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager) // Use the shared wrapper
                  .environmentObject(settings)
                  .environmentObject(authService)
         }
@@ -98,13 +96,11 @@ struct UserProfileCommentsView: View {
                 Button {
                     Task { await prepareAndNavigateToItem(comment.itemId) }
                 } label: {
-                    // --- MODIFIED: Pass overrideUsername and overrideUserMark ---
                     FavoritedCommentRow(
                         comment: comment,
                         overrideUsername: username, // Der Username des Profils, das wir gerade ansehen
                         overrideUserMark: profileUserMark // Das Mark des Profil-Users
                     )
-                    // --- END MODIFICATION ---
                 }
                 .buttonStyle(.plain)
                 .disabled(comment.itemId == nil || isLoadingNavigationTarget)
@@ -178,7 +174,7 @@ struct UserProfileCommentsView: View {
     @MainActor
     func refreshComments() async {
         UserProfileCommentsView.logger.info("Refreshing profile comments for user: \(username)")
-        
+
         self.isLoadingNavigationTarget = false
         self.navigationTargetItemId = nil
         self.isLoading = true
@@ -193,25 +189,19 @@ struct UserProfileCommentsView: View {
 
             self.comments = response.comments
             self.canLoadMore = response.hasOlder
-            // --- NEW: Store the profile user's mark ---
             if let userFromResponse = response.user {
                 self.profileUserMark = userFromResponse.mark
                 UserProfileCommentsView.logger.info("Stored profile user mark: \(userFromResponse.mark) for \(username)")
             } else {
-                // Fallback, falls die API das user-Objekt nicht mitschickt (sollte nicht passieren laut Log)
-                // oder wenn man das Profil des eingeloggten Users anschaut (dann ist user oft nil in der Response)
                 if authService.currentUser?.name.lowercased() == username.lowercased() {
                     self.profileUserMark = authService.currentUser?.mark
                 } else {
-                    // Wenn wir das Mark nicht haben, laden wir es separat über getProfileInfo
-                    // Das ist ein Edge-Case und sollte selten nötig sein.
                     UserProfileCommentsView.logger.warning("User object missing in ProfileCommentsResponse for \(username). Attempting to fetch mark separately.")
-                    let profileInfo = try? await apiService.getProfileInfo(username: username, flags: 0) // flags=0 nur für user info
+                    let profileInfo = try? await apiService.getProfileInfo(username: username, flags: 0)
                     self.profileUserMark = profileInfo?.user.mark
                 }
                 UserProfileCommentsView.logger.info("Set profile user mark to \(self.profileUserMark ?? -99) for \(username) via fallback.")
             }
-            // --- END NEW ---
             UserProfileCommentsView.logger.info("Fetched \(response.comments.count) initial profile comments. HasOlder: \(response.hasOlder)")
 
         } catch let error as URLError where error.code == .userAuthenticationRequired {
@@ -303,4 +293,5 @@ struct UserProfileCommentsView: View {
     }
     return PreviewWrapper()
 }
+
 // --- END OF COMPLETE FILE ---

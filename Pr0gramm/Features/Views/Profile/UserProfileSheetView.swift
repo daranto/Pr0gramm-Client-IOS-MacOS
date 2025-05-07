@@ -9,7 +9,7 @@ struct UserProfileSheetView: View {
     let username: String
 
     @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var settings: AppSettings // Still needed for playerManager config etc.
     @Environment(\.dismiss) var dismiss
 
     @State private var profileInfo: ProfileInfoResponse?
@@ -66,6 +66,7 @@ struct UserProfileSheetView: View {
                 await loadAllData(forceRefresh: true)
             }
             .navigationDestination(item: $itemToNavigate) { loadedItem in
+                 // Use flags=31 when fetching item for navigation from profile sheet as well
                  PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager)
                      .environmentObject(settings)
                      .environmentObject(authService)
@@ -73,14 +74,18 @@ struct UserProfileSheetView: View {
             .navigationDestination(for: ProfileNavigationTarget.self) { target in
                 switch target {
                 case .allUserUploads(let targetUsername):
+                    // UserUploadsView itself respects global filters, which is fine
+                    // when navigating *away* from the profile sheet.
                     UserUploadsView(username: targetUsername)
                         .environmentObject(settings)
                         .environmentObject(authService)
                 case .allUserComments(let targetUsername):
+                    // UserProfileCommentsView also respects global filters.
                     UserProfileCommentsView(username: targetUsername)
                         .environmentObject(settings)
                         .environmentObject(authService)
                 default:
+                    // Handle other cases if necessary, like collections
                     EmptyView()
                 }
             }
@@ -110,16 +115,13 @@ struct UserProfileSheetView: View {
             } else if let error = profileInfoError {
                 Text("Fehler: \(error)").foregroundColor(.red)
             } else if let info = profileInfo {
-                // --- MODIFIED: Rang-Text hinzugefügt ---
                 userInfoRow(label: "Rang", valueView: {
                     HStack {
-                        UserMarkView(markValue: info.user.mark) // Zeigt nur den Punkt
-                        Text(Mark(rawValue: info.user.mark).displayName) // Zeigt den Text des Ranges
-                            .font(UIConstants.subheadlineFont) // Gleiche Schriftart wie andere Werte
+                        UserMarkView(markValue: info.user.mark)
+                            .font(UIConstants.subheadlineFont)
                             .foregroundColor(.secondary)
                     }
                 })
-                // --- END MODIFICATION ---
                 if let score = info.user.score {
                     userInfoRow(label: "Benis", value: "\(score)")
                 } else {
@@ -130,14 +132,6 @@ struct UserProfileSheetView: View {
                 } else {
                     userInfoRow(label: "Registriert seit", value: "N/A")
                 }
-                // --- REMOVED: Redundante Zeilen für Kommentare und Uploads ---
-                // if let commentCount = info.commentCount {
-                //     userInfoRow(label: "Kommentare", value: "\(commentCount)")
-                // }
-                // if let uploadCount = info.uploadCount {
-                //     userInfoRow(label: "Uploads", value: "\(uploadCount)")
-                // }
-                // --- END REMOVAL ---
                 if let badges = info.badges, !badges.isEmpty {
                     DisclosureGroup("Abzeichen (\(badges.count))") {
                         badgeScrollView(badges: badges)
@@ -152,6 +146,7 @@ struct UserProfileSheetView: View {
     }
 
     private func loadProfileInfo(forceRefresh: Bool = false) async {
+        // Profile info fetch doesn't depend on flags
         if !forceRefresh && profileInfo != nil { return }
         UserProfileSheetView.logger.info("Loading profile info for \(username)...")
         await MainActor.run {
@@ -159,7 +154,7 @@ struct UserProfileSheetView: View {
             profileInfoError = nil
         }
         do {
-            let infoResponse = try await apiService.getProfileInfo(username: username, flags: 31)
+            let infoResponse = try await apiService.getProfileInfo(username: username, flags: 31) // Use 31 to get all badges/collections
             await MainActor.run { profileInfo = infoResponse }
         } catch {
             UserProfileSheetView.logger.error("Failed to load profile info for \(username): \(error.localizedDescription)")
@@ -176,7 +171,8 @@ struct UserProfileSheetView: View {
             } else if let error = uploadsError {
                 Text("Fehler: \(error)").foregroundColor(.red)
             } else if userUploads.isEmpty {
-                Text("\(username) hat keine Uploads (die deinen Filtern entsprechen).").foregroundColor(.secondary)
+                // Message adjusted slightly, as filters are ignored here
+                Text("\(username) hat (noch) keine Uploads.").foregroundColor(.secondary)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -200,13 +196,11 @@ struct UserProfileSheetView: View {
                 HStack {
                     Text("Neueste Uploads")
                     Spacer()
-                    // --- MODIFIED: Zeige Anzahl aus profileInfo, falls vorhanden ---
                     if let totalUploads = profileInfo?.uploadCount {
                         Text("Alle \(totalUploads) anzeigen")
                             .font(.caption)
                             .foregroundColor(.accentColor)
                     }
-                    // --- END MODIFICATION ---
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -219,7 +213,7 @@ struct UserProfileSheetView: View {
 
     private func loadUserUploads(isRefresh: Bool = false, initialLoad: Bool = false) async {
         if !initialLoad && !isRefresh { return }
-        UserProfileSheetView.logger.info("Loading uploads for \(username)... Refresh: \(isRefresh), Initial: \(initialLoad)")
+        UserProfileSheetView.logger.info("Loading uploads for \(username) (Profile Sheet - IGNORING FILTERS)... Refresh: \(isRefresh), Initial: \(initialLoad)")
 
         await MainActor.run {
             if isRefresh || initialLoad { userUploads = [] }
@@ -228,11 +222,15 @@ struct UserProfileSheetView: View {
         }
 
         do {
+            // --- MODIFICATION: Use flags = 31 ---
+            let flagsToFetchWith = 31
+            UserProfileSheetView.logger.debug("Fetching uploads for \(username) using flags: \(flagsToFetchWith)")
             let fetchedItems = try await apiService.fetchItems(
-                flags: settings.apiFlags,
+                flags: flagsToFetchWith, // Ignore global filters
                 user: username,
                 olderThanId: nil
             )
+            // --- END MODIFICATION ---
             await MainActor.run {
                 userUploads = Array(fetchedItems.prefix(uploadsPageLimit))
             }
@@ -251,7 +249,8 @@ struct UserProfileSheetView: View {
             } else if let error = commentsError {
                 Text("Fehler: \(error)").foregroundColor(.red)
             } else if userComments.isEmpty {
-                Text("\(username) hat keine Kommentare (die deinen Filtern entsprechen).").foregroundColor(.secondary)
+                // Message adjusted slightly, as filters are ignored here
+                Text("\(username) hat (noch) keine Kommentare.").foregroundColor(.secondary)
             } else {
                 ForEach(userComments.prefix(commentsPageLimit)) { comment in
                     Button {
@@ -272,13 +271,11 @@ struct UserProfileSheetView: View {
                 HStack {
                     Text("Neueste Kommentare")
                     Spacer()
-                    // --- MODIFIED: Zeige Anzahl aus profileInfo, falls vorhanden ---
                     if let totalComments = profileInfo?.commentCount {
                         Text("Alle \(totalComments) anzeigen")
                             .font(.caption)
                             .foregroundColor(.accentColor)
                     }
-                    // --- END MODIFICATION ---
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -291,7 +288,7 @@ struct UserProfileSheetView: View {
 
     private func loadUserComments(isRefresh: Bool = false, initialLoad: Bool = false) async {
         if !initialLoad && !isRefresh { return }
-        UserProfileSheetView.logger.info("Loading comments for \(username)... Refresh: \(isRefresh), Initial: \(initialLoad)")
+        UserProfileSheetView.logger.info("Loading comments for \(username) (Profile Sheet - IGNORING FILTERS)... Refresh: \(isRefresh), Initial: \(initialLoad)")
 
         await MainActor.run {
             if isRefresh || initialLoad { userComments = [] }
@@ -300,13 +297,18 @@ struct UserProfileSheetView: View {
         }
 
         do {
+            // --- MODIFICATION: Use flags = 31 ---
+            let flagsToFetchWith = 31
+            UserProfileSheetView.logger.debug("Fetching profile comments for \(username) using flags: \(flagsToFetchWith)")
             let response = try await apiService.fetchProfileComments(
                 username: username,
-                flags: settings.apiFlags,
+                flags: flagsToFetchWith, // Ignore global filters
                 before: nil
             )
+            // --- END MODIFICATION ---
             await MainActor.run {
                 userComments = Array(response.comments.prefix(commentsPageLimit))
+                // Keep existing logic for setting profileUserMark based on response/fallback
                 if profileInfo?.user.name.lowercased() == username.lowercased() && profileInfo?.user.mark != response.user?.mark {
                     UserProfileSheetView.logger.info("Mark for \(username) in ProfileCommentsResponse (\(response.user?.mark ?? -98)) differs from ProfileInfoResponse (\(profileInfo?.user.mark ?? -99)). Using ProfileInfoResponse for consistency in this sheet.")
                 }
@@ -372,7 +374,12 @@ struct UserProfileSheetView: View {
         navigationTargetItemId = id
 
         do {
-            let fetchedItem = try await apiService.fetchItem(id: id, flags: settings.apiFlags)
+             // --- MODIFICATION: Use flags = 31 when fetching item for navigation ---
+            let flagsToFetchWith = 31
+            UserProfileSheetView.logger.debug("Fetching item \(id) for navigation from profile sheet using flags: \(flagsToFetchWith)")
+            let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
+             // --- END MODIFICATION ---
+
             guard navigationTargetItemId == id else {
                  UserProfileSheetView.logger.info("Navigation target changed while item \(id) was loading. Discarding result.")
                  isLoadingNavigationTarget = false; navigationTargetItemId = nil; return
@@ -381,12 +388,15 @@ struct UserProfileSheetView: View {
                 UserProfileSheetView.logger.info("Successfully fetched item \(id) for navigation.")
                 itemToNavigate = item
             } else {
-                UserProfileSheetView.logger.warning("Could not fetch item \(id) for navigation (API returned nil or filter mismatch).")
+                 // This case should be rarer now
+                 UserProfileSheetView.logger.warning("Could not fetch item \(id) for navigation even with flags=31.")
+                 // Optionally set an error message here if needed
             }
         } catch is CancellationError {
             UserProfileSheetView.logger.info("Item fetch for navigation cancelled (ID: \(id)).")
         } catch {
             UserProfileSheetView.logger.error("Failed to fetch item \(id) for navigation: \(error.localizedDescription)")
+            // Optionally set an error message
         }
         if navigationTargetItemId == id {
              isLoadingNavigationTarget = false

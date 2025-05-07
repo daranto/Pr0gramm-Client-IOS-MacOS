@@ -26,53 +26,64 @@ struct LinkedItemPreviewView: View {
 
     // MARK: - Body
     var body: some View {
-        Group {
-            if isLoading {
-                ProgressView("Lade Vorschau für \(itemID)...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the progress view
-            } else if let error = errorMessage {
-                // Display error state with retry option
-                VStack {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.largeTitle)
-                        .foregroundColor(.orange)
-                        .padding(.bottom)
-                    Text("Fehler beim Laden")
-                        .font(UIConstants.headlineFont)
-                    Text(error)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding()
-                    Button("Erneut versuchen") {
-                        Task { await loadItem() } // Retry loading on button tap
+        // --- MODIFIED: Wrap content in NavigationStack for Toolbar ---
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView("Lade Vorschau für \(itemID)...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the progress view
+                } else if let error = errorMessage {
+                    // Display error state with retry option
+                    VStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.largeTitle)
+                            .foregroundColor(.orange)
+                            .padding(.bottom)
+                        Text("Fehler beim Laden")
+                            .font(UIConstants.headlineFont)
+                        Text(error)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding()
+                        Button("Erneut versuchen") {
+                            Task { await loadItem() } // Retry loading on button tap
+                        }
+                        .buttonStyle(.bordered)
+                        .padding(.top)
                     }
-                    .buttonStyle(.bordered)
-                    .padding(.top)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the error view
+                } else if let item = fetchedItem {
+                    // Use the *SHARED* wrapper view
+                    PagedDetailViewWrapperForItem(
+                        item: item,
+                        playerManager: playerManager
+                    )
+                    // Environment objects (settings, authService) are passed down automatically
+                } else {
+                    // Fallback if not loading, no error, but no item (initial state or unexpected issue)
+                     Text("Vorschau wird vorbereitet...")
+                         .foregroundColor(.secondary)
+                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the error view
-            } else if let item = fetchedItem {
-                // --- MODIFIED: Use the wrapper view ---
-                // Display the fetched item using the wrapper that manages the binding
-                PagedDetailViewWrapper(
-                    fetchedItem: item,
-                    playerManager: playerManager
-                )
-                // --- END MODIFICATION ---
-                // Environment objects (settings, authService) are passed down automatically
-            } else {
-                // Fallback if not loading, no error, but no item (initial state or unexpected issue)
-                 Text("Vorschau wird vorbereitet...")
-                     .foregroundColor(.secondary)
-                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }
-        .task { // Use .task for automatic loading AND manager configuration
-             // Configure the local player manager when the task starts
-             playerManager.configure(settings: settings)
-             // Load the item data
-             await loadItem()
-         }
+            .task { // Use .task for automatic loading AND manager configuration
+                 // Configure the local player manager when the task starts
+                 playerManager.configure(settings: settings)
+                 // Load the item data
+                 await loadItem()
+             }
+            // --- Add Toolbar inside NavigationStack ---
+             .navigationTitle("Vorschau")
+             #if os(iOS)
+             .navigationBarTitleDisplayMode(.inline)
+             #endif
+             .toolbar {
+                 ToolbarItem(placement: .confirmationAction) { // Or .navigationBarLeading if preferred
+                     Button("Fertig") { dismiss() }
+                 }
+             }
+        } // --- End NavigationStack ---
     }
 
     // MARK: - Data Loading
@@ -118,45 +129,15 @@ struct LinkedItemPreviewView: View {
         }
     }
 
-    // --- NEW WRAPPER VIEW ---
-    /// Helper wrapper view to manage the @State array needed for the PagedDetailView binding.
-    private struct PagedDetailViewWrapper: View {
-        /// State variable holding the array containing the single fetched item.
-        @State var items: [Item]
-        /// The player manager instance passed down.
-        let playerManager: VideoPlayerManager
-
-        /// Initializes the wrapper, creating the state array from the single item.
-        init(fetchedItem: Item, playerManager: VideoPlayerManager) {
-            // Initialize the @State variable with an array containing only the fetched item.
-            self._items = State(initialValue: [fetchedItem])
-            self.playerManager = playerManager
-        }
-
-        /// Dummy load more action, as it's not needed for a single item preview.
-        func dummyLoadMore() async {
-             // This function does nothing in the preview context.
-             LinkedItemPreviewView.logger.trace("PagedDetailViewWrapper: dummyLoadMore called (no-op)")
-        }
-
-        var body: some View {
-            // Instantiate PagedDetailView, passing the binding to the state array.
-            PagedDetailView(
-                items: $items, // Pass the binding to the wrapper's @State array
-                selectedIndex: 0, // Always index 0 for the single item
-                playerManager: playerManager,
-                loadMoreAction: dummyLoadMore // Pass the dummy action
-            )
-        }
-    }
-    // --- END NEW WRAPPER VIEW ---
+    // Wrapper definition PagedDetailViewWrapperForItem is now in Shared folder
 }
 
 
 // MARK: - Previews
 
 #Preview("Loading") {
-    LinkedItemPreviewWrapperView(itemID: 12345)
+    // Directly instantiate LinkedItemPreviewView and provide environment objects
+    LinkedItemPreviewView(itemID: 12345)
         .environmentObject(AppSettings())
         .environmentObject(AuthService(appSettings: AppSettings()))
 }
@@ -164,8 +145,20 @@ struct LinkedItemPreviewView: View {
 #Preview("Error") {
     let settings = AppSettings()
     let auth = AuthService(appSettings: settings)
-    return LinkedItemPreviewWrapperView(itemID: 999)
+    // Simulate an error state by setting errorMessage after initial load in a real scenario,
+    // or just show it directly for preview simplicity if the load logic isn't run in preview.
+    // This preview will likely start in the initial "Vorschau wird vorbereitet..." state,
+    // as loadItem isn't called automatically in previews unless inside a .task.
+    // To preview the error *state*, you might need a more complex preview setup
+    // that injects a specific state. For now, this shows the initial state.
+    LinkedItemPreviewView(itemID: 999)
         .environmentObject(settings)
         .environmentObject(auth)
 }
+
+// --- REMOVED Preview Wrapper Struct ---
+// The @MainActor struct LinkedItemPreviewWrapperView definition
+// that was here previously has been removed to fix the redeclaration error.
+// --- END REMOVED ---
+
 // --- END OF COMPLETE FILE ---

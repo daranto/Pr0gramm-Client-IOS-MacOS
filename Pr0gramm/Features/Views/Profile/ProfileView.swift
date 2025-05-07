@@ -81,7 +81,9 @@ struct ProfileView: View {
                     Text("Rang")
                         .font(UIConstants.bodyFont)
                     Spacer()
-                    UserMarkView(markValue: user.mark) // Hier wird UserMarkView verwendet
+                    // --- MODIFIED: Use UserMarkView here directly ---
+                    UserMarkView(markValue: user.mark)
+                    // --- END MODIFICATION ---
                 }
                 HStack {
                     Text("Benis")
@@ -104,7 +106,7 @@ struct ProfileView: View {
                     Text("Meine Uploads")
                         .font(UIConstants.bodyFont)
                 }
-                
+
                 if !authService.userCollections.isEmpty {
                     NavigationLink(value: ProfileNavigationTarget.allCollections(username: user.name)) {
                         Text("Meine Sammlungen (\(authService.userCollections.count))")
@@ -205,32 +207,46 @@ struct ProfileView: View {
     }
 }
 
+// --- MODIFIED: UserMarkView to display name again ---
 struct UserMarkView: View {
     let markValue: Int?
+    // --- NEW: Add showName parameter ---
+    let showName: Bool // Default is true, set in init
+
     private var markEnum: Mark
-    init(markValue: Int?) {
+    private var markColor: Color { markEnum.displayColor }
+    private var markName: String { markEnum.displayName }
+
+    // --- NEW: Initializer with default value ---
+    init(markValue: Int?, showName: Bool = true) {
         self.markValue = markValue
         self.markEnum = Mark(rawValue: markValue ?? -1)
+        self.showName = showName
     }
+    // --- END NEW ---
+
     static func getMarkName(for mark: Int) -> String { Mark(rawValue: mark).displayName }
-    private var markColor: Color { markEnum.displayColor }
-    // private var markName: String { markEnum.displayName } // Nicht mehr benötigt für die Anzeige
 
     var body: some View {
         HStack(spacing: 5) {
             Circle().fill(markColor)
                 .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
                 .frame(width: 8, height: 8)
-            // --- MODIFIED: Text(markName) entfernt ---
-            // Text(markName)
-            //     .font(UIConstants.subheadlineFont)
-            //     .foregroundColor(.secondary)
+
+            // --- MODIFIED: Conditionally show Text ---
+            if showName {
+                Text(markName)
+                    .font(UIConstants.subheadlineFont) // Or bodyFont depending on context
+                    .foregroundColor(.secondary)
+            }
             // --- END MODIFICATION ---
         }
     }
 }
 
-// MARK: - Previews
+// --- END MODIFICATION ---
+
+// MARK: - Previews (Unchanged)
 private struct LoggedInProfilePreviewWrapper: View {
     @StateObject private var settings: AppSettings
     @StateObject private var authService: AuthService
