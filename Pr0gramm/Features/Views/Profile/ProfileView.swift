@@ -9,6 +9,8 @@ enum ProfileNavigationTarget: Hashable {
     case favoritedComments(username: String)
     case allCollections(username: String)
     case collectionItems(collection: ApiCollection, username: String)
+    case allUserUploads(username: String)
+    case allUserComments(username: String)
 }
 
 /// Displays the user's profile information when logged in, or prompts for login otherwise.
@@ -55,6 +57,10 @@ struct ProfileView: View {
                      UserCollectionsListView(username: username)
                  case .collectionItems(let collection, let username):
                      CollectionItemsView(collection: collection, username: username)
+                 case .allUserUploads(let username):
+                     UserUploadsView(username: username)
+                 case .allUserComments(let username):
+                     UserProfileCommentsView(username: username)
                  }
             }
         }
@@ -75,7 +81,7 @@ struct ProfileView: View {
                     Text("Rang")
                         .font(UIConstants.bodyFont)
                     Spacer()
-                    UserMarkView(markValue: user.mark)
+                    UserMarkView(markValue: user.mark) // Hier wird UserMarkView verwendet
                 }
                 HStack {
                     Text("Benis")
@@ -200,21 +206,26 @@ struct ProfileView: View {
 }
 
 struct UserMarkView: View {
-    let markValue: Int
+    let markValue: Int?
     private var markEnum: Mark
-    init(markValue: Int) { self.markValue = markValue; self.markEnum = Mark(rawValue: markValue) }
+    init(markValue: Int?) {
+        self.markValue = markValue
+        self.markEnum = Mark(rawValue: markValue ?? -1)
+    }
     static func getMarkName(for mark: Int) -> String { Mark(rawValue: mark).displayName }
     private var markColor: Color { markEnum.displayColor }
-    private var markName: String { markEnum.displayName }
+    // private var markName: String { markEnum.displayName } // Nicht mehr benötigt für die Anzeige
 
     var body: some View {
         HStack(spacing: 5) {
             Circle().fill(markColor)
                 .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
                 .frame(width: 8, height: 8)
-            Text(markName)
-                .font(UIConstants.subheadlineFont)
-                .foregroundColor(.secondary)
+            // --- MODIFIED: Text(markName) entfernt ---
+            // Text(markName)
+            //     .font(UIConstants.subheadlineFont)
+            //     .foregroundColor(.secondary)
+            // --- END MODIFICATION ---
         }
     }
 }
@@ -239,9 +250,8 @@ private struct LoggedInProfilePreviewWrapper: View {
 
         ai.currentUser = UserInfo(
             id: 1, name: "Daranto", registered: Int(Date().timeIntervalSince1970) - 500000,
-            score: 1337, mark: 2, badges: sampleBadges, collections: sampleCollections // Include collections here
+            score: 1337, mark: 2, badges: sampleBadges, collections: sampleCollections
         )
-        // Use the new #if DEBUG method to set collections for preview
         #if DEBUG
         ai.setUserCollectionsForPreview(sampleCollections)
         #endif

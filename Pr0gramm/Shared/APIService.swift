@@ -27,12 +27,12 @@ struct ItemComment: Codable, Identifiable, Hashable {
     let up: Int
     let down: Int
     let confidence: Double?
-    let name: String
-    let mark: Int
+    let name: String?
+    let mark: Int?
     let itemId: Int?
     let thumb: String?
 
-    init(id: Int, parent: Int?, content: String, created: Int, up: Int, down: Int, confidence: Double?, name: String, mark: Int, itemId: Int? = nil, thumb: String? = nil) {
+    init(id: Int, parent: Int?, content: String, created: Int, up: Int, down: Int, confidence: Double?, name: String?, mark: Int?, itemId: Int? = nil, thumb: String? = nil) {
         self.id = id
         self.parent = parent
         self.content = content
@@ -97,25 +97,29 @@ struct ApiBadge: Codable, Identifiable, Hashable {
 }
 
 struct ProfileInfoResponse: Codable {
-    let user: ApiProfileUser
+    let user: ApiProfileUser // Hier wird erwartet, dass alle Felder von ApiProfileUser da sind
     let badges: [ApiBadge]?
     let commentCount: Int?
     let uploadCount: Int?
     let tagCount: Int?
     let collections: [ApiCollection]?
 }
+
+// --- MODIFIED: Make more fields in ApiProfileUser optional ---
 struct ApiProfileUser: Codable, Hashable {
     let id: Int
     let name: String
-    let registered: Int
-    let score: Int
-    let mark: Int
+    let registered: Int? // War Int
+    let score: Int?      // War Int
+    let mark: Int        // Bleibt Int, da im Log vorhanden
     let up: Int?
     let down: Int?
     let banned: Int?
     let bannedUntil: Int?
 }
-struct UserInfo: Codable, Hashable {
+// --- END MODIFICATION ---
+
+struct UserInfo: Codable, Hashable { // Dies wird für den eingeloggten User verwendet, hier sollten die Felder da sein.
     let id: Int
     let name: String
     let registered: Int
@@ -130,7 +134,7 @@ struct CollectionsResponse: Codable {
 struct ApiCollection: Codable, Identifiable, Hashable {
     let id: Int
     let name: String
-    let keyword: String? // This is the "name" used in the `collection` API parameter
+    let keyword: String?
     let isPublic: Int
     let isDefault: Int
     let itemCount: Int
@@ -149,8 +153,8 @@ struct PostCommentResultComment: Codable, Identifiable, Hashable {
     let up: Int
     let down: Int
     let confidence: Double
-    let name: String
-    let mark: Int
+    let name: String?
+    let mark: Int?
 }
 
 struct CommentsPostSuccessResponse: Codable {
@@ -166,6 +170,13 @@ struct CommentsPostErrorResponse: Codable {
 
 struct ProfileCommentLikesResponse: Codable {
     let comments: [ItemComment]
+    let hasOlder: Bool
+    let hasNewer: Bool
+}
+
+struct ProfileCommentsResponse: Codable {
+    let comments: [ItemComment]
+    let user: ApiProfileUser? // ApiProfileUser wird hier verwendet
     let hasOlder: Bool
     let hasNewer: Bool
 }
@@ -206,7 +217,6 @@ struct InboxMessage: Codable, Identifiable {
     }
 }
 
-// Helper to remove duplicate query items by name, as URLComponents.queryItems can have duplicates
 extension Array where Element == URLQueryItem {
     func removingDuplicatesByName() -> [URLQueryItem] {
         var addedDict = [String: Bool]()
@@ -224,17 +234,14 @@ class APIService {
     private let baseURL = URL(string: "https://pr0gramm.com/api")!
     private let decoder = JSONDecoder()
 
-    // --- MODIFIED: fetchItems signature and logic ---
     func fetchItems(
         flags: Int,
-        promoted: Int? = nil,                  // For feed type (0=new, 1=promoted)
-        user: String? = nil,                   // For user's uploads, OR for collection owner if collectionIsSelf=true
-        tags: String? = nil,                   // For tag search
-        olderThanId: Int? = nil,               // For pagination
-        collectionNameForUser: String? = nil,  // Name/keyword of the collection
-        isOwnCollection: Bool = false          // True if 'user' owns 'collectionNameForUser' and is logged in
-        // collectionId: Int? = nil,           // Potentially for future use or admin actions, not for general item fetching
-                                               // as it seems to have pagination issues or returns limited results.
+        promoted: Int? = nil,
+        user: String? = nil,
+        tags: String? = nil,
+        olderThanId: Int? = nil,
+        collectionNameForUser: String? = nil,
+        isOwnCollection: Bool = false
     ) async throws -> [Item] {
         let endpoint = "/items/get"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
@@ -243,7 +250,6 @@ class APIService {
         var queryItems = [URLQueryItem(name: "flags", value: String(flags))]
         var logDescription = "flags=\(flags)"
 
-        // Handle Collection first as it might also set 'user' and 'self'
         if let name = collectionNameForUser {
             queryItems.append(URLQueryItem(name: "collection", value: name))
             logDescription += ", collectionName=\(name)"
@@ -256,19 +262,16 @@ class APIService {
                 queryItems.append(URLQueryItem(name: "self", value: "true"))
                 logDescription += ", collectionOwner=\(ownerUsername), self=true"
             }
-            // If not isOwnCollection, 'user' and 'self' are not added; implies public collection of 'user' (if 'user' is also set for that purpose)
-            // or just a public collection by 'name' if 'user' is not otherwise specified.
-        } else if let regularUser = user { // This 'user' is for uploads or general feed if not a collection fetch
+        } else if let regularUser = user {
             queryItems.append(URLQueryItem(name: "user", value: regularUser))
             logDescription += ", user=\(regularUser) (for uploads/feed)"
         }
-
 
         if let tags = tags {
             queryItems.append(URLQueryItem(name: "tags", value: tags))
             logDescription += ", tags='\(tags)'"
         }
-        if let promoted = promoted, collectionNameForUser == nil { // 'promoted' usually not used with 'collection'
+        if let promoted = promoted, collectionNameForUser == nil {
             queryItems.append(URLQueryItem(name: "promoted", value: String(promoted)))
             logDescription += ", promoted=\(promoted)"
         }
@@ -277,7 +280,7 @@ class APIService {
             logDescription += ", older=\(olderId)"
         }
         
-        urlComponents.queryItems = queryItems.removingDuplicatesByName() // Ensure no duplicate param names
+        urlComponents.queryItems = queryItems.removingDuplicatesByName()
         guard let url = urlComponents.url else { throw URLError(.badURL) }
         
         Self.logger.info("Fetching items from \(endpoint) with params: [\(logDescription)] URL: \(url.absoluteString)")
@@ -293,8 +296,6 @@ class APIService {
             throw error
         }
     }
-    // --- END MODIFICATION ---
-
 
     func fetchItem(id: Int, flags: Int) async throws -> Item? {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
@@ -304,23 +305,20 @@ class APIService {
         catch { Self.logger.error("Error during /items/get (single item) for ID \(id): \(error.localizedDescription)"); throw error }
     }
 
-    // --- MODIFIED: fetchFavorites to use collectionNameForUser and isOwnCollection ---
     func fetchFavorites(username: String, collectionKeyword: String, flags: Int, olderThanId: Int? = nil) async throws -> [Item] {
         Self.logger.debug("Fetching favorites for user \(username), collectionKeyword '\(collectionKeyword)', flags \(flags), olderThan: \(olderThanId ?? -1)")
         return try await fetchItems(
             flags: flags,
-            user: username, // Pass username for the 'user' parameter when collectionIsSelf=true
+            user: username,
             olderThanId: olderThanId,
             collectionNameForUser: collectionKeyword,
-            isOwnCollection: true // Favorites are always the user's own collection
+            isOwnCollection: true
         )
     }
-    // --- END MODIFICATION ---
-
 
     @available(*, deprecated, message: "Use fetchItems(tags:flags:promoted:olderThanId:) instead")
     func searchItems(tags: String, flags: Int) async throws -> [Item] {
-        return try await fetchItems(flags: flags, user: nil, tags: tags) // Ensure user is nil if not for specific user uploads
+        return try await fetchItems(flags: flags, user: nil, tags: tags)
     }
 
     func fetchItemInfo(itemId: Int) async throws -> ItemsInfoResponse {
@@ -528,6 +526,46 @@ class APIService {
             Self.logger.error("Error fetching favorited comments for user \(username): \(error.localizedDescription)")
             if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
                  Self.logger.warning("Fetching favorited comments failed: User authentication required.")
+            }
+            throw error
+        }
+    }
+
+    func fetchProfileComments(username: String, flags: Int, before: Int? = nil) async throws -> ProfileCommentsResponse {
+        let endpoint = "/profile/comments"
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+
+        var queryItems = [
+            URLQueryItem(name: "name", value: username),
+            URLQueryItem(name: "flags", value: String(flags))
+        ]
+
+        if let beforeTimestamp = before {
+            queryItems.append(URLQueryItem(name: "before", value: String(beforeTimestamp)))
+            Self.logger.info("Fetching profile comments for '\(username)' (flags: \(flags)) before timestamp: \(beforeTimestamp)")
+        } else {
+             let distantFutureTimestamp = Int(Date.distantFuture.timeIntervalSince1970)
+             queryItems.append(URLQueryItem(name: "before", value: String(distantFutureTimestamp)))
+             Self.logger.info("Fetching initial profile comments for '\(username)' (flags: \(flags))")
+        }
+
+        urlComponents.queryItems = queryItems
+
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        let request = URLRequest(url: url)
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: ProfileCommentsResponse = try handleApiResponse(data: data, response: response, endpoint: "\(endpoint) (user: \(username))")
+            Self.logger.info("Successfully fetched \(apiResponse.comments.count) profile comments for user \(username). HasOlder: \(apiResponse.hasOlder)")
+            return apiResponse
+        } catch {
+            Self.logger.error("Error fetching profile comments for user \(username): \(error.localizedDescription)")
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                 Self.logger.warning("Fetching profile comments failed: User authentication required.")
             }
             throw error
         }

@@ -16,11 +16,15 @@ struct CommentView: View {
     let onToggleCollapse: () -> Void
     let onReply: () -> Void
 
+    @State private var showingUserProfileFor: String? = nil
+
     @EnvironmentObject var authService: AuthService // Check login status & favorite/vote state
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CommentView")
 
-    private var markEnum: Mark { Mark(rawValue: comment.mark) }
+    // --- MODIFIED: Handle optional comment.mark ---
+    private var markEnum: Mark { Mark(rawValue: comment.mark ?? -1) } // Default to -1 if mark is nil
     private var userMarkColor: Color { markEnum.displayColor }
+    // --- END MODIFICATION ---
     private var score: Int { comment.up - comment.down }
 
     private var relativeTime: String {
@@ -50,7 +54,6 @@ struct CommentView: View {
         return attributedString
     }
 
-    // Computed properties based on the *current* comment instance
     private var isFavorited: Bool {
         authService.favoritedCommentIDs.contains(comment.id)
     }
@@ -60,7 +63,7 @@ struct CommentView: View {
     }
 
     private var currentVote: Int {
-        authService.votedCommentStates[comment.id] ?? 0 // 0 = no vote, 1 = up, -1 = down
+        authService.votedCommentStates[comment.id] ?? 0
     }
 
     private var isVoting: Bool {
@@ -77,37 +80,39 @@ struct CommentView: View {
                         .foregroundColor(.secondary)
                         .frame(width: 12, height: 12)
                 } else {
-                    Spacer().frame(width: 12, height: 12) // Keep alignment consistent
+                    Spacer().frame(width: 12, height: 12)
                 }
 
                 Circle().fill(userMarkColor)
                     .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
                     .frame(width: 8, height: 8)
-                Text(comment.name).font(UIConstants.captionFont.weight(.semibold))
+                // --- MODIFIED: Handle optional comment.name ---
+                Text(comment.name ?? "User") // Default zu "User" wenn name nil ist
+                    .font(UIConstants.captionFont.weight(.semibold))
+                // --- END MODIFICATION ---
                 Text("•").foregroundColor(.secondary)
                 Text("\(score)").font(UIConstants.captionFont).foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
                 Text("•").foregroundColor(.secondary)
                 Text(relativeTime).font(UIConstants.captionFont).foregroundColor(.secondary)
                 Spacer()
             }
-            .contentShape(Rectangle()) // Make the HStack tappable for collapse
-            .onTapGesture { // Keep short tap for collapse/expand
+            .contentShape(Rectangle())
+            .onTapGesture {
                 if hasChildren {
                     onToggleCollapse()
                 }
             }
 
             if !isCollapsed {
-                // Comment Content
                 Text(attributedCommentContent)
                     .foregroundColor(.primary)
-                    .lineLimit(nil) // Allow multiple lines
-                    .fixedSize(horizontal: false, vertical: true) // Ensure correct wrapping
-                    .padding(.leading, hasChildren ? 20 : 20) // Indent content, adjust as needed
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, hasChildren ? 20 : 20)
             }
         }
-        .padding(.vertical, 6) // Apply padding to the entire comment VStack
-        .opacity(isCollapsed ? 0.7 : 1.0) // Dim collapsed comments slightly
+        .padding(.vertical, 6)
+        .opacity(isCollapsed ? 0.7 : 1.0)
         .environment(\.openURL, OpenURLAction { url in
             if let itemID = parsePr0grammLink(url: url) {
                 CommentView.logger.info("Pr0gramm link tapped, attempting to preview item ID: \(itemID)")
@@ -118,54 +123,76 @@ struct CommentView: View {
                 return .systemAction
             }
         })
-        .onChange(of: authService.favoritedCommentIDs) { _, _ in /* Force view update */ }
-        .onChange(of: authService.votedCommentStates) { _, _ in /* Force view update */ }
+        .onChange(of: authService.favoritedCommentIDs) { _, _ in }
+        .onChange(of: authService.votedCommentStates) { _, _ in }
         .contextMenu {
-            if authService.isLoggedIn {
-                Button {
-                    onReply()
-                } label: {
-                    Label("Antworten", systemImage: "arrowshape.turn.up.left")
-                }
-
-                Button {
-                    Task {
-                        CommentView.logger.debug("Context Menu: Favorite button tapped for comment \(comment.id)")
-                        await authService.performCommentFavToggle(commentId: comment.id)
-                    }
-                } label: {
-                    Label(isFavorited ? "Favorit entfernen" : "Favorit", systemImage: isFavorited ? "heart.fill" : "heart")
-                }
-                .disabled(isTogglingFavorite)
-
-                Divider()
-
-                Button {
-                    Task {
-                        CommentView.logger.debug("Context Menu: Upvote button tapped for comment \(comment.id)")
-                        await authService.performCommentVote(commentId: comment.id, voteType: 1)
-                    }
-                } label: {
-                    // --- MODIFIED: Text changed ---
-                    Label("Upvote", systemImage: currentVote == 1 ? "plus.circle.fill" : "plus.circle")
-                    // --- END MODIFICATION ---
-                }
-                .disabled(isVoting)
-
-                Button {
-                    Task {
-                        CommentView.logger.debug("Context Menu: Downvote button tapped for comment \(comment.id)")
-                        await authService.performCommentVote(commentId: comment.id, voteType: -1)
-                    }
-                } label: {
-                    // --- MODIFIED: Text changed ---
-                    Label("Downvote", systemImage: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
-                    // --- END MODIFICATION ---
-                }
-                .disabled(isVoting)
-            }
+            // --- MODIFIED: ContextMenu Content extracted to a function to help compiler ---
+            contextMenuContent
+        }
+        .sheet(item: $showingUserProfileFor) { username in
+             UserProfileSheetView(username: username)
+                 .environmentObject(authService)
+                 .environmentObject(AppSettings())
         }
     }
+
+    // --- NEW: Extracted Context Menu Content ---
+    @ViewBuilder
+    private var contextMenuContent: some View {
+        if authService.isLoggedIn {
+            Button {
+                onReply()
+            } label: {
+                Label("Antworten", systemImage: "arrowshape.turn.up.left")
+            }
+
+            Button {
+                Task {
+                    CommentView.logger.debug("Context Menu: Favorite button tapped for comment \(comment.id)")
+                    await authService.performCommentFavToggle(commentId: comment.id)
+                }
+            } label: {
+                Label(isFavorited ? "Favorit entfernen" : "Favorit", systemImage: isFavorited ? "heart.fill" : "heart")
+            }
+            .disabled(isTogglingFavorite)
+
+            Divider()
+
+            Button {
+                Task {
+                    CommentView.logger.debug("Context Menu: Upvote button tapped for comment \(comment.id)")
+                    await authService.performCommentVote(commentId: comment.id, voteType: 1)
+                }
+            } label: {
+                Label("Upvote", systemImage: currentVote == 1 ? "plus.circle.fill" : "plus.circle")
+            }
+            .disabled(isVoting)
+
+            Button {
+                Task {
+                    CommentView.logger.debug("Context Menu: Downvote button tapped for comment \(comment.id)")
+                    await authService.performCommentVote(commentId: comment.id, voteType: -1)
+                }
+            } label: {
+                Label("Downvote", systemImage: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
+            }
+            .disabled(isVoting)
+
+            Divider()
+            // --- MODIFIED: Safely unwrap comment.name for the button action ---
+            if let commenterName = comment.name, !commenterName.isEmpty {
+                Button {
+                    CommentView.logger.info("Context Menu: Show User Profile tapped for \(commenterName)")
+                    showingUserProfileFor = commenterName
+                } label: {
+                    Label("User Profil anzeigen", systemImage: "person.circle")
+                }
+            }
+            // --- END MODIFICATION ---
+        }
+    }
+    // --- END NEW ---
+
 
     private func parsePr0grammLink(url: URL) -> Int? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
@@ -185,7 +212,10 @@ struct CommentView: View {
     }
 }
 
-// Helper Extension
+extension String: Identifiable {
+    public var id: String { self }
+}
+
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -218,7 +248,7 @@ fileprivate extension UIFont {
             auth.favoritedCommentIDs = [1]
             auth.votedCommentStates = [1: 1, 4: -1]
 
-            return List { // Preview within a List to see background context
+            return List {
                  CommentView(
                      comment: ItemComment(id: 1, parent: 0, content: "Top comment http://pr0gramm.com/new/12345", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
                      previewLinkTarget: $target,
@@ -227,7 +257,7 @@ fileprivate extension UIFont {
                      onToggleCollapse: { print("Toggle tapped") },
                      onReply: { print("Reply Tapped") }
                  )
-                 .listRowInsets(EdgeInsets()) // Remove default List padding
+                 .listRowInsets(EdgeInsets())
 
                  CommentView(
                      comment: ItemComment(id: 4, parent: 0, content: "RIP neben msn und icq.", created: Int(Date().timeIntervalSince1970)-150, up: 152, down: 3, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
@@ -248,8 +278,19 @@ fileprivate extension UIFont {
                      onReply: { print("Reply Tapped") }
                  )
                   .listRowInsets(EdgeInsets())
+                 // --- NEW: Preview for comment with nil name/mark ---
+                 CommentView(
+                     comment: ItemComment(id: 11, parent: 0, content: "Kommentar mit nil name/mark.", created: Int(Date().timeIntervalSince1970)-250, up: 5, down: 1, confidence: 0.9, name: nil, mark: nil, itemId: 54321),
+                     previewLinkTarget: $target,
+                     hasChildren: false,
+                     isCollapsed: false,
+                     onToggleCollapse: { print("Toggle tapped") },
+                     onReply: { print("Reply Tapped") }
+                 )
+                  .listRowInsets(EdgeInsets())
+                 // --- END NEW ---
             }
-            .listStyle(.plain) // Use plain list style for better visualization
+            .listStyle(.plain)
             .environmentObject(auth)
         }
     }

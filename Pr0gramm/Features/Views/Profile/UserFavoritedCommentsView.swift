@@ -12,7 +12,7 @@ struct UserFavoritedCommentsView: View {
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
-    @State var comments: [ItemComment] = [] // Keep @State internal
+    @State private var comments: [ItemComment] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
     @State private var canLoadMore = true
@@ -22,11 +22,7 @@ struct UserFavoritedCommentsView: View {
     @State private var isLoadingNavigationTarget: Bool = false
     @State private var navigationTargetItemId: Int? = nil
 
-    // --- MODIFIED: Make playerManager @StateObject ---
-    // Da diese View jetzt der "Besitzer" des PlayerManagers für die
-    // Detailansicht ist, die von hier aus geöffnet wird, verwenden wir @StateObject.
     @StateObject private var playerManager = VideoPlayerManager()
-    // --- END MODIFICATION ---
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserFavoritedCommentsView")
@@ -43,9 +39,7 @@ struct UserFavoritedCommentsView: View {
             Button("OK") { errorMessage = nil; isLoadingNavigationTarget = false; navigationTargetItemId = nil }
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
         .task {
-            // --- MODIFIED: Configure playerManager on appear ---
             playerManager.configure(settings: settings)
-            // --- END MODIFICATION ---
             await refreshComments()
         }
         .onChange(of: settings.showSFW) { _, _ in Task { await refreshComments() } }
@@ -54,11 +48,9 @@ struct UserFavoritedCommentsView: View {
         .onChange(of: settings.showNSFP) { _, _ in Task { await refreshComments() } }
         .onChange(of: settings.showPOL) { _, _ in Task { await refreshComments() } }
         .navigationDestination(item: $itemToNavigate) { loadedItem in
-             // --- MODIFIED: Pass playerManager to wrapper ---
              PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager)
                  .environmentObject(settings)
                  .environmentObject(authService)
-             // --- END MODIFICATION ---
         }
         .overlay {
             if isLoadingNavigationTarget {
@@ -70,8 +62,6 @@ struct UserFavoritedCommentsView: View {
             }
         }
     }
-
-    // MARK: - Content Views (unverändert)
 
     @ViewBuilder private var commentsContentView: some View {
         Group {
@@ -103,6 +93,8 @@ struct UserFavoritedCommentsView: View {
                 Button {
                     Task { await prepareAndNavigateToItem(comment.itemId) }
                 } label: {
+                    // Hier werden keine Overrides benötigt, da Favoriten von verschiedenen Usern stammen können
+                    // und die Infos direkt im ItemComment-Objekt sind (oder sein sollten).
                     FavoritedCommentRow(comment: comment)
                 }
                 .buttonStyle(.plain)
@@ -119,7 +111,7 @@ struct UserFavoritedCommentsView: View {
                           Task { await loadMoreComments() }
                      }
                 }
-            } // Ende ForEach
+            }
 
             if isLoadingMore {
                 HStack { Spacer(); ProgressView("Lade mehr..."); Spacer() }
@@ -130,8 +122,6 @@ struct UserFavoritedCommentsView: View {
         .listStyle(.plain)
         .refreshable { await refreshComments() }
     }
-
-    // MARK: - Data Loading & Navigation Helper (unverändert)
 
     @MainActor
     private func prepareAndNavigateToItem(_ itemId: Int?) async {
@@ -153,9 +143,7 @@ struct UserFavoritedCommentsView: View {
             let fetchedItem = try await apiService.fetchItem(id: id, flags: settings.apiFlags)
             guard navigationTargetItemId == id else {
                  UserFavoritedCommentsView.logger.info("Navigation target changed while item \(id) was loading. Discarding result.")
-                 isLoadingNavigationTarget = false
-                 navigationTargetItemId = nil
-                 return
+                 isLoadingNavigationTarget = false; navigationTargetItemId = nil; return
             }
             if let item = fetchedItem {
                 UserFavoritedCommentsView.logger.info("Successfully fetched item \(id) for navigation.")
@@ -178,8 +166,6 @@ struct UserFavoritedCommentsView: View {
         }
     }
 
-
-    // MARK: - Data Loading Methods (refreshComments, loadMoreComments - unverändert)
     @MainActor
     func refreshComments() async {
         UserFavoritedCommentsView.logger.info("Refreshing favorited comments for user: \(username)")
@@ -191,7 +177,6 @@ struct UserFavoritedCommentsView: View {
 
         self.isLoadingNavigationTarget = false
         self.navigationTargetItemId = nil
-
         self.isLoading = true
         self.errorMessage = nil
         let initialTimestamp = Int(Date.distantFuture.timeIntervalSince1970)
@@ -273,9 +258,10 @@ struct UserFavoritedCommentsView: View {
     }
 }
 
-// --- FavoritedCommentRow View (unverändert) ---
 struct FavoritedCommentRow: View {
     let comment: ItemComment
+    var overrideUsername: String? = nil
+    var overrideUserMark: Int? = nil
 
     private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -289,6 +275,16 @@ struct FavoritedCommentRow: View {
     }
 
     private var score: Int { comment.up - comment.down }
+
+    // --- MODIFIED: Use displayName and displayMark consistently ---
+    private var displayName: String {
+        overrideUsername ?? comment.name ?? "Unbekannt"
+    }
+
+    private var displayMarkValue: Int { // Renamed to avoid conflict with comment.mark
+        overrideUserMark ?? comment.mark ?? -1
+    }
+    // --- END MODIFICATION ---
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -306,7 +302,12 @@ struct FavoritedCommentRow: View {
                     .lineLimit(4)
 
                 HStack(spacing: 6) {
-                    UserMarkView(markValue: comment.mark)
+                    // --- MODIFIED: Pass displayMarkValue to UserMarkView ---
+                    UserMarkView(markValue: displayMarkValue)
+                    // --- END MODIFICATION ---
+                    // --- MODIFIED: Show displayName next to the mark dot ---
+                    Text(displayName) // Explicitly show the determined name
+                    // --- END MODIFICATION ---
                     Text("•")
                     Text("\(score)")
                         .foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
@@ -320,12 +321,10 @@ struct FavoritedCommentRow: View {
         .padding(.vertical, 5)
     }
 }
-// --- END FavoritedCommentRow ---
 
-// --- PagedDetailViewWrapperForItem (unverändert) ---
 @MainActor
 struct PagedDetailViewWrapperForItem: View {
-    @State var items: [Item] // Holds the single item in an array for PagedDetailView
+    @State var items: [Item]
     @ObservedObject var playerManager: VideoPlayerManager
 
     init(item: Item, playerManager: VideoPlayerManager) {
@@ -338,16 +337,13 @@ struct PagedDetailViewWrapperForItem: View {
     var body: some View {
         PagedDetailView(
             items: $items,
-            selectedIndex: 0, // Always index 0
+            selectedIndex: 0,
             playerManager: playerManager,
             loadMoreAction: dummyLoadMore
         )
     }
 }
-// --- END PagedDetailViewWrapperForItem ---
 
-
-// MARK: - Preview (unverändert)
 #Preview {
     PreviewWrapper()
 }
@@ -366,15 +362,14 @@ private struct PreviewWrapper: View {
     }
 
     var body: some View {
-        let view = UserFavoritedCommentsView(username: "Daranto")
-
-        return NavigationStack {
-            view
+        // Simuliere die Kommentare für die Vorschau direkt im State der PreviewWrapper
+        // Da UserFavoritedCommentsView @State private var comments hat, können wir sie nicht direkt von außen setzen
+        // für eine echte Preview. In einer echten App würden die Daten durch die Ladefunktionen befüllt.
+        // Für die Preview zeigen wir es einfach ohne initial geladene Kommentare.
+        NavigationStack {
+            UserFavoritedCommentsView(username: "Daranto")
                 .environmentObject(previewSettings)
                 .environmentObject(previewAuthService)
-                .onAppear {
-                     print("Preview attempting to set comments (will likely not update visually in preview).")
-                }
         }
     }
 }
