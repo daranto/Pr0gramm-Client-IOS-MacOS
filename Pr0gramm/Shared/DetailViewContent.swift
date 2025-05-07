@@ -65,7 +65,7 @@ struct DetailViewContent: View {
     let currentVote: Int
     let upvoteAction: () -> Void
     let downvoteAction: () -> Void
-    let showCommentInputAction: (Int, Int) -> Void // itemId, parentId
+    let showCommentInputAction: (Int, Int) -> Void
 
 
     @EnvironmentObject var navigationService: NavigationService
@@ -75,6 +75,7 @@ struct DetailViewContent: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
     @State private var isProcessingFavorite = false
     @State private var showingShareOptions = false
+    @State private var showingUploaderProfileSheet: String? = nil
 
 
     // MARK: - Computed View Properties
@@ -180,9 +181,34 @@ struct DetailViewContent: View {
         .disabled(!authService.isLoggedIn)
     }
 
+    @ViewBuilder private var uploaderInfoView: some View {
+        HStack(spacing: 6) {
+            UserMarkView(markValue: item.mark)
+            Text(item.user)
+                .font(UIConstants.subheadlineFont.weight(.medium))
+                .foregroundColor(.primary)
+            Spacer()
+            Text(item.creationDate, style: .relative)
+                .font(UIConstants.captionFont)
+                .foregroundColor(.secondary)
+            Text("ago")
+                .font(UIConstants.captionFont)
+                .foregroundColor(.secondary)
+        }
+        // --- MODIFIED: padding(.top, 8) entfernt ---
+        // .padding(.top, 8)
+        // --- END MODIFICATION ---
+        .contentShape(Rectangle())
+        .onTapGesture {
+            DetailViewContent.logger.info("Uploader info tapped for user: \(item.user)")
+            showingUploaderProfileSheet = item.user
+        }
+    }
 
     @ViewBuilder private var infoAndTagsContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // --- MODIFIED: Optional: spacing des VStacks anpassen, falls nötig. Starten wir ohne. ---
+        VStack(alignment: .leading, spacing: 8) { // spacing von 12 auf 8 reduziert als Beispiel
+        // --- END MODIFICATION ---
             HStack(alignment: .center, spacing: 15) {
                 voteCounterView
                 Spacer()
@@ -191,6 +217,8 @@ struct DetailViewContent: View {
                 shareButton
             }
             .frame(minHeight: 44)
+
+            uploaderInfoView
 
             Group {
                 switch infoLoadingStatus {
@@ -209,11 +237,10 @@ struct DetailViewContent: View {
                     }
                 case .loading: ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .error: Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5) // Placeholder for consistent spacing
+                case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
         }
     }
 
@@ -244,7 +271,7 @@ struct DetailViewContent: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     Divider()
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 15) {
+                        VStack(alignment: .leading, spacing: 15) { // Haupt-Spacing für Regular
                             infoAndTagsContent.padding([.horizontal, .top]);
                             commentsContent.padding([.horizontal, .bottom])
                         }
@@ -253,39 +280,41 @@ struct DetailViewContent: View {
                 }
             } else {
                 ScrollView {
-                    VStack(spacing: 0) {
+                    VStack(spacing: 0) { // Äußeres VStack für Compact ohne Spacing hier
                         GeometryReader { geo in
                             let aspect = guessAspectRatio() ?? 1.0
                             mediaContentInternal
                                 .frame(width: geo.size.width, height: geo.size.width / aspect)
                         }
                         .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
-                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
+                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10) // Padding hier steuert den Abstand
                         commentsContent.padding(.horizontal).padding(.bottom, 10)
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { Self.logger.debug("DetailViewContent for item \(item.id) appearing.") }
-        .onDisappear { Self.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
+        .onAppear { DetailViewContent.logger.debug("DetailViewContent for item \(item.id) appearing.") }
+        .onDisappear { DetailViewContent.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
         .confirmationDialog(
             "Link kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
         ) {
-            Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; Self.logger.info("Copied Post-Link to clipboard: \(urlString)") }
-            Button("Direkter Medien-Link") { if let urlString = item.imageUrl?.absoluteString { UIPasteboard.general.string = urlString; Self.logger.info("Copied Media-Link to clipboard: \(urlString)") } else { Self.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)") } }
+            Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)") }
+            Button("Direkter Medien-Link") { if let urlString = item.imageUrl?.absoluteString { UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)") } else { DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)") } }
         } message: { Text("Welchen Link möchtest du in die Zwischenablage kopieren?") }
+        .sheet(item: $showingUploaderProfileSheet) { username in
+             UserProfileSheetView(username: username)
+                 .environmentObject(authService)
+                 .environmentObject(settings)
+        }
     }
 
-
-    // MARK: - Helper Methods
     private func guessAspectRatio() -> CGFloat? {
         guard item.width > 0, item.height > 0 else { return 1.0 }
         return CGFloat(item.width) / CGFloat(item.height)
     }
 }
 
-// Helper Extension (Unverändert)
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -305,28 +334,22 @@ fileprivate extension UIFont {
     }
 }
 
-
-// MARK: - Previews
 #Preview("Compact - Limited Tags") {
     struct PreviewWrapper: View {
         @State var previewLinkTarget: PreviewLinkTarget? = nil
         @State var fullscreenTarget: FullscreenImageTarget? = nil
         @State var collapsedIDs: Set<Int> = []
-        // --- MODIFIED: Use AppSettings directly for the preview wrapper ---
         @StateObject var settings = AppSettings()
         @StateObject var authService: AuthService
-        // --- END MODIFICATION ---
         @StateObject var navService = NavigationService()
         @StateObject var playerManager = VideoPlayerManager()
         @State private var commentReplyTarget: ReplyTarget? = nil
 
-        // --- NEW: Initializer for PreviewWrapper ---
         init() {
-            let tempSettings = AppSettings() // Create AppSettings instance first
-            _settings = StateObject(wrappedValue: tempSettings) // Initialize @StateObject
-            _authService = StateObject(wrappedValue: AuthService(appSettings: tempSettings)) // Pass it to AuthService
+            let tempSettings = AppSettings()
+            _settings = StateObject(wrappedValue: tempSettings)
+            _authService = StateObject(wrappedValue: AuthService(appSettings: tempSettings))
         }
-        // --- END NEW ---
 
         func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
         func isCollapsed(_ id: Int) -> Bool { collapsedIDs.contains(id) }
@@ -367,8 +390,8 @@ fileprivate extension UIFont {
                     }
                 )
                 .environmentObject(navService)
-                .environmentObject(settings) // Pass the initialized settings
-                .environmentObject(authService) // Pass the initialized authService
+                .environmentObject(settings)
+                .environmentObject(authService)
                 .environmentObject(playerManager)
                 .environment(\.horizontalSizeClass, .compact)
                 .preferredColorScheme(.dark)
@@ -376,9 +399,7 @@ fileprivate extension UIFont {
                     playerManager.configure(settings: settings)
                     if authService.currentUser == nil {
                          authService.isLoggedIn = true
-                         // --- MODIFIED: Use AppSettings for collection ID ---
                          settings.selectedCollectionIdForFavorites = 1234
-                         // --- END MODIFICATION ---
                          authService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil)
                          await settings.markItemsAsSeen(ids: [1,2])
                          print("Preview Task: AuthService configured and item marked as seen.")

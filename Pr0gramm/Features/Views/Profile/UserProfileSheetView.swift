@@ -110,7 +110,16 @@ struct UserProfileSheetView: View {
             } else if let error = profileInfoError {
                 Text("Fehler: \(error)").foregroundColor(.red)
             } else if let info = profileInfo {
-                userInfoRow(label: "Rang", valueView: { UserMarkView(markValue: info.user.mark) })
+                // --- MODIFIED: Rang-Text hinzugefügt ---
+                userInfoRow(label: "Rang", valueView: {
+                    HStack {
+                        UserMarkView(markValue: info.user.mark) // Zeigt nur den Punkt
+                        Text(Mark(rawValue: info.user.mark).displayName) // Zeigt den Text des Ranges
+                            .font(UIConstants.subheadlineFont) // Gleiche Schriftart wie andere Werte
+                            .foregroundColor(.secondary)
+                    }
+                })
+                // --- END MODIFICATION ---
                 if let score = info.user.score {
                     userInfoRow(label: "Benis", value: "\(score)")
                 } else {
@@ -121,12 +130,14 @@ struct UserProfileSheetView: View {
                 } else {
                     userInfoRow(label: "Registriert seit", value: "N/A")
                 }
-                if let commentCount = info.commentCount {
-                    userInfoRow(label: "Kommentare", value: "\(commentCount)")
-                }
-                if let uploadCount = info.uploadCount {
-                    userInfoRow(label: "Uploads", value: "\(uploadCount)")
-                }
+                // --- REMOVED: Redundante Zeilen für Kommentare und Uploads ---
+                // if let commentCount = info.commentCount {
+                //     userInfoRow(label: "Kommentare", value: "\(commentCount)")
+                // }
+                // if let uploadCount = info.uploadCount {
+                //     userInfoRow(label: "Uploads", value: "\(uploadCount)")
+                // }
+                // --- END REMOVAL ---
                 if let badges = info.badges, !badges.isEmpty {
                     DisclosureGroup("Abzeichen (\(badges.count))") {
                         badgeScrollView(badges: badges)
@@ -148,8 +159,8 @@ struct UserProfileSheetView: View {
             profileInfoError = nil
         }
         do {
-            let info = try await apiService.getProfileInfo(username: username, flags: 31)
-            await MainActor.run { profileInfo = info }
+            let infoResponse = try await apiService.getProfileInfo(username: username, flags: 31)
+            await MainActor.run { profileInfo = infoResponse }
         } catch {
             UserProfileSheetView.logger.error("Failed to load profile info for \(username): \(error.localizedDescription)")
             await MainActor.run { profileInfoError = error.localizedDescription }
@@ -189,11 +200,13 @@ struct UserProfileSheetView: View {
                 HStack {
                     Text("Neueste Uploads")
                     Spacer()
-                    if let totalUploads = profileInfo?.uploadCount, totalUploads > uploadsPageLimit {
+                    // --- MODIFIED: Zeige Anzahl aus profileInfo, falls vorhanden ---
+                    if let totalUploads = profileInfo?.uploadCount {
                         Text("Alle \(totalUploads) anzeigen")
                             .font(.caption)
                             .foregroundColor(.accentColor)
                     }
+                    // --- END MODIFICATION ---
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -244,13 +257,11 @@ struct UserProfileSheetView: View {
                     Button {
                         Task { await prepareAndNavigateToItem(comment.itemId) }
                     } label: {
-                        // --- MODIFIED: Pass overrideUsername and overrideUserMark ---
                         FavoritedCommentRow(
                             comment: comment,
-                            overrideUsername: username, // Der Username des Profils
-                            overrideUserMark: profileInfo?.user.mark // Das Mark des Profil-Users (aus profileInfo)
+                            overrideUsername: username,
+                            overrideUserMark: profileInfo?.user.mark
                         )
-                        // --- END MODIFICATION ---
                     }
                     .buttonStyle(.plain)
                     .disabled(comment.itemId == nil || isLoadingNavigationTarget)
@@ -261,11 +272,13 @@ struct UserProfileSheetView: View {
                 HStack {
                     Text("Neueste Kommentare")
                     Spacer()
-                    if let totalComments = profileInfo?.commentCount, totalComments > commentsPageLimit {
+                    // --- MODIFIED: Zeige Anzahl aus profileInfo, falls vorhanden ---
+                    if let totalComments = profileInfo?.commentCount {
                         Text("Alle \(totalComments) anzeigen")
                             .font(.caption)
                             .foregroundColor(.accentColor)
                     }
+                    // --- END MODIFICATION ---
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -294,8 +307,6 @@ struct UserProfileSheetView: View {
             )
             await MainActor.run {
                 userComments = Array(response.comments.prefix(commentsPageLimit))
-                // Wenn das 'user'-Objekt in der ProfileCommentsResponse vorhanden ist, könnten wir hier das Mark aktualisieren,
-                // aber für die Preview reicht es, wenn es aus profileInfo kommt.
                 if profileInfo?.user.name.lowercased() == username.lowercased() && profileInfo?.user.mark != response.user?.mark {
                     UserProfileSheetView.logger.info("Mark for \(username) in ProfileCommentsResponse (\(response.user?.mark ?? -98)) differs from ProfileInfoResponse (\(profileInfo?.user.mark ?? -99)). Using ProfileInfoResponse for consistency in this sheet.")
                 }
