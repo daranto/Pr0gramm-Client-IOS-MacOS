@@ -54,9 +54,7 @@ struct DetailViewContent: View {
 
     let infoLoadingStatus: InfoLoadingStatus
     @Binding var previewLinkTarget: PreviewLinkTarget?
-    // --- NEW: Binding for user profile sheet target (passed from PagedDetailView) ---
     @Binding var userProfileSheetTarget: UserProfileSheetTarget?
-    // --- END NEW ---
     @Binding var fullscreenImageTarget: FullscreenImageTarget?
     let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
@@ -78,8 +76,7 @@ struct DetailViewContent: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
     @State private var isProcessingFavorite = false
     @State private var showingShareOptions = false
-    // @State private var showingUploaderProfileSheet: String? = nil // Wird jetzt durch userProfileSheetTarget gesteuert
-
+    // @State private var showingUploaderProfileSheet: String? = nil // Gesteuert durch userProfileSheetTarget
 
     // MARK: - Computed View Properties
     @ViewBuilder private var mediaContentInternal: some View {
@@ -201,9 +198,7 @@ struct DetailViewContent: View {
         .contentShape(Rectangle())
         .onTapGesture {
             DetailViewContent.logger.info("Uploader info tapped for user: \(item.user)")
-            // --- MODIFIED: Set userProfileSheetTarget (gesteuert von PagedDetailView) ---
             self.userProfileSheetTarget = UserProfileSheetTarget(username: item.user)
-            // --- END MODIFICATION ---
         }
     }
 
@@ -255,14 +250,16 @@ struct DetailViewContent: View {
             flatComments: flatComments,
             totalCommentCount: totalCommentCount,
             status: infoLoadingStatus,
+            uploaderName: item.user, // Uploader name here
             previewLinkTarget: $previewLinkTarget,
-            userProfileSheetTarget: $userProfileSheetTarget, // Pass binding
+            userProfileSheetTarget: $userProfileSheetTarget,
             isCommentCollapsed: isCommentCollapsed,
             toggleCollapseAction: toggleCollapseAction,
             showCommentInputAction: { parentId in showCommentInputAction(item.id, parentId) }
         )
     }
 
+    // MARK: - Body
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
@@ -302,8 +299,7 @@ struct DetailViewContent: View {
             Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)") }
             Button("Direkter Medien-Link") { if let urlString = item.imageUrl?.absoluteString { UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)") } else { DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)") } }
         } message: { Text("Welchen Link möchtest du in die Zwischenablage kopieren?") }
-        // Das .sheet für Uploader-Profile wird jetzt von PagedDetailView gehandhabt.
-        // .sheet(item: $showingUploaderProfileSheet) ... entfernen
+        // Das Sheet für Uploader-Profile wird von der Parent-View (PagedDetailView) gehandhabt
     }
 
     private func guessAspectRatio() -> CGFloat? {
@@ -312,6 +308,7 @@ struct DetailViewContent: View {
     }
 }
 
+// Helper Extension (Unverändert)
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -331,12 +328,12 @@ fileprivate extension UIFont {
     }
 }
 
+
+// MARK: - Preview
 #Preview("Compact - Limited Tags") {
     struct PreviewWrapper: View {
         @State var previewLinkTarget: PreviewLinkTarget? = nil
-        // --- NEW: Add userProfileSheetTarget for preview ---
-        @State var userProfileSheetTarget: UserProfileSheetTarget? = nil
-        // --- END NEW ---
+        @State var userProfileSheetTarget: UserProfileSheetTarget? = nil // Hinzugefügt für Preview
         @State var fullscreenTarget: FullscreenImageTarget? = nil
         @State var collapsedIDs: Set<Int> = []
         @StateObject var settings = AppSettings()
@@ -375,7 +372,7 @@ fileprivate extension UIFont {
                     totalCommentCount: previewFlatComments.count,
                     infoLoadingStatus: .loaded,
                     previewLinkTarget: $previewLinkTarget,
-                    userProfileSheetTarget: $userProfileSheetTarget, // Pass binding
+                    userProfileSheetTarget: $userProfileSheetTarget, // Übergeben
                     fullscreenImageTarget: $fullscreenTarget,
                     isFavorited: true,
                     toggleFavoriteAction: {},
@@ -415,6 +412,10 @@ fileprivate extension UIFont {
                          }
                      )
                      .environmentObject(authService)
+                 }
+                 // Preview für das User-Profil-Sheet
+                 .sheet(item: $userProfileSheetTarget) { target in
+                     Text("Preview: User Profile Sheet for \(target.username)")
                  }
             }
         }

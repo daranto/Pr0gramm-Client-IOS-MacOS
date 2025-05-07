@@ -7,10 +7,11 @@ struct CommentsSection: View {
     let flatComments: [FlatCommentDisplayItem]
     let totalCommentCount: Int
     let status: InfoLoadingStatus
-    @Binding var previewLinkTarget: PreviewLinkTarget?
-    // --- NEW: Binding for user profile sheet target ---
-    @Binding var userProfileSheetTarget: UserProfileSheetTarget?
+    // --- NEW: Add uploader name ---
+    let uploaderName: String
     // --- END NEW ---
+    @Binding var previewLinkTarget: PreviewLinkTarget?
+    @Binding var userProfileSheetTarget: UserProfileSheetTarget?
     let isCommentCollapsed: (Int) -> Bool
     let toggleCollapseAction: (Int) -> Void
     let showCommentInputAction: (Int) -> Void // parentId
@@ -60,8 +61,9 @@ struct CommentsSection: View {
                          VStack(alignment: .leading, spacing: 0) {
                              CommentView(
                                  comment: flatItem.comment,
+                                 uploaderName: uploaderName, // Pass uploader name
                                  previewLinkTarget: $previewLinkTarget,
-                                 userProfileSheetTarget: $userProfileSheetTarget, // Pass binding
+                                 userProfileSheetTarget: $userProfileSheetTarget,
                                  hasChildren: flatItem.hasChildren,
                                  isCollapsed: isCommentCollapsed(flatItem.id),
                                  onToggleCollapse: { toggleCollapseAction(flatItem.id) },
@@ -97,7 +99,7 @@ struct CommentsSection: View {
     let comment2 = ItemComment(id: 2, parent: 1, content: "Reply 1.1", created: 2, up: 5, down: 0, confidence: 1, name: "UserB", mark: 2)
     let comment3 = ItemComment(id: 3, parent: 1, content: "Reply 1.2", created: 3, up: 2, down: 0, confidence: 1, name: "UserC", mark: 1)
     let comment4 = ItemComment(id: 4, parent: 2, content: "Reply 1.1.1", created: 4, up: 1, down: 0, confidence: 1, name: "UserD", mark: 0)
-    let comment5 = ItemComment(id: 5, parent: 0, content: "Top 2", created: 5, up: 8, down: 1, confidence: 1, name: "UserE", mark: 3)
+    let comment5 = ItemComment(id: 5, parent: 0, content: "Top 2", created: 5, up: 8, down: 1, confidence: 1, name: "UserA", mark: 1) // Comment from OP
     return [
         FlatCommentDisplayItem(id: 1, comment: comment1, level: 0, hasChildren: true),
         FlatCommentDisplayItem(id: 2, comment: comment2, level: 1, hasChildren: true),
@@ -109,9 +111,7 @@ struct CommentsSection: View {
 
 private struct CommentsSectionPreviewWrapper<Content: View>: View {
     @State private var previewTarget: PreviewLinkTarget? = nil
-    // --- NEW: Add userProfileSheetTarget for preview ---
     @State private var userProfileTarget: UserProfileSheetTarget? = nil
-    // --- END NEW ---
     @State private var collapsedIDs: Set<Int> = []
 
     let content: (Binding<PreviewLinkTarget?>, Binding<UserProfileSheetTarget?>, @escaping (Int) -> Bool, @escaping (Int) -> Void, @escaping (Int) -> Void) -> Content
@@ -135,12 +135,14 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
     CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in
         ScrollView {
              let comments = createPreviewFlatCommentsHelper()
+             let previewUploader = "UserA" // Beispiel-Uploader
             CommentsSection(
                 flatComments: comments,
                 totalCommentCount: comments.count,
                 status: .loaded,
+                uploaderName: previewUploader, // Pass uploader name
                 previewLinkTarget: $linkTarget,
-                userProfileSheetTarget: $userTarget, // Pass binding
+                userProfileSheetTarget: $userTarget,
                 isCommentCollapsed: isCollapsed,
                 toggleCollapseAction: toggleCollapse,
                 showCommentInputAction: showCommentInput
@@ -149,8 +151,8 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
     }
 }
 
-#Preview("Loading") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loading, previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput) } }
-#Preview("Error") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in CommentsSection(flatComments: [], totalCommentCount: 0, status: .error("Netzwerkfehler."), previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput) } }
-#Preview("Empty") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loaded, previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput) } }
+#Preview("Loading") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loading, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput) } }
+#Preview("Error") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in CommentsSection(flatComments: [], totalCommentCount: 0, status: .error("Netzwerkfehler."), uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput) } }
+#Preview("Empty") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loaded, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput) } }
 
 // --- END OF COMPLETE FILE ---

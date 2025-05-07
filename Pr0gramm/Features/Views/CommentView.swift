@@ -8,18 +8,15 @@ import os // Für Logger
 
 struct CommentView: View {
     let comment: ItemComment
-    @Binding var previewLinkTarget: PreviewLinkTarget?
-    // --- NEW: Binding for user profile sheet target from parent ---
-    @Binding var userProfileSheetTarget: UserProfileSheetTarget?
+    // --- NEW: Add uploader name ---
+    let uploaderName: String
     // --- END NEW ---
+    @Binding var previewLinkTarget: PreviewLinkTarget?
+    @Binding var userProfileSheetTarget: UserProfileSheetTarget?
     let hasChildren: Bool
     let isCollapsed: Bool
     let onToggleCollapse: () -> Void
     let onReply: () -> Void
-
-    // --- REMOVED: Local state for showing user profile ---
-    // @State private var showingUserProfileFor: String? = nil
-    // --- END REMOVAL ---
 
     @EnvironmentObject var authService: AuthService
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CommentView")
@@ -27,6 +24,13 @@ struct CommentView: View {
     private var markEnum: Mark { Mark(rawValue: comment.mark ?? -1) }
     private var userMarkColor: Color { markEnum.displayColor }
     private var score: Int { comment.up - comment.down }
+
+    // --- NEW: Check if the commenter is the OP ---
+    private var isOriginalPoster: Bool {
+        // Case-insensitive comparison might be safer depending on API consistency
+        comment.name?.lowercased() == uploaderName.lowercased()
+    }
+    // --- END NEW ---
 
     private var relativeTime: String {
         let date = Date(timeIntervalSince1970: TimeInterval(comment.created))
@@ -88,6 +92,13 @@ struct CommentView: View {
                     .frame(width: 8, height: 8)
                 Text(comment.name ?? "User")
                     .font(UIConstants.captionFont.weight(.semibold))
+                // --- NEW: Show OP indicator ---
+                if isOriginalPoster {
+                    Image(systemName: "crown.fill") // Kronen-Symbol für OP
+                        .font(.caption2) // Kleinere Schriftgröße
+                        .foregroundColor(.accentColor) // Akzentfarbe verwenden
+                }
+                // --- END NEW ---
                 Text("•").foregroundColor(.secondary)
                 Text("\(score)").font(UIConstants.captionFont).foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
                 Text("•").foregroundColor(.secondary)
@@ -124,9 +135,7 @@ struct CommentView: View {
         .onChange(of: authService.favoritedCommentIDs) { _, _ in }
         .onChange(of: authService.votedCommentStates) { _, _ in }
         .contextMenu { contextMenuContent }
-        // --- REMOVED: Local sheet modifier ---
-        // .sheet(item: $showingUserProfileFor) { username in ... }
-        // --- END REMOVAL ---
+        // Sheet wird jetzt von PagedDetailView gehandhabt
     }
 
     @ViewBuilder
@@ -174,9 +183,7 @@ struct CommentView: View {
             if let commenterName = comment.name, !commenterName.isEmpty {
                 Button {
                     CommentView.logger.info("Context Menu: Show User Profile tapped for \(commenterName)")
-                    // --- MODIFIED: Set the binding from parent ---
                     self.userProfileSheetTarget = UserProfileSheetTarget(username: commenterName)
-                    // --- END MODIFICATION ---
                 } label: {
                     Label("User Profil anzeigen", systemImage: "person.circle")
                 }
@@ -202,11 +209,9 @@ struct CommentView: View {
     }
 }
 
-// String: Identifiable extension bleibt bestehen (wird auch von DetailViewContent für showingUploaderProfileSheet genutzt)
-// extension String: Identifiable {
-//     public var id: String { self }
-// }
-
+extension String: Identifiable {
+    public var id: String { self }
+}
 
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
@@ -234,18 +239,20 @@ fileprivate extension UIFont {
 #Preview("Normal with Reply & Voted") {
     struct PreviewWrapper: View {
         @State var target: PreviewLinkTarget? = nil
-        @State var userProfileTarget: UserProfileSheetTarget? = nil // For preview
+        @State var userProfileTarget: UserProfileSheetTarget? = nil
         var body: some View {
             let auth = AuthService(appSettings: AppSettings())
             auth.isLoggedIn = true
             auth.favoritedCommentIDs = [1]
             auth.votedCommentStates = [1: 1, 4: -1]
+            let uploader = "S0ulreaver" // Für den OP-Check
 
             return List {
                  CommentView(
                      comment: ItemComment(id: 1, parent: 0, content: "Top comment http://pr0gramm.com/new/12345", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
+                     uploaderName: uploader, // Uploader übergeben
                      previewLinkTarget: $target,
-                     userProfileSheetTarget: $userProfileTarget, // Pass binding
+                     userProfileSheetTarget: $userProfileTarget,
                      hasChildren: true,
                      isCollapsed: false,
                      onToggleCollapse: { print("Toggle tapped") },
@@ -255,6 +262,7 @@ fileprivate extension UIFont {
 
                  CommentView(
                      comment: ItemComment(id: 4, parent: 0, content: "RIP neben msn und icq.", created: Int(Date().timeIntervalSince1970)-150, up: 152, down: 3, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
+                     uploaderName: uploader, // Uploader übergeben
                      previewLinkTarget: $target,
                      userProfileSheetTarget: $userProfileTarget,
                      hasChildren: false,
@@ -266,6 +274,7 @@ fileprivate extension UIFont {
 
                  CommentView(
                      comment: ItemComment(id: 10, parent: 0, content: "Dieser Kommentar ist weder favorisiert noch gevotet.", created: Int(Date().timeIntervalSince1970)-200, up: 10, down: 2, confidence: 0.9, name: "TestUser", mark: 1, itemId: 54321),
+                     uploaderName: uploader, // Uploader übergeben
                      previewLinkTarget: $target,
                      userProfileSheetTarget: $userProfileTarget,
                      hasChildren: false,
@@ -276,6 +285,7 @@ fileprivate extension UIFont {
                   .listRowInsets(EdgeInsets())
                  CommentView(
                      comment: ItemComment(id: 11, parent: 0, content: "Kommentar mit nil name/mark.", created: Int(Date().timeIntervalSince1970)-250, up: 5, down: 1, confidence: 0.9, name: nil, mark: nil, itemId: 54321),
+                     uploaderName: uploader, // Uploader übergeben
                      previewLinkTarget: $target,
                      userProfileSheetTarget: $userProfileTarget,
                      hasChildren: false,
@@ -287,7 +297,6 @@ fileprivate extension UIFont {
             }
             .listStyle(.plain)
             .environmentObject(auth)
-             // Simulate sheet presentation for preview
              .sheet(item: $userProfileTarget) { targetUsername in
                  Text("Preview: User Profile Sheet for \(targetUsername.username)")
              }
@@ -296,6 +305,7 @@ fileprivate extension UIFont {
     return PreviewWrapper()
 }
 
+// Andere Previews angepasst, um uploaderName zu übergeben
 #Preview("Collapsed") {
     struct PreviewWrapper: View {
         @State var target: PreviewLinkTarget? = nil
@@ -303,6 +313,7 @@ fileprivate extension UIFont {
         var body: some View {
             CommentView(
                 comment: ItemComment(id: 2, parent: 0, content: "Collapsed comment...", created: Int(Date().timeIntervalSince1970)-200, up: 5, down: 0, confidence: 0.9, name: "UserB", mark: 1, itemId: 54321),
+                uploaderName: "SomeOtherUser", // Beispiel-Uploader
                 previewLinkTarget: $target,
                 userProfileSheetTarget: $userProfileTarget,
                 hasChildren: true,
@@ -327,6 +338,7 @@ fileprivate extension UIFont {
 
             return CommentView(
                 comment: ItemComment(id: 3, parent: 1, content: "Reply without children...", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "UserC", mark: 7, itemId: 54321),
+                uploaderName: "SomeOtherUser", // Beispiel-Uploader
                 previewLinkTarget: $target,
                 userProfileSheetTarget: $userProfileTarget,
                 hasChildren: false,
