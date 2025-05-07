@@ -6,25 +6,26 @@ import Foundation
 import UIKit // Für UIFont
 import os // Für Logger
 
-/// Displays a single comment, including user info, score, relative time, and formatted content with tappable links.
-/// Supports collapsing/expanding if it has children. Allows favoriting comments and voting via a context menu.
 struct CommentView: View {
     let comment: ItemComment
     @Binding var previewLinkTarget: PreviewLinkTarget?
+    // --- NEW: Binding for user profile sheet target from parent ---
+    @Binding var userProfileSheetTarget: UserProfileSheetTarget?
+    // --- END NEW ---
     let hasChildren: Bool
     let isCollapsed: Bool
     let onToggleCollapse: () -> Void
     let onReply: () -> Void
 
-    @State private var showingUserProfileFor: String? = nil
+    // --- REMOVED: Local state for showing user profile ---
+    // @State private var showingUserProfileFor: String? = nil
+    // --- END REMOVAL ---
 
-    @EnvironmentObject var authService: AuthService // Check login status & favorite/vote state
+    @EnvironmentObject var authService: AuthService
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CommentView")
 
-    // --- MODIFIED: Handle optional comment.mark ---
-    private var markEnum: Mark { Mark(rawValue: comment.mark ?? -1) } // Default to -1 if mark is nil
+    private var markEnum: Mark { Mark(rawValue: comment.mark ?? -1) }
     private var userMarkColor: Color { markEnum.displayColor }
-    // --- END MODIFICATION ---
     private var score: Int { comment.up - comment.down }
 
     private var relativeTime: String {
@@ -72,7 +73,6 @@ struct CommentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // User Info Row
             HStack(spacing: 6) {
                 if hasChildren {
                     Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
@@ -86,10 +86,8 @@ struct CommentView: View {
                 Circle().fill(userMarkColor)
                     .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
                     .frame(width: 8, height: 8)
-                // --- MODIFIED: Handle optional comment.name ---
-                Text(comment.name ?? "User") // Default zu "User" wenn name nil ist
+                Text(comment.name ?? "User")
                     .font(UIConstants.captionFont.weight(.semibold))
-                // --- END MODIFICATION ---
                 Text("•").foregroundColor(.secondary)
                 Text("\(score)").font(UIConstants.captionFont).foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
                 Text("•").foregroundColor(.secondary)
@@ -125,18 +123,12 @@ struct CommentView: View {
         })
         .onChange(of: authService.favoritedCommentIDs) { _, _ in }
         .onChange(of: authService.votedCommentStates) { _, _ in }
-        .contextMenu {
-            // --- MODIFIED: ContextMenu Content extracted to a function to help compiler ---
-            contextMenuContent
-        }
-        .sheet(item: $showingUserProfileFor) { username in
-             UserProfileSheetView(username: username)
-                 .environmentObject(authService)
-                 .environmentObject(AppSettings())
-        }
+        .contextMenu { contextMenuContent }
+        // --- REMOVED: Local sheet modifier ---
+        // .sheet(item: $showingUserProfileFor) { username in ... }
+        // --- END REMOVAL ---
     }
 
-    // --- NEW: Extracted Context Menu Content ---
     @ViewBuilder
     private var contextMenuContent: some View {
         if authService.isLoggedIn {
@@ -179,20 +171,18 @@ struct CommentView: View {
             .disabled(isVoting)
 
             Divider()
-            // --- MODIFIED: Safely unwrap comment.name for the button action ---
             if let commenterName = comment.name, !commenterName.isEmpty {
                 Button {
                     CommentView.logger.info("Context Menu: Show User Profile tapped for \(commenterName)")
-                    showingUserProfileFor = commenterName
+                    // --- MODIFIED: Set the binding from parent ---
+                    self.userProfileSheetTarget = UserProfileSheetTarget(username: commenterName)
+                    // --- END MODIFICATION ---
                 } label: {
                     Label("User Profil anzeigen", systemImage: "person.circle")
                 }
             }
-            // --- END MODIFICATION ---
         }
     }
-    // --- END NEW ---
-
 
     private func parsePr0grammLink(url: URL) -> Int? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
@@ -212,9 +202,11 @@ struct CommentView: View {
     }
 }
 
-extension String: Identifiable {
-    public var id: String { self }
-}
+// String: Identifiable extension bleibt bestehen (wird auch von DetailViewContent für showingUploaderProfileSheet genutzt)
+// extension String: Identifiable {
+//     public var id: String { self }
+// }
+
 
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
@@ -242,6 +234,7 @@ fileprivate extension UIFont {
 #Preview("Normal with Reply & Voted") {
     struct PreviewWrapper: View {
         @State var target: PreviewLinkTarget? = nil
+        @State var userProfileTarget: UserProfileSheetTarget? = nil // For preview
         var body: some View {
             let auth = AuthService(appSettings: AppSettings())
             auth.isLoggedIn = true
@@ -252,6 +245,7 @@ fileprivate extension UIFont {
                  CommentView(
                      comment: ItemComment(id: 1, parent: 0, content: "Top comment http://pr0gramm.com/new/12345", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
                      previewLinkTarget: $target,
+                     userProfileSheetTarget: $userProfileTarget, // Pass binding
                      hasChildren: true,
                      isCollapsed: false,
                      onToggleCollapse: { print("Toggle tapped") },
@@ -262,6 +256,7 @@ fileprivate extension UIFont {
                  CommentView(
                      comment: ItemComment(id: 4, parent: 0, content: "RIP neben msn und icq.", created: Int(Date().timeIntervalSince1970)-150, up: 152, down: 3, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
                      previewLinkTarget: $target,
+                     userProfileSheetTarget: $userProfileTarget,
                      hasChildren: false,
                      isCollapsed: false,
                      onToggleCollapse: { print("Toggle tapped") },
@@ -272,26 +267,30 @@ fileprivate extension UIFont {
                  CommentView(
                      comment: ItemComment(id: 10, parent: 0, content: "Dieser Kommentar ist weder favorisiert noch gevotet.", created: Int(Date().timeIntervalSince1970)-200, up: 10, down: 2, confidence: 0.9, name: "TestUser", mark: 1, itemId: 54321),
                      previewLinkTarget: $target,
+                     userProfileSheetTarget: $userProfileTarget,
                      hasChildren: false,
                      isCollapsed: false,
                      onToggleCollapse: { print("Toggle tapped") },
                      onReply: { print("Reply Tapped") }
                  )
                   .listRowInsets(EdgeInsets())
-                 // --- NEW: Preview for comment with nil name/mark ---
                  CommentView(
                      comment: ItemComment(id: 11, parent: 0, content: "Kommentar mit nil name/mark.", created: Int(Date().timeIntervalSince1970)-250, up: 5, down: 1, confidence: 0.9, name: nil, mark: nil, itemId: 54321),
                      previewLinkTarget: $target,
+                     userProfileSheetTarget: $userProfileTarget,
                      hasChildren: false,
                      isCollapsed: false,
                      onToggleCollapse: { print("Toggle tapped") },
                      onReply: { print("Reply Tapped") }
                  )
                   .listRowInsets(EdgeInsets())
-                 // --- END NEW ---
             }
             .listStyle(.plain)
             .environmentObject(auth)
+             // Simulate sheet presentation for preview
+             .sheet(item: $userProfileTarget) { targetUsername in
+                 Text("Preview: User Profile Sheet for \(targetUsername.username)")
+             }
         }
     }
     return PreviewWrapper()
@@ -300,10 +299,12 @@ fileprivate extension UIFont {
 #Preview("Collapsed") {
     struct PreviewWrapper: View {
         @State var target: PreviewLinkTarget? = nil
+        @State var userProfileTarget: UserProfileSheetTarget? = nil
         var body: some View {
             CommentView(
                 comment: ItemComment(id: 2, parent: 0, content: "Collapsed comment...", created: Int(Date().timeIntervalSince1970)-200, up: 5, down: 0, confidence: 0.9, name: "UserB", mark: 1, itemId: 54321),
                 previewLinkTarget: $target,
+                userProfileSheetTarget: $userProfileTarget,
                 hasChildren: true,
                 isCollapsed: true,
                 onToggleCollapse: { print("Toggle tapped") },
@@ -319,6 +320,7 @@ fileprivate extension UIFont {
 #Preview("No Children") {
     struct PreviewWrapper: View {
         @State var target: PreviewLinkTarget? = nil
+        @State var userProfileTarget: UserProfileSheetTarget? = nil
         var body: some View {
              let auth = AuthService(appSettings: AppSettings())
              auth.isLoggedIn = true
@@ -326,6 +328,7 @@ fileprivate extension UIFont {
             return CommentView(
                 comment: ItemComment(id: 3, parent: 1, content: "Reply without children...", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "UserC", mark: 7, itemId: 54321),
                 previewLinkTarget: $target,
+                userProfileSheetTarget: $userProfileTarget,
                 hasChildren: false,
                 isCollapsed: false,
                 onToggleCollapse: { print("Toggle tapped") },

@@ -12,6 +12,13 @@ struct FullscreenImageTarget: Identifiable, Equatable {
     static func == (lhs: FullscreenImageTarget, rhs: FullscreenImageTarget) -> Bool { lhs.item.id == rhs.item.id }
 }
 
+// --- NEW: Target for User Profile Sheet ---
+struct UserProfileSheetTarget: Identifiable, Equatable {
+    let username: String
+    var id: String { username }
+}
+// --- END NEW ---
+
 struct CachedItemDetails {
     let info: ItemsInfoResponse
     let sortedBy: CommentSortOrder
@@ -40,6 +47,9 @@ struct PagedDetailTabViewItem: View {
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
     @Binding var previewLinkTarget: PreviewLinkTarget?
+    // --- NEW: Pass binding for user profile sheet target ---
+    @Binding var userProfileSheetTarget: UserProfileSheetTarget?
+    // --- END NEW ---
     @Binding var fullscreenImageTarget: FullscreenImageTarget?
     let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
@@ -57,23 +67,21 @@ struct PagedDetailTabViewItem: View {
         collapsedCommentIDs.contains(commentID)
     }
 
-    private var currentPlayerForView: AVPlayer? {
-        return item.id == playerManager.playerItemID ? playerManager.player : nil
-    }
-
     var body: some View {
         DetailViewContent(
             item: item,
             keyboardActionHandler: keyboardActionHandler,
-            player: currentPlayerForView,
-            currentSubtitleText: playerManager.currentSubtitleText,
+            playerManager: playerManager,
+            currentSubtitleText: (playerManager.playerItemID == item.id) ? playerManager.currentSubtitleText : nil,
             onWillBeginFullScreen: onWillBeginFullScreen,
             onWillEndFullScreen: onWillEndFullScreen,
             displayedTags: displayedTags, totalTagCount: totalTagCount, showingAllTags: showingAllTags,
             flatComments: visibleFlatComments,
             totalCommentCount: totalCommentCount,
             infoLoadingStatus: infoLoadingStatus,
-            previewLinkTarget: $previewLinkTarget, fullscreenImageTarget: $fullscreenImageTarget,
+            previewLinkTarget: $previewLinkTarget,
+            userProfileSheetTarget: $userProfileSheetTarget, // Pass it down
+            fullscreenImageTarget: $fullscreenImageTarget,
             isFavorited: isFavorited,
             toggleFavoriteAction: toggleFavoriteAction,
             showAllTagsAction: showAllTagsAction,
@@ -114,6 +122,7 @@ struct PagedDetailView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
     @Environment(\.scenePhase) var scenePhase
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
     @StateObject private var keyboardActionHandler = KeyboardActionHandler()
@@ -123,9 +132,15 @@ struct PagedDetailView: View {
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
     @State private var showAllTagsForItem: Set<Int> = []
     private let apiService = APIService()
+
     @State private var previewLinkTarget: PreviewLinkTarget? = nil
-    @State private var isTogglingFavorite = false
+    // --- NEW: State for UserProfileSheet and tracking player state ---
+    @State private var userProfileSheetTarget: UserProfileSheetTarget? = nil
+    @State private var wasPlayingBeforeAnySheet: Bool = false // Generic for any sheet
+    // --- END NEW ---
     @State private var fullscreenImageTarget: FullscreenImageTarget? = nil
+
+    @State private var isTogglingFavorite = false
     @State private var localFavoritedStatus: [Int: Bool] = [:]
     @State private var newlyVisitedItemIDsThisSession: Set<Int> = []
     @State private var collapsedCommentIDs: Set<Int> = []
@@ -151,14 +166,21 @@ struct PagedDetailView: View {
     var body: some View {
         Group { tabViewContent }
         .background(KeyCommandView(handler: keyboardActionHandler))
-        .sheet(item: $previewLinkTarget) { targetWrapper in
+        // --- MODIFIED: Unified sheet handling for player pause/resume ---
+        .sheet(item: $previewLinkTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
              LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
                  .environmentObject(settings).environmentObject(authService)
         }
-        .sheet(item: $fullscreenImageTarget) { targetWrapper in
+        .sheet(item: $userProfileSheetTarget, onDismiss: resumePlayerIfNeeded) { target in
+            UserProfileSheetView(username: target.username)
+                .environmentObject(authService)
+                .environmentObject(settings)
+        }
+        .sheet(item: $fullscreenImageTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
              FullscreenImageView(item: targetWrapper.item)
         }
-        .sheet(item: $commentReplyTarget) { target in
+        // --- END MODIFICATION ---
+        .sheet(item: $commentReplyTarget) { target in // Comment input doesn't need player pause
             CommentInputView(
                 itemId: target.itemId,
                 parentId: target.parentId,
@@ -168,13 +190,46 @@ struct PagedDetailView: View {
             )
              .presentationDetents([.medium, .large])
         }
-        .onChange(of: previewLinkTarget) { oldValue, newValue in
-            if newValue != nil {
-                PagedDetailView.logger.info("Link preview requested for item ID \(newValue!.id). Pausing current video (if playing).")
-                playerManager.player?.pause()
-            }
+        // --- MODIFIED: onChange handlers for pausing player ---
+        .onChange(of: previewLinkTarget) { _, newValue in
+            if newValue != nil { pausePlayerForSheet() }
+        }
+        .onChange(of: userProfileSheetTarget) { _, newValue in
+            if newValue != nil { pausePlayerForSheet() }
+        }
+        .onChange(of: fullscreenImageTarget) { _, newValue in
+            if newValue != nil { pausePlayerForSheet() }
+        }
+        // --- END MODIFICATION ---
+        .onChange(of: horizontalSizeClass) { oldValue, newValue in
+            PagedDetailView.logger.error("!!! HORIZONTAL SIZE CLASS CHANGED in PagedDetailView from \(String(describing: oldValue)) to \(String(describing: newValue)) !!!")
         }
     }
+    
+    // --- NEW: Helper functions for player pause/resume with sheets ---
+    private func pausePlayerForSheet() {
+        if playerManager.player?.timeControlStatus == .playing {
+            wasPlayingBeforeAnySheet = true
+            playerManager.player?.pause()
+            PagedDetailView.logger.debug("Player paused because a sheet is about to open.")
+        } else {
+            wasPlayingBeforeAnySheet = false
+        }
+    }
+
+    private func resumePlayerIfNeeded() {
+        if wasPlayingBeforeAnySheet {
+            // Check if current item is still a video and player is for this item
+            if selectedIndex >= 0 && selectedIndex < items.count && items[selectedIndex].isVideo && items[selectedIndex].id == playerManager.playerItemID {
+                playerManager.player?.play()
+                PagedDetailView.logger.debug("Player resumed after sheet dismissed.")
+            } else {
+                PagedDetailView.logger.debug("Not resuming player: current item is not the video or player changed.")
+            }
+        }
+        wasPlayingBeforeAnySheet = false
+    }
+    // --- END NEW ---
 
     private var tabViewContent: some View {
         TabView(selection: $selectedIndex) {
@@ -236,6 +291,7 @@ struct PagedDetailView: View {
                      onWillBeginFullScreen: { self.isFullscreen = true },
                      onWillEndFullScreen: handleEndFullScreen,
                      previewLinkTarget: $previewLinkTarget,
+                     userProfileSheetTarget: $userProfileSheetTarget, // Pass binding
                      fullscreenImageTarget: $fullscreenImageTarget,
                      isFavorited: calculatedIsFavorited,
                      toggleFavoriteAction: toggleFavorite,
@@ -482,11 +538,11 @@ struct PagedDetailView: View {
               if let player = playerManager.player, player.isMuted != settings.isVideoMuted { player.isMuted = settings.isVideoMuted }
                if isFullscreen, let player = playerManager.player, player.timeControlStatus != .playing { player.play() }
           } else if newPhase == .inactive || newPhase == .background {
-              if (!isFullscreen && previewLinkTarget == nil), let player = playerManager.player, player.timeControlStatus == .playing {
-                  PagedDetailView.logger.debug("Scene became inactive/background. Pausing player (not fullscreen, no link preview).")
+              if (!isFullscreen && previewLinkTarget == nil && userProfileSheetTarget == nil), let player = playerManager.player, player.timeControlStatus == .playing { // Check all sheets
+                  PagedDetailView.logger.debug("Scene became inactive/background. Pausing player (not fullscreen, no sheets active).")
                   player.pause()
               } else {
-                  PagedDetailView.logger.debug("Scene became inactive/background. NOT pausing player (is fullscreen or link preview is active).")
+                  PagedDetailView.logger.debug("Scene became inactive/background. NOT pausing player (is fullscreen or a sheet is active).")
               }
           }
      }
@@ -516,11 +572,11 @@ struct PagedDetailView: View {
              items[selectedIndex].id == playerManager.playerItemID {
               Task { @MainActor in
                   try? await Task.sleep(for: .milliseconds(100))
-                  if !self.isFullscreen && self.previewLinkTarget == nil && self.playerManager.player?.timeControlStatus != .playing {
-                      PagedDetailView.logger.debug("Resuming player after ending fullscreen (preview not active).")
+                  if !self.isFullscreen && self.previewLinkTarget == nil && self.userProfileSheetTarget == nil && self.playerManager.player?.timeControlStatus != .playing { // Check all sheets
+                      PagedDetailView.logger.debug("Resuming player after ending fullscreen (no sheets active).")
                       self.playerManager.player?.play()
                   } else {
-                      PagedDetailView.logger.debug("NOT resuming player after ending fullscreen (preview is active or player already playing/paused).")
+                      PagedDetailView.logger.debug("NOT resuming player after ending fullscreen (a sheet is active or player already playing/paused).")
                   }
               }
           }
@@ -555,16 +611,14 @@ struct PagedDetailView: View {
     }
 
     private func toggleFavorite() async {
-        let localSettings = self.settings // Capture for use in async context
+        let localSettings = self.settings
         guard !isTogglingFavorite else { PagedDetailView.logger.debug("Favorite toggle skipped: Already processing."); return }
         guard selectedIndex >= 0 && selectedIndex < items.count else { PagedDetailView.logger.warning("Favorite toggle skipped: Invalid selectedIndex \(selectedIndex)."); return }
         let currentItem = items[selectedIndex]
-        // --- MODIFIED: Use appSettings.selectedCollectionIdForFavorites ---
         guard authService.isLoggedIn, let nonce = authService.userNonce, let collectionId = localSettings.selectedCollectionIdForFavorites else {
             PagedDetailView.logger.warning("Favorite toggle skipped: User not logged in, nonce missing, or no favorite collection selected in AppSettings.");
             return
         }
-        // --- END MODIFICATION ---
         let itemId = currentItem.id
         let currentIsFavorited: Bool
         if let localStatus = localFavoritedStatus[itemId] { currentIsFavorited = localStatus }
@@ -576,7 +630,7 @@ struct PagedDetailView: View {
 
         do {
             if targetFavoriteState {
-                try await apiService.addToCollection(itemId: itemId, nonce: nonce) // Default collection is handled by API if no collectionId is passed
+                try await apiService.addToCollection(itemId: itemId, nonce: nonce)
                 PagedDetailView.logger.info("Added item \(itemId) to favorites via API.")
             } else {
                 try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
@@ -584,9 +638,7 @@ struct PagedDetailView: View {
             }
             if targetFavoriteState { authService.favoritedItemIDs.insert(itemId) }
             else { authService.favoritedItemIDs.remove(itemId) }
-            // --- MODIFIED: Pass username and collectionId to clearFavoritesCache ---
             await localSettings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collectionId)
-            // --- END MODIFICATION ---
             await localSettings.updateCacheSizes()
             PagedDetailView.logger.info("Favorite toggled successfully for item \(itemId). Global state updated. Cache for collection \(collectionId) cleared.")
         } catch {
@@ -620,6 +672,10 @@ struct PagedDetailView: View {
 
         await authService.performVote(itemId: itemId, voteType: voteType)
 
+        guard selectedIndex == itemIndex, selectedIndex < items.count else {
+             PagedDetailView.logger.warning("Could not update local item score for \(itemId): selectedIndex changed during vote or index out of bounds.")
+             return
+        }
         let newVoteState = authService.votedItemStates[itemId] ?? 0
 
         if initialVoteState != newVoteState {
@@ -633,19 +689,17 @@ struct PagedDetailView: View {
                 case (-1, 0): deltaDown = -1
                 default: PagedDetailView.logger.warning("Unexpected vote state transition: \(initialVoteState) -> \(newVoteState) for item \(itemId)")
             }
-            if itemIndex < items.count && itemIndex == selectedIndex {
+            if itemIndex < items.count {
                 var mutableItem = items[itemIndex]
                 mutableItem.up += deltaUp
                 mutableItem.down += deltaDown
                 items[itemIndex] = mutableItem
                 PagedDetailView.logger.info("Updated local item \(itemId) score: deltaUp=\(deltaUp), deltaDown=\(deltaDown). New counts: up=\(items[itemIndex].up), down=\(items[itemIndex].down)")
-            } else {
-                 PagedDetailView.logger.warning("Could not update local item score for \(itemId): selectedIndex changed during vote or index out of bounds.")
             }
         } else {
              PagedDetailView.logger.info("Vote state for item \(itemId) did not change after handleVoteTap (API might have failed or state already correct). No local score update needed.")
              let finalVoteStateInAuth = authService.votedItemStates[itemId] ?? 0
-             if finalVoteStateInAuth == initialVoteState && itemIndex < items.count && itemIndex == selectedIndex {
+             if finalVoteStateInAuth == initialVoteState && itemIndex < items.count {
                  if items[itemIndex].up != initialUp || items[itemIndex].down != initialDown {
                      PagedDetailView.logger.warning("Reverting local item counts for \(itemId) due to API failure and vote state rollback.")
                      var mutableItem = items[itemIndex]
@@ -692,6 +746,7 @@ struct PagedDetailView: View {
 
 }
 
+@MainActor
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
     @EnvironmentObject var settings: AppSettings
@@ -723,24 +778,19 @@ struct LinkedItemPreviewWrapperView: View {
          @StateObject var previewAuthService: AuthService
          @StateObject var previewPlayerManager = VideoPlayerManager()
 
-        // --- MODIFIED: Initialize AppSettings first ---
         init() {
             let tempSettings = AppSettings()
             _previewSettings = StateObject(wrappedValue: tempSettings)
             _previewAuthService = StateObject(wrappedValue: AuthService(appSettings: tempSettings))
             
-            // Configure after init
             previewAuthService.isLoggedIn = true
             previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
             previewAuthService.userNonce = "preview_nonce_12345"
-            // --- MODIFIED: Use AppSettings for collection ID ---
             previewSettings.selectedCollectionIdForFavorites = 6749
-            // --- END MODIFICATION ---
             previewAuthService.favoritedItemIDs = [2]
             previewAuthService.votedItemStates = [1: 1, 3: -1]
-            previewPlayerManager.configure(settings: tempSettings) // Pass the same settings instance
+            previewPlayerManager.configure(settings: tempSettings)
         }
-        // --- END MODIFICATION ---
 
 
          func dummyLoadMore() async { print("Preview: Dummy Load More Action Triggered") }

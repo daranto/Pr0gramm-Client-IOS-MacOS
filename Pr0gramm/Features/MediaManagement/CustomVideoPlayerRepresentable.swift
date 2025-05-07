@@ -16,7 +16,7 @@ struct CustomVideoPlayerRepresentable: UIViewControllerRepresentable {
     var onWillBeginFullScreen: () -> Void
     /// Callback triggered just after exiting fullscreen.
     var onWillEndFullScreen: () -> Void
-    /// The horizontal size class to determine video gravity.
+    /// The horizontal size class to determine video gravity. (Wird jetzt ignoriert)
     var horizontalSizeClass: UserInterfaceSizeClass?
 
     func makeUIViewController(context: Context) -> CustomAVPlayerViewController {
@@ -25,9 +25,11 @@ struct CustomVideoPlayerRepresentable: UIViewControllerRepresentable {
         controller.actionHandler = handler
         controller.willBeginFullScreen = onWillBeginFullScreen
         controller.willEndFullScreen = onWillEndFullScreen
-        // Set initial video gravity based on size class, using explicit type
-        controller.videoGravity = (horizontalSizeClass == .compact) ? AVLayerVideoGravity.resizeAspectFill : AVLayerVideoGravity.resizeAspect // <-- Explicit Type
-        print("CustomVideoPlayerRepresentable: makeUIViewController (Gravity: \(controller.videoGravity.rawValue))")
+        
+        // --- MODIFIED: Testweise feste videoGravity ---
+        controller.videoGravity = AVLayerVideoGravity.resizeAspect
+        print("CustomVideoPlayerRepresentable: makeUIViewController (FIXED Gravity: \(controller.videoGravity.rawValue))")
+        // --- END MODIFICATION ---
         return controller
     }
 
@@ -46,12 +48,15 @@ struct CustomVideoPlayerRepresentable: UIViewControllerRepresentable {
         uiViewController.willBeginFullScreen = onWillBeginFullScreen
         uiViewController.willEndFullScreen = onWillEndFullScreen
 
-        // Update video gravity if size class changes, using explicit type
-        let targetGravity: AVLayerVideoGravity = (horizontalSizeClass == .compact) ? AVLayerVideoGravity.resizeAspectFill : AVLayerVideoGravity.resizeAspect // <-- Explicit Type
+        // --- MODIFIED: Testweise feste videoGravity, kein Update basierend auf horizontalSizeClass ---
+        let targetGravity: AVLayerVideoGravity = AVLayerVideoGravity.resizeAspect
         if uiViewController.videoGravity != targetGravity {
-            print("CustomVideoPlayerRepresentable: Updating videoGravity to \(targetGravity.rawValue)")
+            // Dieser Block sollte jetzt seltener oder gar nicht mehr aufgerufen werden,
+            // es sei denn, die Gravity wurde extern geändert.
+            print("CustomVideoPlayerRepresentable: Updating videoGravity to \(targetGravity.rawValue) (sollte fest sein)")
             uiViewController.videoGravity = targetGravity
         }
+        // --- END MODIFICATION ---
     }
 }
 // --- END OF COMPLETE FILE ---

@@ -40,7 +40,7 @@ enum InfoLoadingStatus: Equatable { case idle; case loading; case loaded; case e
 struct DetailViewContent: View {
     let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
-    let player: AVPlayer?
+    @ObservedObject var playerManager: VideoPlayerManager
     let currentSubtitleText: String?
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
@@ -54,6 +54,9 @@ struct DetailViewContent: View {
 
     let infoLoadingStatus: InfoLoadingStatus
     @Binding var previewLinkTarget: PreviewLinkTarget?
+    // --- NEW: Binding for user profile sheet target (passed from PagedDetailView) ---
+    @Binding var userProfileSheetTarget: UserProfileSheetTarget?
+    // --- END NEW ---
     @Binding var fullscreenImageTarget: FullscreenImageTarget?
     let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
@@ -75,7 +78,7 @@ struct DetailViewContent: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
     @State private var isProcessingFavorite = false
     @State private var showingShareOptions = false
-    @State private var showingUploaderProfileSheet: String? = nil
+    // @State private var showingUploaderProfileSheet: String? = nil // Wird jetzt durch userProfileSheetTarget gesteuert
 
 
     // MARK: - Computed View Properties
@@ -83,8 +86,8 @@ struct DetailViewContent: View {
         ZStack(alignment: .bottom) {
             Group {
                 if item.isVideo {
-                    if let player = player {
-                        CustomVideoPlayerRepresentable(player: player, handler: keyboardActionHandler, onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen, horizontalSizeClass: horizontalSizeClass)
+                    if let actualPlayer = playerManager.player, playerManager.playerItemID == item.id {
+                        CustomVideoPlayerRepresentable(player: actualPlayer, handler: keyboardActionHandler, onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen, horizontalSizeClass: horizontalSizeClass)
                             .id(item.id)
                     } else {
                         Rectangle().fill(.black).overlay(ProgressView().tint(.white))
@@ -195,20 +198,17 @@ struct DetailViewContent: View {
                 .font(UIConstants.captionFont)
                 .foregroundColor(.secondary)
         }
-        // --- MODIFIED: padding(.top, 8) entfernt ---
-        // .padding(.top, 8)
-        // --- END MODIFICATION ---
         .contentShape(Rectangle())
         .onTapGesture {
             DetailViewContent.logger.info("Uploader info tapped for user: \(item.user)")
-            showingUploaderProfileSheet = item.user
+            // --- MODIFIED: Set userProfileSheetTarget (gesteuert von PagedDetailView) ---
+            self.userProfileSheetTarget = UserProfileSheetTarget(username: item.user)
+            // --- END MODIFICATION ---
         }
     }
 
     @ViewBuilder private var infoAndTagsContent: some View {
-        // --- MODIFIED: Optional: spacing des VStacks anpassen, falls nötig. Starten wir ohne. ---
-        VStack(alignment: .leading, spacing: 8) { // spacing von 12 auf 8 reduziert als Beispiel
-        // --- END MODIFICATION ---
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 15) {
                 voteCounterView
                 Spacer()
@@ -256,13 +256,13 @@ struct DetailViewContent: View {
             totalCommentCount: totalCommentCount,
             status: infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget,
+            userProfileSheetTarget: $userProfileSheetTarget, // Pass binding
             isCommentCollapsed: isCommentCollapsed,
             toggleCollapseAction: toggleCollapseAction,
             showCommentInputAction: { parentId in showCommentInputAction(item.id, parentId) }
         )
     }
 
-    // MARK: - Body
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
@@ -271,7 +271,7 @@ struct DetailViewContent: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     Divider()
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 15) { // Haupt-Spacing für Regular
+                        VStack(alignment: .leading, spacing: 15) {
                             infoAndTagsContent.padding([.horizontal, .top]);
                             commentsContent.padding([.horizontal, .bottom])
                         }
@@ -280,14 +280,14 @@ struct DetailViewContent: View {
                 }
             } else {
                 ScrollView {
-                    VStack(spacing: 0) { // Äußeres VStack für Compact ohne Spacing hier
+                    VStack(spacing: 0) {
                         GeometryReader { geo in
                             let aspect = guessAspectRatio() ?? 1.0
                             mediaContentInternal
                                 .frame(width: geo.size.width, height: geo.size.width / aspect)
                         }
                         .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
-                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10) // Padding hier steuert den Abstand
+                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
                         commentsContent.padding(.horizontal).padding(.bottom, 10)
                     }
                 }
@@ -302,11 +302,8 @@ struct DetailViewContent: View {
             Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)") }
             Button("Direkter Medien-Link") { if let urlString = item.imageUrl?.absoluteString { UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)") } else { DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)") } }
         } message: { Text("Welchen Link möchtest du in die Zwischenablage kopieren?") }
-        .sheet(item: $showingUploaderProfileSheet) { username in
-             UserProfileSheetView(username: username)
-                 .environmentObject(authService)
-                 .environmentObject(settings)
-        }
+        // Das .sheet für Uploader-Profile wird jetzt von PagedDetailView gehandhabt.
+        // .sheet(item: $showingUploaderProfileSheet) ... entfernen
     }
 
     private func guessAspectRatio() -> CGFloat? {
@@ -337,6 +334,9 @@ fileprivate extension UIFont {
 #Preview("Compact - Limited Tags") {
     struct PreviewWrapper: View {
         @State var previewLinkTarget: PreviewLinkTarget? = nil
+        // --- NEW: Add userProfileSheetTarget for preview ---
+        @State var userProfileSheetTarget: UserProfileSheetTarget? = nil
+        // --- END NEW ---
         @State var fullscreenTarget: FullscreenImageTarget? = nil
         @State var collapsedIDs: Set<Int> = []
         @StateObject var settings = AppSettings()
@@ -365,7 +365,7 @@ fileprivate extension UIFont {
                 DetailViewContent(
                     item: sampleVideoItem,
                     keyboardActionHandler: previewHandler,
-                    player: nil,
+                    playerManager: playerManager,
                     currentSubtitleText: "Dies ist ein Test-Untertitel",
                     onWillBeginFullScreen: {}, onWillEndFullScreen: {},
                     displayedTags: Array(previewTags.prefix(4)),
@@ -375,6 +375,7 @@ fileprivate extension UIFont {
                     totalCommentCount: previewFlatComments.count,
                     infoLoadingStatus: .loaded,
                     previewLinkTarget: $previewLinkTarget,
+                    userProfileSheetTarget: $userProfileSheetTarget, // Pass binding
                     fullscreenImageTarget: $fullscreenTarget,
                     isFavorited: true,
                     toggleFavoriteAction: {},
@@ -392,7 +393,6 @@ fileprivate extension UIFont {
                 .environmentObject(navService)
                 .environmentObject(settings)
                 .environmentObject(authService)
-                .environmentObject(playerManager)
                 .environment(\.horizontalSizeClass, .compact)
                 .preferredColorScheme(.dark)
                 .task {
