@@ -75,7 +75,27 @@ struct SearchView: View {
                      .environmentObject(settings)
                      .environmentObject(authService)
              }
-            .onChange(of: navigationService.pendingSearchTag) { _, newTag in if let tagToSearch = newTag, !tagToSearch.isEmpty { SearchView.logger.info("Received pending search tag via onChange: '\(tagToSearch)'"); processPendingTag(tagToSearch); didPerformInitialPendingSearch = true } }
+            .onChange(of: navigationService.pendingSearchTag) { _, newTag in
+                if let tagToSearch = newTag, !tagToSearch.isEmpty {
+                    SearchView.logger.info("Received pending search tag via onChange: '\(tagToSearch)'")
+                    // --- NEW: Pop navigation path if a new search is requested from detail view ---
+                    if !navigationPath.isEmpty {
+                        SearchView.logger.info("Popping navigation path due to new pending search tag.")
+                        navigationPath = NavigationPath()
+                    }
+                    // --- END NEW ---
+                    processPendingTag(tagToSearch)
+                    didPerformInitialPendingSearch = true
+                }
+            }
+            // --- NEW: onChange for selectedTab to pop navigation if needed ---
+            .onChange(of: navigationService.selectedTab) { _, newTab in
+                if newTab == .search && !navigationPath.isEmpty && navigationService.pendingSearchTag != nil {
+                    SearchView.logger.info("Switched to Search tab with a pending search and active navigation. Popping path.")
+                    navigationPath = NavigationPath()
+                }
+            }
+            // --- END NEW ---
             .onChange(of: searchText) { oldValue, newValue in
                 if hasSearched && newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isLoading {
                     Task { @MainActor in // Ensure UI updates are on main actor
