@@ -16,25 +16,30 @@ struct FullscreenImageView: View {
     @State private var errorMessage: String? = nil // Track errors from the zoomable view
 
     var body: some View {
-        NavigationStack {
+        NavigationStack { // NavigationStack wird beibehalten für die Toolbar
             ZoomableScrollView(item: item, isLoading: $isLoading, errorMessage: $errorMessage)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.black) // Set background to black for fullscreen feel
                 .ignoresSafeArea() // Extend to screen edges
                 .overlay(loadingOrErrorOverlay) // Show loading/error indicators
                 .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) { // Changed placement
-                        Button("Fertig") { dismiss() }
-                            .font(UIConstants.bodyFont) // Use adaptive font
-                            .foregroundColor(.white) // Ensure visibility on black background
-                            .padding(EdgeInsets(top: 5, leading: 0, bottom: 5, trailing: 10)) // Add padding
-                            .background(.black.opacity(0.3)) // Semi-transparent background
-                            .clipShape(Capsule())
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.headline.weight(.medium)) // KLEINERES ICON, z.B. .headline
+                                .foregroundColor(.white)
+                                .padding(8)
+                                .background(.black.opacity(0.35))
+                                .clipShape(Circle())
+                        }
+                        .accessibilityLabel("Schließen")
                     }
                 }
-                // Hide the default navigation bar background for a cleaner look
                 .toolbarBackground(.hidden, for: .navigationBar)
         }
+        .preferredColorScheme(.dark)
     }
 
     /// Overlay to display loading indicator or error message.
@@ -42,10 +47,10 @@ struct FullscreenImageView: View {
     private var loadingOrErrorOverlay: some View {
         if isLoading {
             ProgressView()
-                .scaleEffect(1.5) // Make indicator slightly larger
+                .scaleEffect(1.5)
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black.opacity(0.4)) // Dim background slightly
+                .background(Color.black.opacity(0.4))
         } else if let error = errorMessage {
             VStack {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -59,10 +64,10 @@ struct FullscreenImageView: View {
                     .padding(.horizontal)
             }
             .padding()
-            .background(Material.ultraThinMaterial) // Use a blurred background
+            .background(Material.ultraThinMaterial)
             .cornerRadius(15)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black.opacity(0.4)) // Dim background slightly
+            .background(Color.black.opacity(0.4))
         }
     }
 }
@@ -70,7 +75,6 @@ struct FullscreenImageView: View {
 // MARK: - Preview
 
 #Preview {
-    // Sample item for preview
     let sampleImageItem = Item(
         id: 1, promoted: 1001, userId: 1, down: 15, up: 150,
         created: Int(Date().timeIntervalSince1970) - 200,
@@ -79,12 +83,10 @@ struct FullscreenImageView: View {
         width: 800, height: 600, audio: false, source: "http://example.com",
         flags: 1, user: "UserA", mark: 1, repost: nil,
         variants: nil,
-        subtitles: nil, // Add missing argument
+        subtitles: nil,
         favorited: false
     )
 
-    // --- FIX: Remove explicit return ---
-    FullscreenImageView(item: sampleImageItem)
-    // --- END FIX ---
+    return FullscreenImageView(item: sampleImageItem)
 }
 // --- END OF COMPLETE FILE ---
