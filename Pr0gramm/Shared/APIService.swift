@@ -140,13 +140,9 @@ struct ApiCollection: Codable, Identifiable, Hashable {
     var isActuallyDefault: Bool { isDefault == 1 }
 }
 
-// --- MODIFIED: UserSyncResponse rt and qc removed ---
 struct UserSyncResponse: Codable {
     let likeNonce: String?
-    // let rt: Int? // Removed
-    // let qc: Int? // Removed
 }
-// --- END MODIFICATION ---
 
 struct PostCommentResultComment: Codable, Identifiable, Hashable {
     let id: Int
@@ -241,10 +237,11 @@ class APIService {
         flags: Int,
         promoted: Int? = nil,
         user: String? = nil,
-        tags: String? = nil,
+        tags: String? = nil, // This will now include the score tag if needed
         olderThanId: Int? = nil,
         collectionNameForUser: String? = nil,
         isOwnCollection: Bool = false
+        // minScore parameter removed
     ) async throws -> [Item] {
         let endpoint = "/items/get"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
@@ -270,7 +267,7 @@ class APIService {
             logDescription += ", user=\(regularUser) (for uploads/feed)"
         }
 
-        if let tags = tags {
+        if let tags = tags, !tags.isEmpty { // Check if tags string is not empty
             queryItems.append(URLQueryItem(name: "tags", value: tags))
             logDescription += ", tags='\(tags)'"
         }
@@ -376,9 +373,7 @@ class APIService {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let syncResponse: UserSyncResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint + " (offset: \(offset))")
-            // --- MODIFIED: Log only likeNonce as rt/qc are removed from struct ---
             Self.logger.info("User sync successful. Nonce: \(syncResponse.likeNonce ?? "nil")")
-            // --- END MODIFICATION ---
             return syncResponse
         }
         catch {
