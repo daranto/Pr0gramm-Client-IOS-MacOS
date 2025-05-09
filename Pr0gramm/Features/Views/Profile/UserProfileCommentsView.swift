@@ -25,6 +25,10 @@ struct UserProfileCommentsView: View {
     @State private var isLoadingNavigationTarget: Bool = false
     @State private var navigationTargetItemId: Int? = nil
 
+    // --- NEW: State for previewing linked items from comments ---
+    @State private var previewLinkTargetFromComment: PreviewLinkTarget? = nil
+    // --- END NEW ---
+
     @StateObject private var playerManager = VideoPlayerManager()
 
     private let apiService = APIService()
@@ -55,6 +59,13 @@ struct UserProfileCommentsView: View {
                  .environmentObject(settings)
                  .environmentObject(authService)
         }
+        // --- NEW: Sheet for linked item preview ---
+        .sheet(item: $previewLinkTargetFromComment) { target in
+            LinkedItemPreviewView(itemID: target.id)
+                .environmentObject(settings)
+                .environmentObject(authService)
+        }
+        // --- END NEW ---
         .overlay {
             if isLoadingNavigationTarget {
                 ProgressView("Lade Post \(navigationTargetItemId ?? 0)...")
@@ -93,13 +104,13 @@ struct UserProfileCommentsView: View {
     private var listContent: some View {
         List {
             ForEach(comments) { comment in
-                Button {
+                Button { // This button navigates to the post the comment belongs to
                     Task { await prepareAndNavigateToItem(comment.itemId) }
                 } label: {
-                    FavoritedCommentRow(
+                    FavoritedCommentRow( // Uses the already modified FavoritedCommentRow
                         comment: comment,
-                        overrideUsername: username, // Der Username des Profils, das wir gerade ansehen
-                        overrideUserMark: profileUserMark // Das Mark des Profil-Users
+                        overrideUsername: username,
+                        overrideUserMark: profileUserMark
                     )
                 }
                 .buttonStyle(.plain)
@@ -126,7 +137,39 @@ struct UserProfileCommentsView: View {
         }
         .listStyle(.plain)
         .refreshable { await refreshComments() }
+        // --- NEW: Handle OpenURL for links within comments ---
+        .environment(\.openURL, OpenURLAction { url in
+            if let itemID = parsePr0grammLink(url: url) {
+                UserProfileCommentsView.logger.info("Pr0gramm link tapped in profile comment, attempting to preview item ID: \(itemID)")
+                self.previewLinkTargetFromComment = PreviewLinkTarget(id: itemID)
+                return .handled
+            } else {
+                UserProfileCommentsView.logger.info("Non-pr0gramm link tapped: \(url). Opening in system browser.")
+                return .systemAction
+            }
+        })
+        // --- END NEW ---
     }
+    
+    // Helper function to parse pr0gramm links (copied for now)
+    private func parsePr0grammLink(url: URL) -> Int? {
+        guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
+        let pathComponents = url.pathComponents
+        for component in pathComponents.reversed() {
+            if let itemID = Int(component) { return itemID }
+        }
+        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            for item in queryItems {
+                if item.name == "id", let value = item.value, let itemID = Int(value) {
+                    return itemID
+                }
+            }
+        }
+        UserProfileCommentsView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+        return nil
+    }
+    // End copied helper
+
 
     @MainActor
     private func prepareAndNavigateToItem(_ itemId: Int?) async {
@@ -268,7 +311,6 @@ struct UserProfileCommentsView: View {
     }
 }
 
-// MARK: - Preview
 #Preview {
     struct PreviewWrapper: View {
         @StateObject private var previewSettings = AppSettings()
@@ -293,5 +335,4 @@ struct UserProfileCommentsView: View {
     }
     return PreviewWrapper()
 }
-
 // --- END OF COMPLETE FILE ---
