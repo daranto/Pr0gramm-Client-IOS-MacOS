@@ -9,7 +9,7 @@ struct UserProfileSheetView: View {
     let username: String
 
     @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var settings: AppSettings // Still needed for playerManager config etc.
+    @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) var dismiss
 
     @State private var profileInfo: ProfileInfoResponse?
@@ -43,7 +43,7 @@ struct UserProfileSheetView: View {
     }()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack { // Sheet content now wrapped in NavigationStack
             List {
                 profileInfoSection()
                 userUploadsSection()
@@ -66,7 +66,6 @@ struct UserProfileSheetView: View {
                 await loadAllData(forceRefresh: true)
             }
             .navigationDestination(item: $itemToNavigate) { loadedItem in
-                 // Use flags=31 when fetching item for navigation from profile sheet as well
                  PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager)
                      .environmentObject(settings)
                      .environmentObject(authService)
@@ -74,21 +73,29 @@ struct UserProfileSheetView: View {
             .navigationDestination(for: ProfileNavigationTarget.self) { target in
                 switch target {
                 case .allUserUploads(let targetUsername):
-                    // UserUploadsView itself respects global filters, which is fine
-                    // when navigating *away* from the profile sheet.
                     UserUploadsView(username: targetUsername)
                         .environmentObject(settings)
                         .environmentObject(authService)
                 case .allUserComments(let targetUsername):
-                    // UserProfileCommentsView also respects global filters.
                     UserProfileCommentsView(username: targetUsername)
                         .environmentObject(settings)
                         .environmentObject(authService)
                 default:
-                    // Handle other cases if necessary, like collections
                     EmptyView()
                 }
             }
+            // --- NEW: Handle OpenURL for links within comments inside the sheet ---
+            .environment(\.openURL, OpenURLAction { url in
+                if let itemID = parsePr0grammLink(url: url) {
+                    UserProfileSheetView.logger.info("Pr0gramm link tapped in UserProfileSheet comment, attempting to navigate to item ID: \(itemID)")
+                    Task { await prepareAndNavigateToItem(itemID) } // Use existing navigation
+                    return .handled
+                } else {
+                    UserProfileSheetView.logger.info("Non-pr0gramm link tapped in UserProfileSheet: \(url). Opening in system browser.")
+                    return .systemAction
+                }
+            })
+            // --- END NEW ---
             .overlay {
                 if isLoadingNavigationTarget {
                     ProgressView("Lade Post \(navigationTargetItemId ?? 0)...")
@@ -146,7 +153,6 @@ struct UserProfileSheetView: View {
     }
 
     private func loadProfileInfo(forceRefresh: Bool = false) async {
-        // Profile info fetch doesn't depend on flags
         if !forceRefresh && profileInfo != nil { return }
         UserProfileSheetView.logger.info("Loading profile info for \(username)...")
         await MainActor.run {
@@ -154,7 +160,7 @@ struct UserProfileSheetView: View {
             profileInfoError = nil
         }
         do {
-            let infoResponse = try await apiService.getProfileInfo(username: username, flags: 31) // Use 31 to get all badges/collections
+            let infoResponse = try await apiService.getProfileInfo(username: username, flags: 31)
             await MainActor.run { profileInfo = infoResponse }
         } catch {
             UserProfileSheetView.logger.error("Failed to load profile info for \(username): \(error.localizedDescription)")
@@ -171,7 +177,6 @@ struct UserProfileSheetView: View {
             } else if let error = uploadsError {
                 Text("Fehler: \(error)").foregroundColor(.red)
             } else if userUploads.isEmpty {
-                // Message adjusted slightly, as filters are ignored here
                 Text("\(username) hat (noch) keine Uploads.").foregroundColor(.secondary)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -222,15 +227,13 @@ struct UserProfileSheetView: View {
         }
 
         do {
-            // --- MODIFICATION: Use flags = 31 ---
             let flagsToFetchWith = 31
             UserProfileSheetView.logger.debug("Fetching uploads for \(username) using flags: \(flagsToFetchWith)")
             let fetchedItems = try await apiService.fetchItems(
-                flags: flagsToFetchWith, // Ignore global filters
+                flags: flagsToFetchWith,
                 user: username,
                 olderThanId: nil
             )
-            // --- END MODIFICATION ---
             await MainActor.run {
                 userUploads = Array(fetchedItems.prefix(uploadsPageLimit))
             }
@@ -249,13 +252,14 @@ struct UserProfileSheetView: View {
             } else if let error = commentsError {
                 Text("Fehler: \(error)").foregroundColor(.red)
             } else if userComments.isEmpty {
-                // Message adjusted slightly, as filters are ignored here
                 Text("\(username) hat (noch) keine Kommentare.").foregroundColor(.secondary)
             } else {
                 ForEach(userComments.prefix(commentsPageLimit)) { comment in
+                    // The Button is for the whole row, to navigate to the item the comment belongs to
                     Button {
                         Task { await prepareAndNavigateToItem(comment.itemId) }
                     } label: {
+                        // FavoritedCommentRow will render its internal Text with AttributedString
                         FavoritedCommentRow(
                             comment: comment,
                             overrideUsername: username,
@@ -297,18 +301,15 @@ struct UserProfileSheetView: View {
         }
 
         do {
-            // --- MODIFICATION: Use flags = 31 ---
             let flagsToFetchWith = 31
             UserProfileSheetView.logger.debug("Fetching profile comments for \(username) using flags: \(flagsToFetchWith)")
             let response = try await apiService.fetchProfileComments(
                 username: username,
-                flags: flagsToFetchWith, // Ignore global filters
+                flags: flagsToFetchWith,
                 before: nil
             )
-            // --- END MODIFICATION ---
             await MainActor.run {
                 userComments = Array(response.comments.prefix(commentsPageLimit))
-                // Keep existing logic for setting profileUserMark based on response/fallback
                 if profileInfo?.user.name.lowercased() == username.lowercased() && profileInfo?.user.mark != response.user?.mark {
                     UserProfileSheetView.logger.info("Mark for \(username) in ProfileCommentsResponse (\(response.user?.mark ?? -98)) differs from ProfileInfoResponse (\(profileInfo?.user.mark ?? -99)). Using ProfileInfoResponse for consistency in this sheet.")
                 }
@@ -358,6 +359,25 @@ struct UserProfileSheetView: View {
         return germanDateFormatter.string(from: date)
     }
 
+    // Helper function to parse pr0gramm links (copied for now)
+    private func parsePr0grammLink(url: URL) -> Int? {
+        guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
+        let pathComponents = url.pathComponents
+        for component in pathComponents.reversed() {
+            if let itemID = Int(component) { return itemID }
+        }
+        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            for item in queryItems {
+                if item.name == "id", let value = item.value, let itemID = Int(value) {
+                    return itemID
+                }
+            }
+        }
+        UserProfileSheetView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+        return nil
+    }
+    // End copied helper
+
     @MainActor
     private func prepareAndNavigateToItem(_ itemId: Int?) async {
         guard let id = itemId else {
@@ -374,11 +394,9 @@ struct UserProfileSheetView: View {
         navigationTargetItemId = id
 
         do {
-             // --- MODIFICATION: Use flags = 31 when fetching item for navigation ---
             let flagsToFetchWith = 31
             UserProfileSheetView.logger.debug("Fetching item \(id) for navigation from profile sheet using flags: \(flagsToFetchWith)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
-             // --- END MODIFICATION ---
 
             guard navigationTargetItemId == id else {
                  UserProfileSheetView.logger.info("Navigation target changed while item \(id) was loading. Discarding result.")
@@ -386,17 +404,14 @@ struct UserProfileSheetView: View {
             }
             if let item = fetchedItem {
                 UserProfileSheetView.logger.info("Successfully fetched item \(id) for navigation.")
-                itemToNavigate = item
+                itemToNavigate = item // This will trigger the .navigationDestination
             } else {
-                 // This case should be rarer now
                  UserProfileSheetView.logger.warning("Could not fetch item \(id) for navigation even with flags=31.")
-                 // Optionally set an error message here if needed
             }
         } catch is CancellationError {
             UserProfileSheetView.logger.info("Item fetch for navigation cancelled (ID: \(id)).")
         } catch {
             UserProfileSheetView.logger.error("Failed to fetch item \(id) for navigation: \(error.localizedDescription)")
-            // Optionally set an error message
         }
         if navigationTargetItemId == id {
              isLoadingNavigationTarget = false

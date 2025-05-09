@@ -22,10 +22,14 @@ struct UserFavoritedCommentsView: View {
     @State private var isLoadingNavigationTarget: Bool = false
     @State private var navigationTargetItemId: Int? = nil
 
+    @State private var previewLinkTargetFromComment: PreviewLinkTarget? = nil
+
     @StateObject private var playerManager = VideoPlayerManager()
 
     private let apiService = APIService()
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserFavoritedCommentsView")
+    // --- MODIFIED: logger to fileprivate ---
+    fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserFavoritedCommentsView")
+    // --- END MODIFICATION ---
 
     var body: some View {
         Group {
@@ -48,9 +52,14 @@ struct UserFavoritedCommentsView: View {
         .onChange(of: settings.showNSFP) { _, _ in Task { await refreshComments() } }
         .onChange(of: settings.showPOL) { _, _ in Task { await refreshComments() } }
         .navigationDestination(item: $itemToNavigate) { loadedItem in
-             PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager) // Use the shared wrapper
+             PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager)
                  .environmentObject(settings)
                  .environmentObject(authService)
+        }
+        .sheet(item: $previewLinkTargetFromComment) { target in
+            LinkedItemPreviewView(itemID: target.id)
+                .environmentObject(settings)
+                .environmentObject(authService)
         }
         .overlay {
             if isLoadingNavigationTarget {
@@ -119,6 +128,33 @@ struct UserFavoritedCommentsView: View {
         }
         .listStyle(.plain)
         .refreshable { await refreshComments() }
+        .environment(\.openURL, OpenURLAction { url in
+            if let itemID = parsePr0grammLink(url: url) {
+                UserFavoritedCommentsView.logger.info("Pr0gramm link tapped in favorited comment, attempting to preview item ID: \(itemID)")
+                self.previewLinkTargetFromComment = PreviewLinkTarget(id: itemID)
+                return .handled
+            } else {
+                UserFavoritedCommentsView.logger.info("Non-pr0gramm link tapped: \(url). Opening in system browser.")
+                return .systemAction
+            }
+        })
+    }
+
+    private func parsePr0grammLink(url: URL) -> Int? {
+        guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
+        let pathComponents = url.pathComponents
+        for component in pathComponents.reversed() {
+            if let itemID = Int(component) { return itemID }
+        }
+        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            for item in queryItems {
+                if item.name == "id", let value = item.value, let itemID = Int(value) {
+                    return itemID
+                }
+            }
+        }
+        UserFavoritedCommentsView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+        return nil
     }
 
     @MainActor
@@ -256,6 +292,28 @@ struct UserFavoritedCommentsView: View {
     }
 }
 
+fileprivate extension UIFont {
+    static func uiFont(from font: Font) -> UIFont {
+        switch font {
+            case .largeTitle: return UIFont.preferredFont(forTextStyle: .largeTitle)
+            case .title: return UIFont.preferredFont(forTextStyle: .title1)
+            case .title2: return UIFont.preferredFont(forTextStyle: .title2)
+            case .title3: return UIFont.preferredFont(forTextStyle: .title3)
+            case .headline: return UIFont.preferredFont(forTextStyle: .headline)
+            case .subheadline: return UIFont.preferredFont(forTextStyle: .subheadline)
+            case .body: return UIFont.preferredFont(forTextStyle: .body)
+            case .callout: return UIFont.preferredFont(forTextStyle: .callout)
+            case .footnote: return UIFont.preferredFont(forTextStyle: .footnote)
+            case .caption: return UIFont.preferredFont(forTextStyle: .caption1)
+            case .caption2: return UIFont.preferredFont(forTextStyle: .caption2)
+            default:
+                // Use the logger of the outer struct (UserFavoritedCommentsView)
+                UserFavoritedCommentsView.logger.warning("Warning: Could not precisely convert SwiftUI Font to UIFont. Using body style as fallback.")
+                return UIFont.preferredFont(forTextStyle: .body)
+        }
+    }
+}
+
 struct FavoritedCommentRow: View {
     let comment: ItemComment
     var overrideUsername: String? = nil
@@ -282,6 +340,27 @@ struct FavoritedCommentRow: View {
         overrideUserMark ?? comment.mark ?? -1
     }
 
+    private var attributedCommentContent: AttributedString {
+        var attributedString = AttributedString(comment.content)
+        let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont)
+        attributedString.font = baseUIFont
+
+        do {
+            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+            let matches = detector.matches(in: comment.content, options: [], range: NSRange(location: 0, length: comment.content.utf16.count))
+            for match in matches {
+                guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
+                attributedString[range].link = url
+                attributedString[range].foregroundColor = .accentColor
+                attributedString[range].font = baseUIFont
+            }
+        } catch {
+            // Use the logger of the outer struct (UserFavoritedCommentsView)
+            UserFavoritedCommentsView.logger.error("Error creating NSDataDetector in FavoritedCommentRow: \(error.localizedDescription)")
+        }
+        return attributedString
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             KFImage(comment.itemThumbnailUrl)
@@ -293,12 +372,12 @@ struct FavoritedCommentRow: View {
                 .cornerRadius(4)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(comment.content)
+                Text(attributedCommentContent)
                     .font(UIConstants.footnoteFont)
                     .lineLimit(4)
 
                 HStack(spacing: 6) {
-                    UserMarkView(markValue: displayMarkValue)
+                    UserMarkView(markValue: displayMarkValue, showName: false)
                     Text(displayName)
                     Text("•")
                     Text("\(score)")
@@ -315,8 +394,6 @@ struct FavoritedCommentRow: View {
 }
 
 #Preview {
-    // The preview wrapper is now defined *inside* the #Preview block
-    // to avoid redeclaration issues if this pattern is used elsewhere.
     struct UserFavoritedCommentsPreviewWrapper: View {
         @StateObject private var previewSettings = AppSettings()
         @StateObject private var previewAuthService: AuthService
@@ -340,10 +417,4 @@ struct FavoritedCommentRow: View {
     }
     return UserFavoritedCommentsPreviewWrapper()
 }
-
-// --- REMOVED Preview Wrapper Struct ---
-// The struct PreviewWrapper definition that was here previously
-// has been removed to fix the redeclaration error.
-// --- END REMOVED ---
-
 // --- END OF COMPLETE FILE ---

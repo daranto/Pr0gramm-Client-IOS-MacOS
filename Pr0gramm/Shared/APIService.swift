@@ -97,7 +97,7 @@ struct ApiBadge: Codable, Identifiable, Hashable {
 }
 
 struct ProfileInfoResponse: Codable {
-    let user: ApiProfileUser // Hier wird erwartet, dass alle Felder von ApiProfileUser da sind
+    let user: ApiProfileUser
     let badges: [ApiBadge]?
     let commentCount: Int?
     let uploadCount: Int?
@@ -105,21 +105,19 @@ struct ProfileInfoResponse: Codable {
     let collections: [ApiCollection]?
 }
 
-// --- MODIFIED: Make more fields in ApiProfileUser optional ---
 struct ApiProfileUser: Codable, Hashable {
     let id: Int
     let name: String
-    let registered: Int? // War Int
-    let score: Int?      // War Int
-    let mark: Int        // Bleibt Int, da im Log vorhanden
+    let registered: Int?
+    let score: Int?
+    let mark: Int
     let up: Int?
     let down: Int?
     let banned: Int?
     let bannedUntil: Int?
 }
-// --- END MODIFICATION ---
 
-struct UserInfo: Codable, Hashable { // Dies wird für den eingeloggten User verwendet, hier sollten die Felder da sein.
+struct UserInfo: Codable, Hashable {
     let id: Int
     let name: String
     let registered: Int
@@ -141,9 +139,14 @@ struct ApiCollection: Codable, Identifiable, Hashable {
     var isActuallyPublic: Bool { isPublic == 1 }
     var isActuallyDefault: Bool { isDefault == 1 }
 }
+
+// --- MODIFIED: UserSyncResponse rt and qc removed ---
 struct UserSyncResponse: Codable {
     let likeNonce: String?
+    // let rt: Int? // Removed
+    // let qc: Int? // Removed
 }
+// --- END MODIFICATION ---
 
 struct PostCommentResultComment: Codable, Identifiable, Hashable {
     let id: Int
@@ -176,7 +179,7 @@ struct ProfileCommentLikesResponse: Codable {
 
 struct ProfileCommentsResponse: Codable {
     let comments: [ItemComment]
-    let user: ApiProfileUser? // ApiProfileUser wird hier verwendet
+    let user: ApiProfileUser?
     let hasOlder: Bool
     let hasNewer: Bool
 }
@@ -370,8 +373,18 @@ class APIService {
         let endpoint = "/user/sync"; Self.logger.info("Performing user sync with offset \(offset)..."); guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
         urlComponents.queryItems = [ URLQueryItem(name: "offset", value: String(offset)) ]; guard let url = urlComponents.url else { throw URLError(.badURL) }; let request = URLRequest(url: url);
         logRequestDetails(request, for: endpoint)
-        do { let (data, response) = try await URLSession.shared.data(for: request); return try handleApiResponse(data: data, response: response, endpoint: endpoint + " (offset: \(offset))") }
-        catch { Self.logger.error("Failed to sync user (offset \(offset)): \(error.localizedDescription)"); throw error }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let syncResponse: UserSyncResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint + " (offset: \(offset))")
+            // --- MODIFIED: Log only likeNonce as rt/qc are removed from struct ---
+            Self.logger.info("User sync successful. Nonce: \(syncResponse.likeNonce ?? "nil")")
+            // --- END MODIFICATION ---
+            return syncResponse
+        }
+        catch {
+            Self.logger.error("Failed to sync user (offset \(offset)): \(error.localizedDescription)")
+            throw error
+        }
     }
 
     func addToCollection(itemId: Int, nonce: String) async throws {

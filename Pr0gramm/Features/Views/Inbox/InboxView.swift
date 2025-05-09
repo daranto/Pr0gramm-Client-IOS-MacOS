@@ -14,19 +14,24 @@ struct InboxView: View {
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
-    // Navigation State für Detailansichten
     @State private var itemToNavigate: Item? = nil
-    @State private var profileToNavigate: String? = nil // Für Usernamen
+    @State private var profileToNavigate: String? = nil
     @State private var isLoadingNavigationTarget: Bool = false
-    @State private var navigationTargetId: Int? = nil // Kann ItemID oder UserID sein, je nach Kontext
+    @State private var navigationTargetId: Int? = nil
 
-    @StateObject private var playerManager = VideoPlayerManager() // Für PagedDetailView
+    // --- NEW: State for previewing linked items from messages ---
+    @State private var previewLinkTargetFromMessage: PreviewLinkTarget? = nil
+    // --- END NEW ---
+
+    @StateObject private var playerManager = VideoPlayerManager()
 
     private let apiService = APIService()
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "InboxView")
+    // --- MODIFIED: logger to fileprivate ---
+    fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "InboxView")
+    // --- END MODIFICATION ---
 
     var body: some View {
-        NavigationStack { // Eigene NavigationStack für diese Ansicht
+        NavigationStack {
             Group {
                 contentView
             }
@@ -38,22 +43,27 @@ struct InboxView: View {
                 Button("OK") { errorMessage = nil; isLoadingNavigationTarget = false; navigationTargetId = nil }
             } message: { Text(errorMessage ?? "Unbekannter Fehler") }
             .task {
-                playerManager.configure(settings: settings) // PlayerManager konfigurieren
+                playerManager.configure(settings: settings)
                 await refreshMessages()
             }
-            // Navigation für Items (Kommentare, Follows)
             .navigationDestination(item: $itemToNavigate) { loadedItem in
                  PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager)
                      .environmentObject(settings)
                      .environmentObject(authService)
             }
-            // Navigation für User-Profile (PMs, Follows)
             .navigationDestination(for: String.self) { username in
-                 UserProfileViewWrapper(username: username) // Wrapper für Profilansicht
+                 UserProfileSheetView(username: username) // Use UserProfileSheetView for profile navigation
                       .environmentObject(settings)
                       .environmentObject(authService)
             }
-            .overlay { // Ladeindikator für Navigation
+            // --- NEW: Sheet for linked item preview ---
+            .sheet(item: $previewLinkTargetFromMessage) { target in
+                LinkedItemPreviewView(itemID: target.id)
+                    .environmentObject(settings)
+                    .environmentObject(authService)
+            }
+            // --- END NEW ---
+            .overlay {
                 if isLoadingNavigationTarget {
                     ProgressView("Lade Ziel...")
                         .padding().background(Material.regular).cornerRadius(10).shadow(radius: 5)
@@ -62,7 +72,6 @@ struct InboxView: View {
         }
     }
 
-    // MARK: - Content Views
     @ViewBuilder private var contentView: some View {
         Group {
             if isLoading && messages.isEmpty {
@@ -83,7 +92,7 @@ struct InboxView: View {
     private var listContent: some View {
         List {
             ForEach(messages) { message in
-                InboxMessageRow(message: message)
+                InboxMessageRow(message: message) // Links within the message text are handled by .environment(\.openURL)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         guard !isLoadingNavigationTarget, message.type != "notification" else {
@@ -103,7 +112,7 @@ struct InboxView: View {
                          Task { await loadMoreMessages() }
                      }
                 }
-            } // Ende ForEach
+            }
 
             if isLoadingMore {
                 HStack { Spacer(); ProgressView("Lade mehr..."); Spacer() }
@@ -112,9 +121,39 @@ struct InboxView: View {
         }
         .listStyle(.plain)
         .refreshable { await refreshMessages() }
+        // --- NEW: Handle OpenURL for links within message text ---
+        .environment(\.openURL, OpenURLAction { url in
+            if let itemID = parsePr0grammLink(url: url) {
+                InboxView.logger.info("Pr0gramm link tapped in inbox message, attempting to preview item ID: \(itemID)")
+                self.previewLinkTargetFromMessage = PreviewLinkTarget(id: itemID)
+                return .handled
+            } else {
+                InboxView.logger.info("Non-pr0gramm link tapped in inbox: \(url). Opening in system browser.")
+                return .systemAction
+            }
+        })
+        // --- END NEW ---
     }
 
-    // MARK: - Navigation Helper
+    // Helper function to parse pr0gramm links (copied for now)
+    private func parsePr0grammLink(url: URL) -> Int? {
+        guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
+        let pathComponents = url.pathComponents
+        for component in pathComponents.reversed() {
+            if let itemID = Int(component) { return itemID }
+        }
+        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            for item in queryItems {
+                if item.name == "id", let value = item.value, let itemID = Int(value) {
+                    return itemID
+                }
+            }
+        }
+        InboxView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+        return nil
+    }
+    // End copied helper
+
     @MainActor
     private func handleMessageTap(_ message: InboxMessage) async {
         guard !isLoadingNavigationTarget else {
@@ -134,7 +173,9 @@ struct InboxView: View {
         case "message", "follow":
              if let senderName = message.name, !senderName.isEmpty {
                  InboxView.logger.info("Message type is '\(message.type)', navigating to profile: \(senderName)")
-                 profileToNavigate = senderName
+                 // --- MODIFIED: Navigate to UserProfileSheetView ---
+                 self.profileToNavigate = senderName // This will trigger the navigationDestination
+                 // --- END MODIFICATION ---
              } else { InboxView.logger.warning("\(message.type) message type tapped, but sender name is nil or empty.") }
 
         case "notification":
@@ -146,7 +187,6 @@ struct InboxView: View {
         }
     }
 
-    // MARK: - prepareAndNavigateToItem (Flags fixed)
     @MainActor
     private func prepareAndNavigateToItem(_ itemId: Int?) async {
         guard let id = itemId else {
@@ -164,11 +204,9 @@ struct InboxView: View {
         self.errorMessage = nil
 
         do {
-            // --- MODIFICATION: Use flags = 31 to fetch item regardless of global filters ---
-            let flagsToFetchWith = 31 // SFW(1)+NSFW(2)+NSFL(4)+NSFP(8)+POL(16) = 31
+            let flagsToFetchWith = 31
             InboxView.logger.debug("Fetching item \(id) for navigation using flags: \(flagsToFetchWith) (ignoring global settings)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
-            // --- END MODIFICATION ---
 
             guard self.navigationTargetId == id else {
                  InboxView.logger.info("Navigation target changed while item \(id) was loading. Discarding result.")
@@ -176,9 +214,8 @@ struct InboxView: View {
             }
             if let item = fetchedItem {
                  InboxView.logger.info("Successfully fetched item \(id) for navigation.")
-                 self.itemToNavigate = item // Trigger Navigation
+                 self.itemToNavigate = item
             } else {
-                 // This should ideally not happen anymore if flags=31 is used, unless the item was deleted.
                  InboxView.logger.warning("Could not fetch item \(id) for navigation even with flags=31. Item might be deleted.")
                  self.errorMessage = "Post \(id) konnte nicht gefunden werden (möglicherweise gelöscht)."
             }
@@ -186,18 +223,16 @@ struct InboxView: View {
              InboxView.logger.info("Item fetch for navigation cancelled (ID: \(id)).")
         } catch {
             InboxView.logger.error("Failed to fetch item \(id) for navigation: \(error.localizedDescription)")
-            if self.navigationTargetId == id { // Show error only if still relevant
+            if self.navigationTargetId == id {
                 self.errorMessage = "Post \(id) konnte nicht geladen werden: \(error.localizedDescription)"
             }
         }
-        if self.navigationTargetId == id { // Reset state only if still relevant
+        if self.navigationTargetId == id {
              self.isLoadingNavigationTarget = false
              self.navigationTargetId = nil
         }
     }
 
-
-    // MARK: - Data Loading Methods (Unchanged)
       @MainActor
       func refreshMessages() async {
           InboxView.logger.info("Refreshing inbox messages...")
@@ -209,8 +244,6 @@ struct InboxView: View {
 
           self.isLoadingNavigationTarget = false; self.navigationTargetId = nil
           self.isLoading = true; self.errorMessage = nil
-
-          Task { await authService.updateUnreadCount() }
 
           defer { Task { @MainActor in self.isLoading = false } }
 
@@ -281,7 +314,29 @@ struct InboxView: View {
     }
 }
 
-// MARK: - Inbox Message Row View (Unchanged)
+// Helper extension (copied from CommentView for now, should be centralized)
+fileprivate extension UIFont {
+    static func uiFont(from font: Font) -> UIFont {
+        switch font {
+            case .largeTitle: return UIFont.preferredFont(forTextStyle: .largeTitle)
+            case .title: return UIFont.preferredFont(forTextStyle: .title1)
+            case .title2: return UIFont.preferredFont(forTextStyle: .title2)
+            case .title3: return UIFont.preferredFont(forTextStyle: .title3)
+            case .headline: return UIFont.preferredFont(forTextStyle: .headline)
+            case .subheadline: return UIFont.preferredFont(forTextStyle: .subheadline)
+            case .body: return UIFont.preferredFont(forTextStyle: .body)
+            case .callout: return UIFont.preferredFont(forTextStyle: .callout)
+            case .footnote: return UIFont.preferredFont(forTextStyle: .footnote)
+            case .caption: return UIFont.preferredFont(forTextStyle: .caption1)
+            case .caption2: return UIFont.preferredFont(forTextStyle: .caption2)
+            default:
+                InboxView.logger.warning("Warning: Could not precisely convert SwiftUI Font to UIFont. Using body style as fallback.")
+                return UIFont.preferredFont(forTextStyle: .body)
+        }
+    }
+}
+// End copied helper
+
 struct InboxMessageRow: View {
     let message: InboxMessage
 
@@ -310,12 +365,33 @@ struct InboxMessageRow: View {
         if message.type == "comment" || message.type == "message" || message.type == "follow" {
             return Mark(rawValue: message.mark ?? -1).displayColor
         }
-        return .secondary // Für Notifications
+        return .secondary
     }
+
+    // --- NEW: Attributed message content for links ---
+    private var attributedMessageContent: AttributedString {
+        var attributedString = AttributedString(message.message ?? "")
+        let baseUIFont = UIFont.uiFont(from: UIConstants.subheadlineFont) // Use UIConstants
+        attributedString.font = baseUIFont
+
+        do {
+            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+            let matches = detector.matches(in: message.message ?? "", options: [], range: NSRange(location: 0, length: (message.message ?? "").utf16.count))
+            for match in matches {
+                guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
+                attributedString[range].link = url
+                attributedString[range].foregroundColor = .accentColor
+                attributedString[range].font = baseUIFont // Ensure links also use base font
+            }
+        } catch {
+            InboxView.logger.error("Error creating NSDataDetector in InboxMessageRow: \(error.localizedDescription)")
+        }
+        return attributedString
+    }
+    // --- END NEW ---
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // Thumbnail
             if message.type == "comment", let thumbUrl = message.itemThumbnailUrl {
                 KFImage(thumbUrl)
                     .resizable().placeholder { Color.gray.opacity(0.1) }
@@ -331,9 +407,7 @@ struct InboxMessageRow: View {
                     .foregroundColor(.secondary)
             }
 
-            // Inhalt und Metadaten
             VStack(alignment: .leading, spacing: 4) {
-                // Titelzeile
                 HStack {
                      if message.type != "notification" && message.type != "follow" {
                          Circle().fill(titleOrMarkColor)
@@ -347,9 +421,10 @@ struct InboxMessageRow: View {
                          Circle().fill(Color.accentColor).frame(width: 8, height: 8).padding(.leading, 4)
                      }
                 }
-                // Nachrichteninhalt
-                Text(message.message ?? "")
-                    .font(.subheadline)
+                // --- MODIFIED: Use attributedMessageContent ---
+                Text(attributedMessageContent)
+                // --- END MODIFICATION ---
+                    .font(.subheadline) // Base font, AttributedString handles link color/font
                     .foregroundColor(.primary)
                     .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)
@@ -359,17 +434,6 @@ struct InboxMessageRow: View {
     }
 }
 
-
-// MARK: - UserProfileViewWrapper (Unchanged)
-struct UserProfileViewWrapper: View {
-    let username: String
-    var body: some View {
-        Text("Profilansicht für: \(username)")
-             .navigationTitle(username)
-    }
-}
-
-// MARK: - Preview (Unchanged)
 #Preview {
     InboxPreviewWrapper()
 }
@@ -387,12 +451,14 @@ private struct InboxPreviewWrapper: View {
     }
 
     var body: some View {
-        let msg1 = InboxMessage(id: 1, type: "comment", itemId: 123, thumb: "thumb1.jpg", flags: 1, name: "UserA", mark: 2, senderId: 101, score: 5, created: Int(Date().timeIntervalSince1970 - 600), message: "Das ist ein Kommentar zur Benachrichtigung.", read: 0, blocked: 0)
+        let msg1 = InboxMessage(id: 1, type: "comment", itemId: 123, thumb: "thumb1.jpg", flags: 1, name: "UserA", mark: 2, senderId: 101, score: 5, created: Int(Date().timeIntervalSince1970 - 600), message: "Das ist ein Kommentar http://pr0gramm.com/new/543210 zur Benachrichtigung. Und noch ein Link https://example.com", read: 0, blocked: 0)
         let msg2 = InboxMessage(id: 2, type: "notification", itemId: nil, thumb: nil, flags: nil, name: nil, mark: nil, senderId: 0, score: 0, created: Int(Date().timeIntervalSince1970 - 3600), message: "Systemnachricht: Dein pr0mium läuft bald ab!", read: 1, blocked: 0)
         let msg3 = InboxMessage(id: 3, type: "follow", itemId: nil, thumb: nil, flags: nil, name: "FollowerDude", mark: 1, senderId: 102, score: 0, created: Int(Date().timeIntervalSince1970 - 7200), message: nil, read: 0, blocked: 0)
+        let msg4 = InboxMessage(id: 4, type: "message", itemId: nil, thumb: nil, flags: nil, name: "ChattyCathy", mark: 7, senderId: 103, score: 0, created: Int(Date().timeIntervalSince1970 - 86400), message: "Hallo! Wie geht es dir? Schau mal hier: www.pr0gramm.com/new/112233 .", read: 0, blocked: 0)
+
 
         let view = InboxView()
-        view.messages = [msg1, msg2, msg3]
+        view.messages = [msg1, msg2, msg3, msg4].sorted { $0.created > $1.created }
 
         return NavigationStack {
             view

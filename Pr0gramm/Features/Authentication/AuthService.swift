@@ -42,7 +42,9 @@ class AuthService: ObservableObject {
     @Published var votedCommentStates: [Int: Int] = [:]
     @Published private(set) var isVotingComment: [Int: Bool] = [:]
     
-    @Published var unreadMessageCount: Int = 0
+    // --- REMOVED: unreadMessageCount ---
+    // @Published var unreadMessageCount: Int = 0
+    // --- END REMOVAL ---
     @Published private(set) var userCollections: [ApiCollection] = []
 
     nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AuthService")
@@ -75,7 +77,7 @@ class AuthService: ObservableObject {
             isLoading = true; loginError = nil; self.userNonce = nil; self.favoritedItemIDs = []; self.votedItemStates = [:]; self.isVoting = [:]
             self.favoritedCommentIDs = []; self.isFavoritingComment = [:]
             self.votedCommentStates = [:]; self.isVotingComment = [:]
-            self.unreadMessageCount = 0
+            // self.unreadMessageCount = 0 // Removed
             self.userCollections = []
             AuthService.logger.debug("Resetting user-specific states for login.")
         }
@@ -106,7 +108,7 @@ class AuthService: ObservableObject {
                 AuthService.logger.info("Login successful via API for user: \(username)")
                 let profileAndCollectionsLoaded = await loadProfileInfoAndCollections(username: username, setLoadingState: false)
                 var favoritesLoaded = false
-                var countLoaded = false
+                // var countLoaded = false // Removed
 
                 if profileAndCollectionsLoaded {
                     if let defaultCollection = self.userCollections.first(where: { $0.isActuallyDefault }) {
@@ -130,11 +132,13 @@ class AuthService: ObservableObject {
                     loadVotedStates()
                     loadFavoritedCommentIDs()
                     loadVotedCommentStates()
-                    countLoaded = await updateUnreadCount()
-                    AuthService.logger.info("Loaded states after successful login. Votes: \(self.votedItemStates.count), Comment Favs: \(self.favoritedCommentIDs.count), Comment Votes: \(self.votedCommentStates.count), Unread: \(self.unreadMessageCount), Collections: \(self.userCollections.count)")
+                    // countLoaded = await updateUnreadCount() // Removed
+                    // Log modified
+                    AuthService.logger.info("Loaded states after successful login. Votes: \(self.votedItemStates.count), Comment Favs: \(self.favoritedCommentIDs.count), Comment Votes: \(self.votedCommentStates.count), Collections: \(self.userCollections.count)")
                 }
 
-                let finalLoginSuccess = profileAndCollectionsLoaded && favoritesLoaded && countLoaded && self.userNonce != nil
+                // Modified condition
+                let finalLoginSuccess = profileAndCollectionsLoaded && favoritesLoaded && self.userNonce != nil
                 await MainActor.run { self.isLoggedIn = finalLoginSuccess }
 
                 if finalLoginSuccess {
@@ -147,15 +151,17 @@ class AuthService: ObservableObject {
                         if cookieSaved && usernameSaved { AuthService.logger.info("Session cookie and username saved to keychain.") }
                         else { AuthService.logger.warning("Failed to save session cookie (\(cookieSaved)) or username (\(usernameSaved)) to keychain.") }
                         self.needsCaptcha = false; self.captchaToken = nil; self.captchaImage = nil
-                        AuthService.logger.info("User \(self.currentUser!.name) is now logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), Unread: \(self.unreadMessageCount), Collections: \(self.userCollections.count)")
+                        // Log modified
+                        AuthService.logger.info("User \(self.currentUser!.name) is now logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), Collections: \(self.userCollections.count)")
                     }
                 } else {
                     await MainActor.run {
                         if !profileAndCollectionsLoaded { self.loginError = "Login erfolgreich, aber Profildaten/Sammlungen konnten nicht geladen werden." }
                         else if !favoritesLoaded { self.loginError = "Login erfolgreich, aber Favoriten konnten nicht initial geladen werden." }
-                        else if !countLoaded { self.loginError = "Login erfolgreich, aber Nachrichtenzähler konnte nicht geladen werden." }
+                        // else if !countLoaded { self.loginError = "Login erfolgreich, aber Nachrichtenzähler konnte nicht geladen werden." } // Removed
                         else { self.loginError = "Login erfolgreich, aber Session-Daten (Nonce) konnten nicht gelesen werden." }
-                        AuthService.logger.error("Login sequence failed. Profile/Collections: \(profileAndCollectionsLoaded), Favorites: \(favoritesLoaded), Count: \(countLoaded), Nonce: \(self.userNonce != nil)")
+                        // Log modified
+                        AuthService.logger.error("Login sequence failed. Profile/Collections: \(profileAndCollectionsLoaded), Favorites: \(favoritesLoaded), Nonce: \(self.userNonce != nil)")
                     }
                     await performLogoutCleanup()
                 }
@@ -216,7 +222,7 @@ class AuthService: ObservableObject {
         var profileAndCollectionsLoaded = false
         var nonceAvailable = false
         var favoritesLoaded = false
-        var countLoaded = false
+        // var countLoaded = false // Removed
         var finalIsLoggedIn = false
 
         AuthService.logger.debug("[SESSION RESTORE START] Cookies BEFORE restoring from Keychain:")
@@ -254,9 +260,10 @@ class AuthService: ObservableObject {
                      favoritesLoaded = true
                      AuthService.logger.info("Skipping initial favorites load as no collection ID is selected during initial check.")
                  }
-                 countLoaded = await updateUnreadCount()
+                 // countLoaded = await updateUnreadCount() // Removed
                  
-                 finalIsLoggedIn = profileAndCollectionsLoaded && favoritesLoaded && nonceAvailable && countLoaded
+                 // Modified condition
+                 finalIsLoggedIn = profileAndCollectionsLoaded && favoritesLoaded && nonceAvailable
              }
         }
         
@@ -268,7 +275,8 @@ class AuthService: ObservableObject {
          await MainActor.run {
              self.isLoggedIn = finalIsLoggedIn
              if self.isLoggedIn {
-                  AuthService.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), Unread: \(self.unreadMessageCount), Collections: \(self.userCollections.count)")
+                  // Log modified
+                  AuthService.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), Collections: \(self.userCollections.count)")
              } else {
                  AuthService.logger.info("Initial check: User is not logged in (final determination).")
              }
@@ -416,34 +424,15 @@ class AuthService: ObservableObject {
         }
     }
 
+    // --- REMOVED: updateUnreadCount method ---
+    /*
     @discardableResult
     func updateUnreadCount() async -> Bool {
-        guard isLoggedIn else {
-            AuthService.logger.debug("Skipping unread count update: User not logged in.")
-            if unreadMessageCount != 0 {
-                await MainActor.run { self.unreadMessageCount = 0 }
-            }
-            return true
-        }
-        AuthService.logger.debug("Updating unread message count...")
-        do {
-            let response = try await apiService.fetchInboxMessages(older: nil)
-            guard !Task.isCancelled else { return false }
-            let newCount = response.queue?.total ?? 0
-            await MainActor.run {
-                if self.unreadMessageCount != newCount {
-                     self.unreadMessageCount = newCount
-                     AuthService.logger.info("Unread message count updated to: \(newCount)")
-                } else {
-                     AuthService.logger.debug("Unread message count remains: \(newCount)")
-                }
-            }
-            return true
-        } catch {
-            AuthService.logger.error("Failed to update unread message count: \(error.localizedDescription)")
-            return false
-        }
+        // ... entire method removed ...
     }
+    */
+    // --- END REMOVAL ---
+
 
     private func loadVotedStates() {
         if let savedVotes = UserDefaults.standard.dictionary(forKey: userVotesKey) as? [String: Int] {
@@ -525,7 +514,7 @@ class AuthService: ObservableObject {
                 let fetchedItems = try await apiService.fetchFavorites(
                     username: username,
                     collectionKeyword: collectionKeyword,
-                    flags: 1, // SFW only for favorite ID check
+                    flags: 1,
                     olderThanId: olderThanId
                 )
                 if fetchedItems.isEmpty {
@@ -533,7 +522,7 @@ class AuthService: ObservableObject {
                     break
                 }
                 allFavorites.append(contentsOf: fetchedItems)
-                olderThanId = fetchedItems.last?.id // Use item ID for pagination, not promoted ID here
+                olderThanId = fetchedItems.last?.id
                 pagesFetched += 1
             }
         } catch {
@@ -556,22 +545,20 @@ class AuthService: ObservableObject {
         do {
             let profileInfoResponse = try await apiService.getProfileInfo(username: username, flags: 31)
             
-            // --- MODIFIED: Provide default values for optional Ints when creating UserInfo ---
             let newUserInfo = UserInfo(
                 id: profileInfoResponse.user.id,
                 name: profileInfoResponse.user.name,
-                registered: profileInfoResponse.user.registered ?? 0, // Default to 0 if nil
-                score: profileInfoResponse.user.score ?? 0,           // Default to 0 if nil
+                registered: profileInfoResponse.user.registered ?? 0,
+                score: profileInfoResponse.user.score ?? 0,
                 mark: profileInfoResponse.user.mark,
                 badges: profileInfoResponse.badges,
-                collections: nil // Collections are set separately below
+                collections: nil
             )
-            // --- END MODIFICATION ---
             
             await MainActor.run {
                 self.currentUser = newUserInfo
                 self.userCollections = profileInfoResponse.collections ?? []
-                self.currentUser?.collections = self.userCollections // Assign collections to the currentUser
+                self.currentUser?.collections = self.userCollections
             }
             AuthService.logger.info("Successfully created UserInfo for: \(newUserInfo.name) with \(newUserInfo.badges?.count ?? 0) badges and \(self.userCollections.count) collections.")
             if setLoadingState { await MainActor.run { isLoading = false } }
@@ -651,7 +638,7 @@ class AuthService: ObservableObject {
             self.votedItemStates = [:]; self.isVoting = [:]
             self.favoritedCommentIDs = []; self.isFavoritingComment = [:]
             self.votedCommentStates = [:]; self.isVotingComment = [:]
-            self.unreadMessageCount = 0
+            // self.unreadMessageCount = 0; // Removed
             self.userCollections = []
             self.appSettings.selectedCollectionIdForFavorites = nil
             self.appSettings.showSFW = true; self.appSettings.showNSFW = false; self.appSettings.showNSFL = false;
