@@ -382,13 +382,32 @@ class APIService {
         }
     }
 
-    func addToCollection(itemId: Int, nonce: String) async throws {
-        let endpoint = "/collections/add"; Self.logger.info("Attempting to add item \(itemId) to default collection (Favorites)."); let url = baseURL.appendingPathComponent(endpoint); var request = URLRequest(url: url); request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type"); var components = URLComponents(); components.queryItems = [ URLQueryItem(name: "itemId", value: String(itemId)), URLQueryItem(name: "_nonce", value: nonce) ]; request.httpBody = components.query?.data(using: .utf8)
+    // --- MODIFIED: addToCollection now accepts collectionId ---
+    func addToCollection(itemId: Int, collectionId: Int, nonce: String) async throws {
+        let endpoint = "/collections/add"
+        Self.logger.info("Attempting to add item \(itemId) to collection \(collectionId).")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "itemId", value: String(itemId)),
+            URLQueryItem(name: "collectionId", value: String(collectionId)), // Add collectionId
+            URLQueryItem(name: "_nonce", value: nonce)
+        ]
+        request.httpBody = components.query?.data(using: .utf8)
         logRequestDetails(request, for: endpoint)
-        do { let (_, response) = try await URLSession.shared.data(for: request); try handleApiResponseVoid(response: response, endpoint: endpoint + " (item: \(itemId))"); Self.logger.info("Successfully sent add to collection request for item \(itemId).") }
-        catch { Self.logger.error("Failed to add item \(itemId) to collection: \(error.localizedDescription)"); throw error }
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            try handleApiResponseVoid(response: response, endpoint: endpoint + " (item: \(itemId), collection: \(collectionId))")
+            Self.logger.info("Successfully sent add to collection \(collectionId) request for item \(itemId).")
+        } catch {
+            Self.logger.error("Failed to add item \(itemId) to collection \(collectionId): \(error.localizedDescription)")
+            throw error
+        }
     }
+    // --- END MODIFICATION ---
 
     func removeFromCollection(itemId: Int, collectionId: Int, nonce: String) async throws {
         let endpoint = "/collections/remove"; Self.logger.info("Attempting to remove item \(itemId) from collection \(collectionId)."); let url = baseURL.appendingPathComponent(endpoint); var request = URLRequest(url: url); request.httpMethod = "POST"

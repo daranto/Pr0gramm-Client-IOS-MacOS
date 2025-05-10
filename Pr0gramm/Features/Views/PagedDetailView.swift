@@ -610,15 +610,20 @@ struct PagedDetailView: View {
         }
     }
 
+    // --- MODIFIED: toggleFavorite now uses selectedCollectionIdForFavorites ---
     private func toggleFavorite() async {
-        let localSettings = self.settings
+        let localSettings = self.settings // Capture for stable access within async context
         guard !isTogglingFavorite else { PagedDetailView.logger.debug("Favorite toggle skipped: Already processing."); return }
         guard selectedIndex >= 0 && selectedIndex < items.count else { PagedDetailView.logger.warning("Favorite toggle skipped: Invalid selectedIndex \(selectedIndex)."); return }
         let currentItem = items[selectedIndex]
-        guard authService.isLoggedIn, let nonce = authService.userNonce, let collectionId = localSettings.selectedCollectionIdForFavorites else {
+
+        guard authService.isLoggedIn,
+              let nonce = authService.userNonce,
+              let collectionId = localSettings.selectedCollectionIdForFavorites else { // Use captured localSettings
             PagedDetailView.logger.warning("Favorite toggle skipped: User not logged in, nonce missing, or no favorite collection selected in AppSettings.");
             return
         }
+
         let itemId = currentItem.id
         let currentIsFavorited: Bool
         if let localStatus = localFavoritedStatus[itemId] { currentIsFavorited = localStatus }
@@ -630,20 +635,25 @@ struct PagedDetailView: View {
 
         do {
             if targetFavoriteState {
-                try await apiService.addToCollection(itemId: itemId, nonce: nonce)
-                PagedDetailView.logger.info("Added item \(itemId) to favorites via API.")
+                // Pass the selected collectionId
+                try await apiService.addToCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
+                PagedDetailView.logger.info("Added item \(itemId) to collection \(collectionId) via API.")
             } else {
+                // Remove also needs the collectionId from which to remove
                 try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
                 PagedDetailView.logger.info("Removed item \(itemId) from collection \(collectionId) via API.")
             }
+
             if targetFavoriteState { authService.favoritedItemIDs.insert(itemId) }
             else { authService.favoritedItemIDs.remove(itemId) }
+
+            // Clear the cache for the specific collection that was modified
             await localSettings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collectionId)
             await localSettings.updateCacheSizes()
-            PagedDetailView.logger.info("Favorite toggled successfully for item \(itemId). Global state updated. Cache for collection \(collectionId) cleared.")
+            PagedDetailView.logger.info("Favorite toggled successfully for item \(itemId) in collection \(collectionId). Global state updated. Cache for collection \(collectionId) cleared.")
         } catch {
-            PagedDetailView.logger.error("Failed to toggle favorite for item \(itemId): \(error.localizedDescription)")
-            localFavoritedStatus.removeValue(forKey: itemId)
+            PagedDetailView.logger.error("Failed to toggle favorite for item \(itemId) in collection \(collectionId): \(error.localizedDescription)")
+            localFavoritedStatus.removeValue(forKey: itemId) // Revert optimistic update
             if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
                  PagedDetailView.logger.warning("Favorite toggle failed due to auth error. Logging out.")
                  await authService.logout()
@@ -651,6 +661,7 @@ struct PagedDetailView: View {
         }
         isTogglingFavorite = false
     }
+    // --- END MODIFICATION ---
 
     private func toggleCollapse(commentID: Int) {
         if collapsedCommentIDs.contains(commentID) {
@@ -786,7 +797,7 @@ struct LinkedItemPreviewWrapperView: View {
             previewAuthService.isLoggedIn = true
             previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
             previewAuthService.userNonce = "preview_nonce_12345"
-            previewSettings.selectedCollectionIdForFavorites = 6749
+            previewSettings.selectedCollectionIdForFavorites = 6749 // Example collection ID
             previewAuthService.favoritedItemIDs = [2]
             previewAuthService.votedItemStates = [1: 1, 3: -1]
             previewPlayerManager.configure(settings: tempSettings)
