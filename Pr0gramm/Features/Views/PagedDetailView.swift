@@ -12,12 +12,22 @@ struct FullscreenImageTarget: Identifiable, Equatable {
     static func == (lhs: FullscreenImageTarget, rhs: FullscreenImageTarget) -> Bool { lhs.item.id == rhs.item.id }
 }
 
-// --- NEW: Target for User Profile Sheet ---
 struct UserProfileSheetTarget: Identifiable, Equatable {
     let username: String
     var id: String { username }
 }
-// --- END NEW ---
+
+// --- MODIFIED: Add Equatable conformance ---
+struct CollectionSelectionSheetTarget: Identifiable, Equatable {
+    let id = UUID() // Unique ID for the sheet presentation itself
+    let item: Item // The item to be added to a collection
+
+    static func == (lhs: CollectionSelectionSheetTarget, rhs: CollectionSelectionSheetTarget) -> Bool {
+        lhs.id == rhs.id && lhs.item.id == rhs.item.id // Compare by id and item.id for robustness
+    }
+}
+// --- END MODIFICATION ---
+
 
 struct CachedItemDetails {
     let info: ItemsInfoResponse
@@ -34,70 +44,76 @@ struct ReplyTarget: Identifiable {
 
 @MainActor
 struct PagedDetailTabViewItem: View {
-    let item: Item
+    struct DataModel {
+        let item: Item
+        let visibleFlatComments: [FlatCommentDisplayItem]
+        let totalCommentCount: Int
+        let displayedTags: [ItemTag]
+        let totalTagCount: Int
+        let showingAllTags: Bool
+        let infoLoadingStatus: InfoLoadingStatus
+        let currentSubtitleText: String?
+        let isFavorited: Bool
+        let currentVote: Int
+        let collapsedCommentIDs: Set<Int>
+    }
+
+    let dataModel: DataModel
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
     @ObservedObject var playerManager: VideoPlayerManager
 
-    let visibleFlatComments: [FlatCommentDisplayItem]
-    let totalCommentCount: Int
-    let displayedTags: [ItemTag]
-    let totalTagCount: Int
-    let showingAllTags: Bool
-    let infoLoadingStatus: InfoLoadingStatus
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
-    @Binding var previewLinkTarget: PreviewLinkTarget?
-    // --- NEW: Pass binding for user profile sheet target ---
-    @Binding var userProfileSheetTarget: UserProfileSheetTarget?
-    // --- END NEW ---
-    @Binding var fullscreenImageTarget: FullscreenImageTarget?
-    let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
+    let showCollectionSelectionAction: () -> Void
     let showAllTagsAction: () -> Void
-    let collapsedCommentIDs: Set<Int>
     let toggleCollapseAction: (Int) -> Void
-    let currentVote: Int
     let upvoteAction: () -> Void
     let downvoteAction: () -> Void
     let showCommentInputAction: (Int, Int) -> Void
 
-    @EnvironmentObject private var settings: AppSettings
+    @Binding var previewLinkTarget: PreviewLinkTarget?
+    @Binding var userProfileSheetTarget: UserProfileSheetTarget?
+    @Binding var fullscreenImageTarget: FullscreenImageTarget?
 
     private func isCommentCollapsed(_ commentID: Int) -> Bool {
-        collapsedCommentIDs.contains(commentID)
+        dataModel.collapsedCommentIDs.contains(commentID)
     }
 
     var body: some View {
         DetailViewContent(
-            item: item,
+            item: dataModel.item,
             keyboardActionHandler: keyboardActionHandler,
             playerManager: playerManager,
-            currentSubtitleText: (playerManager.playerItemID == item.id) ? playerManager.currentSubtitleText : nil,
+            currentSubtitleText: dataModel.currentSubtitleText,
             onWillBeginFullScreen: onWillBeginFullScreen,
             onWillEndFullScreen: onWillEndFullScreen,
-            displayedTags: displayedTags, totalTagCount: totalTagCount, showingAllTags: showingAllTags,
-            flatComments: visibleFlatComments,
-            totalCommentCount: totalCommentCount,
-            infoLoadingStatus: infoLoadingStatus,
+            displayedTags: dataModel.displayedTags,
+            totalTagCount: dataModel.totalTagCount,
+            showingAllTags: dataModel.showingAllTags,
+            flatComments: dataModel.visibleFlatComments,
+            totalCommentCount: dataModel.totalCommentCount,
+            infoLoadingStatus: dataModel.infoLoadingStatus,
             previewLinkTarget: $previewLinkTarget,
-            userProfileSheetTarget: $userProfileSheetTarget, // Pass it down
+            userProfileSheetTarget: $userProfileSheetTarget,
             fullscreenImageTarget: $fullscreenImageTarget,
-            isFavorited: isFavorited,
+            isFavorited: dataModel.isFavorited,
             toggleFavoriteAction: toggleFavoriteAction,
+            showCollectionSelectionAction: showCollectionSelectionAction,
             showAllTagsAction: showAllTagsAction,
             isCommentCollapsed: isCommentCollapsed,
             toggleCollapseAction: toggleCollapseAction,
-            currentVote: currentVote,
+            currentVote: dataModel.currentVote,
             upvoteAction: upvoteAction,
             downvoteAction: downvoteAction,
             showCommentInputAction: showCommentInputAction
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-             PagedDetailView.logger.trace("PagedDetailTabViewItem appeared for item \(item.id)")
+             PagedDetailView.logger.trace("PagedDetailTabViewItem appeared for item \(dataModel.item.id)")
         }
          .overlay(alignment: .top) {
-             if let subtitleError = playerManager.subtitleError, playerManager.playerItemID == item.id {
+             if let subtitleError = playerManager.subtitleError, playerManager.playerItemID == dataModel.item.id {
                  Text("Untertitel: \(subtitleError)")
                      .font(.caption)
                      .foregroundColor(.orange)
@@ -107,7 +123,7 @@ struct PagedDetailTabViewItem: View {
                      .transition(.opacity.combined(with: .move(edge: .top)))
                      .padding(.top, 5)
                      .onAppear {
-                         PagedDetailView.logger.warning("Subtitle error displayed for item \(item.id): \(subtitleError)")
+                         PagedDetailView.logger.warning("Subtitle error displayed for item \(dataModel.item.id): \(subtitleError)")
                      }
              }
          }
@@ -134,11 +150,10 @@ struct PagedDetailView: View {
     private let apiService = APIService()
 
     @State private var previewLinkTarget: PreviewLinkTarget? = nil
-    // --- NEW: State for UserProfileSheet and tracking player state ---
     @State private var userProfileSheetTarget: UserProfileSheetTarget? = nil
-    @State private var wasPlayingBeforeAnySheet: Bool = false // Generic for any sheet
-    // --- END NEW ---
+    @State private var wasPlayingBeforeAnySheet: Bool = false
     @State private var fullscreenImageTarget: FullscreenImageTarget? = nil
+    @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
 
     @State private var isTogglingFavorite = false
     @State private var localFavoritedStatus: [Int: Bool] = [:]
@@ -164,9 +179,8 @@ struct PagedDetailView: View {
     }
 
     var body: some View {
-        Group { tabViewContent }
+        tabViewContent // Removed AnyView wrapping, rely on @ViewBuilder for tabViewContent
         .background(KeyCommandView(handler: keyboardActionHandler))
-        // --- MODIFIED: Unified sheet handling for player pause/resume ---
         .sheet(item: $previewLinkTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
              LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
                  .environmentObject(settings).environmentObject(authService)
@@ -179,8 +193,20 @@ struct PagedDetailView: View {
         .sheet(item: $fullscreenImageTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
              FullscreenImageView(item: targetWrapper.item)
         }
-        // --- END MODIFICATION ---
-        .sheet(item: $commentReplyTarget) { target in // Comment input doesn't need player pause
+        .sheet(item: $collectionSelectionSheetTarget, onDismiss: resumePlayerIfNeeded) { target in
+            CollectionSelectionView(
+                item: target.item,
+                onCollectionSelected: { selectedCollection in
+                    Task {
+                        await addCurrentItemToSelectedCollection(collection: selectedCollection)
+                    }
+                }
+            )
+            .environmentObject(authService)
+            .environmentObject(settings)
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(item: $commentReplyTarget) { target in
             CommentInputView(
                 itemId: target.itemId,
                 parentId: target.parentId,
@@ -190,7 +216,6 @@ struct PagedDetailView: View {
             )
              .presentationDetents([.medium, .large])
         }
-        // --- MODIFIED: onChange handlers for pausing player ---
         .onChange(of: previewLinkTarget) { _, newValue in
             if newValue != nil { pausePlayerForSheet() }
         }
@@ -200,13 +225,15 @@ struct PagedDetailView: View {
         .onChange(of: fullscreenImageTarget) { _, newValue in
             if newValue != nil { pausePlayerForSheet() }
         }
-        // --- END MODIFICATION ---
+        .onChange(of: collectionSelectionSheetTarget) { _, newValue in
+            // This onChange now works because CollectionSelectionSheetTarget is Equatable
+            if newValue != nil { pausePlayerForSheet() }
+        }
         .onChange(of: horizontalSizeClass) { oldValue, newValue in
             PagedDetailView.logger.error("!!! HORIZONTAL SIZE CLASS CHANGED in PagedDetailView from \(String(describing: oldValue)) to \(String(describing: newValue)) !!!")
         }
     }
     
-    // --- NEW: Helper functions for player pause/resume with sheets ---
     private func pausePlayerForSheet() {
         if playerManager.player?.timeControlStatus == .playing {
             wasPlayingBeforeAnySheet = true
@@ -219,7 +246,6 @@ struct PagedDetailView: View {
 
     private func resumePlayerIfNeeded() {
         if wasPlayingBeforeAnySheet {
-            // Check if current item is still a video and player is for this item
             if selectedIndex >= 0 && selectedIndex < items.count && items[selectedIndex].isVideo && items[selectedIndex].id == playerManager.playerItemID {
                 playerManager.player?.play()
                 PagedDetailView.logger.debug("Player resumed after sheet dismissed.")
@@ -229,13 +255,20 @@ struct PagedDetailView: View {
         }
         wasPlayingBeforeAnySheet = false
     }
-    // --- END NEW ---
+    
+    private var tabViewPages: some View {
+        ForEach(items.indices, id: \.self) { index in
+             tabViewPage(for: index)
+                .tag(index) // Apply tag here, directly to the content of ForEach
+        }
+    }
 
+    // --- MODIFIED: Use @ViewBuilder for tabViewContent ---
+    @ViewBuilder
     private var tabViewContent: some View {
+    // --- END MODIFICATION ---
         TabView(selection: $selectedIndex) {
-            ForEach(items.indices, id: \.self) { index in
-                 tabViewPage(for: index)
-            }
+            tabViewPages
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         #if os(iOS)
@@ -268,55 +301,11 @@ struct PagedDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private func tabViewPage(for index: Int) -> some View {
-        if index >= 0 && index < items.count {
-            let currentItem = items[index]
-            let pageData = preparePageData(for: index)
-            let currentVote = authService.votedItemStates[currentItem.id] ?? 0
-            let calculatedIsFavorited = localFavoritedStatus[currentItem.id]
-                ?? authService.favoritedItemIDs.contains(currentItem.id)
-
-            if let data = pageData {
-                 PagedDetailTabViewItem(
-                     item: items[index],
-                     keyboardActionHandler: keyboardActionHandler,
-                     playerManager: playerManager,
-                     visibleFlatComments: data.visibleFlatComments,
-                     totalCommentCount: data.totalCommentCount,
-                     displayedTags: data.displayedTags,
-                     totalTagCount: data.totalTagCount,
-                     showingAllTags: data.showingAllTags,
-                     infoLoadingStatus: data.status,
-                     onWillBeginFullScreen: { self.isFullscreen = true },
-                     onWillEndFullScreen: handleEndFullScreen,
-                     previewLinkTarget: $previewLinkTarget,
-                     userProfileSheetTarget: $userProfileSheetTarget, // Pass binding
-                     fullscreenImageTarget: $fullscreenImageTarget,
-                     isFavorited: calculatedIsFavorited,
-                     toggleFavoriteAction: toggleFavorite,
-                     showAllTagsAction: { showAllTagsForItem.insert(currentItem.id) },
-                     collapsedCommentIDs: collapsedCommentIDs,
-                     toggleCollapseAction: toggleCollapse,
-                     currentVote: currentVote,
-                     upvoteAction: { Task { await handleVoteTap(voteType: 1) } },
-                     downvoteAction: { Task { await handleVoteTap(voteType: -1) } },
-                     showCommentInputAction: { itemId, parentId in
-                         self.commentReplyTarget = ReplyTarget(itemId: itemId, parentId: parentId)
-                         PagedDetailView.logger.debug("Setting comment reply target: itemId=\(itemId), parentId=\(parentId)")
-                     }
-                 )
-                 .tag(index)
-            } else {
-                EmptyView().tag(index).onAppear { PagedDetailView.logger.warning("preparePageData returned nil for index \(index).") }
-            }
-        } else {
-             EmptyView().tag(index).onAppear { PagedDetailView.logger.error("Attempted to render tabViewPage for invalid index \(index) (items.count: \(items.count)).") }
+    private func preparePageData(for index: Int) -> PagedDetailTabViewItem.DataModel? {
+        guard index >= 0 && index < items.count else {
+            PagedDetailView.logger.warning("preparePageData: index \(index) out of bounds (items.count: \(items.count)).")
+            return nil
         }
-    }
-
-    private func preparePageData(for index: Int) -> ( currentItem: Item, status: InfoLoadingStatus, visibleFlatComments: [FlatCommentDisplayItem], totalCommentCount: Int, displayedTags: [ItemTag], totalTagCount: Int, showingAllTags: Bool )? {
-        guard index >= 0 && index < items.count else { PagedDetailView.logger.warning("preparePageData: index \(index) out of bounds (items.count: \(items.count))."); return nil }
         let currentItem = items[index]
         let itemId = currentItem.id
         let statusForItem = infoLoadingStatus[itemId] ?? .idle
@@ -328,15 +317,68 @@ struct PagedDetailView: View {
             finalTotalCommentCount = cached.totalCommentCount
             finalSortedTags = cached.info.tags
         } else if statusForItem == .loaded {
-             PagedDetailView.logger.warning("preparePageData: Status loaded for \(itemId), no cached details.")
+            PagedDetailView.logger.warning("preparePageData: Status loaded for item \(itemId), but no cached details found.")
         }
 
         let totalTagCount = finalSortedTags.count
         let shouldShowAll = showAllTagsForItem.contains(itemId)
         let tagsToDisplay = shouldShowAll ? finalSortedTags : Array(finalSortedTags.prefix(4))
+        
+        let currentVoteState = authService.votedItemStates[itemId] ?? 0
+        let isCurrentlyFavorited = localFavoritedStatus[itemId] ?? authService.favoritedItemIDs.contains(itemId)
+        let currentSubText = (playerManager.playerItemID == itemId) ? playerManager.currentSubtitleText : nil
 
-        return (currentItem, statusForItem, visibleComments, finalTotalCommentCount, tagsToDisplay, totalTagCount, shouldShowAll)
+
+        return PagedDetailTabViewItem.DataModel(
+            item: currentItem,
+            visibleFlatComments: visibleComments,
+            totalCommentCount: finalTotalCommentCount,
+            displayedTags: tagsToDisplay,
+            totalTagCount: totalTagCount,
+            showingAllTags: shouldShowAll,
+            infoLoadingStatus: statusForItem,
+            currentSubtitleText: currentSubText,
+            isFavorited: isCurrentlyFavorited,
+            currentVote: currentVoteState,
+            collapsedCommentIDs: collapsedCommentIDs
+        )
     }
+
+    @ViewBuilder
+    private func tabViewPage(for index: Int) -> some View {
+        if let dataModel = preparePageData(for: index) {
+            PagedDetailTabViewItem(
+                 dataModel: dataModel,
+                 keyboardActionHandler: keyboardActionHandler,
+                 playerManager: playerManager,
+                 onWillBeginFullScreen: { self.isFullscreen = true },
+                 onWillEndFullScreen: handleEndFullScreen,
+                 toggleFavoriteAction: toggleFavorite,
+                 showCollectionSelectionAction: {
+                     guard self.selectedIndex >= 0 && self.selectedIndex < self.items.count else { return }
+                     let itemForSheet = self.items[self.selectedIndex]
+                     self.collectionSelectionSheetTarget = CollectionSelectionSheetTarget(item: itemForSheet)
+                 },
+                 showAllTagsAction: { showAllTagsForItem.insert(dataModel.item.id) },
+                 toggleCollapseAction: toggleCollapse,
+                 upvoteAction: { Task { await handleVoteTap(voteType: 1) } },
+                 downvoteAction: { Task { await handleVoteTap(voteType: -1) } },
+                 showCommentInputAction: { itemId, parentId in
+                     self.commentReplyTarget = ReplyTarget(itemId: itemId, parentId: parentId)
+                     PagedDetailView.logger.debug("Setting comment reply target: itemId=\(itemId), parentId=\(parentId)")
+                 },
+                 previewLinkTarget: $previewLinkTarget,
+                 userProfileSheetTarget: $userProfileSheetTarget,
+                 fullscreenImageTarget: $fullscreenImageTarget
+             )
+        } else {
+            EmptyView()
+                .onAppear {
+                    PagedDetailView.logger.error("Attempted to render tabViewPage for invalid index \(index) or preparePageData failed.")
+                }
+        }
+    }
+
 
     private func loadInfoIfNeededAndPrepareHierarchy(for item: Item) async {
          let itemId = item.id
@@ -538,7 +580,7 @@ struct PagedDetailView: View {
               if let player = playerManager.player, player.isMuted != settings.isVideoMuted { player.isMuted = settings.isVideoMuted }
                if isFullscreen, let player = playerManager.player, player.timeControlStatus != .playing { player.play() }
           } else if newPhase == .inactive || newPhase == .background {
-              if (!isFullscreen && previewLinkTarget == nil && userProfileSheetTarget == nil), let player = playerManager.player, player.timeControlStatus == .playing { // Check all sheets
+              if (!isFullscreen && previewLinkTarget == nil && userProfileSheetTarget == nil && collectionSelectionSheetTarget == nil), let player = playerManager.player, player.timeControlStatus == .playing {
                   PagedDetailView.logger.debug("Scene became inactive/background. Pausing player (not fullscreen, no sheets active).")
                   player.pause()
               } else {
@@ -572,7 +614,7 @@ struct PagedDetailView: View {
              items[selectedIndex].id == playerManager.playerItemID {
               Task { @MainActor in
                   try? await Task.sleep(for: .milliseconds(100))
-                  if !self.isFullscreen && self.previewLinkTarget == nil && self.userProfileSheetTarget == nil && self.playerManager.player?.timeControlStatus != .playing { // Check all sheets
+                  if !self.isFullscreen && self.previewLinkTarget == nil && self.userProfileSheetTarget == nil && self.collectionSelectionSheetTarget == nil && self.playerManager.player?.timeControlStatus != .playing {
                       PagedDetailView.logger.debug("Resuming player after ending fullscreen (no sheets active).")
                       self.playerManager.player?.play()
                   } else {
@@ -610,16 +652,15 @@ struct PagedDetailView: View {
         }
     }
 
-    // --- MODIFIED: toggleFavorite now uses selectedCollectionIdForFavorites ---
     private func toggleFavorite() async {
-        let localSettings = self.settings // Capture for stable access within async context
+        let localSettings = self.settings
         guard !isTogglingFavorite else { PagedDetailView.logger.debug("Favorite toggle skipped: Already processing."); return }
         guard selectedIndex >= 0 && selectedIndex < items.count else { PagedDetailView.logger.warning("Favorite toggle skipped: Invalid selectedIndex \(selectedIndex)."); return }
         let currentItem = items[selectedIndex]
 
         guard authService.isLoggedIn,
               let nonce = authService.userNonce,
-              let collectionId = localSettings.selectedCollectionIdForFavorites else { // Use captured localSettings
+              let collectionId = localSettings.selectedCollectionIdForFavorites else {
             PagedDetailView.logger.warning("Favorite toggle skipped: User not logged in, nonce missing, or no favorite collection selected in AppSettings.");
             return
         }
@@ -635,11 +676,9 @@ struct PagedDetailView: View {
 
         do {
             if targetFavoriteState {
-                // Pass the selected collectionId
                 try await apiService.addToCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
                 PagedDetailView.logger.info("Added item \(itemId) to collection \(collectionId) via API.")
             } else {
-                // Remove also needs the collectionId from which to remove
                 try await apiService.removeFromCollection(itemId: itemId, collectionId: collectionId, nonce: nonce)
                 PagedDetailView.logger.info("Removed item \(itemId) from collection \(collectionId) via API.")
             }
@@ -647,13 +686,12 @@ struct PagedDetailView: View {
             if targetFavoriteState { authService.favoritedItemIDs.insert(itemId) }
             else { authService.favoritedItemIDs.remove(itemId) }
 
-            // Clear the cache for the specific collection that was modified
             await localSettings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collectionId)
             await localSettings.updateCacheSizes()
             PagedDetailView.logger.info("Favorite toggled successfully for item \(itemId) in collection \(collectionId). Global state updated. Cache for collection \(collectionId) cleared.")
         } catch {
             PagedDetailView.logger.error("Failed to toggle favorite for item \(itemId) in collection \(collectionId): \(error.localizedDescription)")
-            localFavoritedStatus.removeValue(forKey: itemId) // Revert optimistic update
+            localFavoritedStatus.removeValue(forKey: itemId)
             if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
                  PagedDetailView.logger.warning("Favorite toggle failed due to auth error. Logging out.")
                  await authService.logout()
@@ -661,7 +699,55 @@ struct PagedDetailView: View {
         }
         isTogglingFavorite = false
     }
-    // --- END MODIFICATION ---
+
+    private func addCurrentItemToSelectedCollection(collection: ApiCollection) async {
+        guard !isTogglingFavorite else {
+            PagedDetailView.logger.debug("Add to collection '\(collection.name)' skipped: Favorite toggle already processing.")
+            return
+        }
+        guard selectedIndex >= 0 && selectedIndex < items.count else {
+            PagedDetailView.logger.warning("Add to collection '\(collection.name)' skipped: Invalid selectedIndex \(selectedIndex).")
+            return
+        }
+        let currentItem = items[selectedIndex]
+        let itemId = currentItem.id
+
+        guard authService.isLoggedIn, let nonce = authService.userNonce else {
+            PagedDetailView.logger.warning("Add to collection '\(collection.name)' skipped: User not logged in or nonce missing.")
+            return
+        }
+
+        isTogglingFavorite = true
+
+        if collection.id == settings.selectedCollectionIdForFavorites {
+            localFavoritedStatus[itemId] = true
+        }
+
+        do {
+            try await apiService.addToCollection(itemId: itemId, collectionId: collection.id, nonce: nonce)
+            PagedDetailView.logger.info("Successfully added item \(itemId) to collection '\(collection.name)' (ID: \(collection.id)) via API.")
+
+            if collection.id == settings.selectedCollectionIdForFavorites {
+                authService.favoritedItemIDs.insert(itemId)
+            }
+
+            await settings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collection.id)
+            await settings.updateCacheSizes()
+            PagedDetailView.logger.info("Cache for collection '\(collection.name)' (ID: \(collection.id)) cleared.")
+
+        } catch {
+            PagedDetailView.logger.error("Failed to add item \(itemId) to collection '\(collection.name)' (ID: \(collection.id)): \(error.localizedDescription)")
+            if collection.id == settings.selectedCollectionIdForFavorites {
+                localFavoritedStatus.removeValue(forKey: itemId)
+            }
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                 PagedDetailView.logger.warning("Add to collection failed due to auth error. Logging out.")
+                 await authService.logout()
+            }
+        }
+        isTogglingFavorite = false
+    }
+
 
     private func toggleCollapse(commentID: Int) {
         if collapsedCommentIDs.contains(commentID) {
@@ -677,48 +763,38 @@ struct PagedDetailView: View {
         guard selectedIndex >= 0 && selectedIndex < items.count else { return }
         let itemIndex = selectedIndex
         let itemId = items[itemIndex].id
-        let initialVoteState = authService.votedItemStates[itemId] ?? 0
-        let initialUp = items[itemIndex].up
-        let initialDown = items[itemIndex].down
-
+        
+        let previousVoteStateForRevert = authService.votedItemStates[itemId] ?? 0
+        
         await authService.performVote(itemId: itemId, voteType: voteType)
 
         guard selectedIndex == itemIndex, selectedIndex < items.count else {
-             PagedDetailView.logger.warning("Could not update local item score for \(itemId): selectedIndex changed during vote or index out of bounds.")
+             PagedDetailView.logger.warning("Could not update local item score for \(itemId): selectedIndex changed or index out of bounds.")
              return
         }
+
         let newVoteState = authService.votedItemStates[itemId] ?? 0
 
-        if initialVoteState != newVoteState {
-            var deltaUp = 0; var deltaDown = 0
-            switch (initialVoteState, newVoteState) {
-                case (0, 1): deltaUp = 1
-                case (-1, 1): deltaUp = 1; deltaDown = -1
-                case (1, 0): deltaUp = -1
-                case (0, -1): deltaDown = 1
-                case (1, -1): deltaUp = -1; deltaDown = 1
-                case (-1, 0): deltaDown = -1
-                default: PagedDetailView.logger.warning("Unexpected vote state transition: \(initialVoteState) -> \(newVoteState) for item \(itemId)")
-            }
+        if previousVoteStateForRevert != newVoteState {
+            var deltaUp = 0
+            var deltaDown = 0
+            
+            if newVoteState == 1 && previousVoteStateForRevert == 0 { deltaUp = 1 }
+            else if newVoteState == 1 && previousVoteStateForRevert == -1 { deltaUp = 1; deltaDown = -1 }
+            else if newVoteState == 0 && previousVoteStateForRevert == 1 { deltaUp = -1 }
+            else if newVoteState == 0 && previousVoteStateForRevert == -1 { deltaDown = -1 }
+            else if newVoteState == -1 && previousVoteStateForRevert == 0 { deltaDown = 1 }
+            else if newVoteState == -1 && previousVoteStateForRevert == 1 { deltaUp = -1; deltaDown = 1 }
+
             if itemIndex < items.count {
                 var mutableItem = items[itemIndex]
                 mutableItem.up += deltaUp
                 mutableItem.down += deltaDown
                 items[itemIndex] = mutableItem
-                PagedDetailView.logger.info("Updated local item \(itemId) score: deltaUp=\(deltaUp), deltaDown=\(deltaDown). New counts: up=\(items[itemIndex].up), down=\(items[itemIndex].down)")
+                PagedDetailView.logger.info("Updated local item \(itemId) score based on final vote state: deltaUp=\(deltaUp), deltaDown=\(deltaDown). New counts: up=\(items[itemIndex].up), down=\(items[itemIndex].down)")
             }
         } else {
-             PagedDetailView.logger.info("Vote state for item \(itemId) did not change after handleVoteTap (API might have failed or state already correct). No local score update needed.")
-             let finalVoteStateInAuth = authService.votedItemStates[itemId] ?? 0
-             if finalVoteStateInAuth == initialVoteState && itemIndex < items.count {
-                 if items[itemIndex].up != initialUp || items[itemIndex].down != initialDown {
-                     PagedDetailView.logger.warning("Reverting local item counts for \(itemId) due to API failure and vote state rollback.")
-                     var mutableItem = items[itemIndex]
-                     mutableItem.up = initialUp
-                     mutableItem.down = initialDown
-                     items[itemIndex] = mutableItem
-                 }
-             }
+            PagedDetailView.logger.info("Vote state for item \(itemId) did not effectively change after API call and potential revert. No local score update needed.")
         }
     }
 
@@ -792,12 +868,20 @@ struct LinkedItemPreviewWrapperView: View {
         init() {
             let tempSettings = AppSettings()
             _previewSettings = StateObject(wrappedValue: tempSettings)
-            _previewAuthService = StateObject(wrappedValue: AuthService(appSettings: tempSettings))
+            let tempAuthService = AuthService(appSettings: tempSettings)
+            _previewAuthService = StateObject(wrappedValue: tempAuthService)
             
             previewAuthService.isLoggedIn = true
-            previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
+            let collections = [
+                ApiCollection(id: 6749, name: "Standard", keyword: "standard", isPublic: 0, isDefault: 1, itemCount: 10),
+                ApiCollection(id: 6750, name: "Lustig", keyword: "lustig", isPublic: 0, isDefault: 0, itemCount: 5)
+            ]
+            previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [], collections: collections)
+            #if DEBUG
+            previewAuthService.setUserCollectionsForPreview(collections)
+            #endif
             previewAuthService.userNonce = "preview_nonce_12345"
-            previewSettings.selectedCollectionIdForFavorites = 6749 // Example collection ID
+            tempSettings.selectedCollectionIdForFavorites = 6749
             previewAuthService.favoritedItemIDs = [2]
             previewAuthService.votedItemStates = [1: 1, 3: -1]
             previewPlayerManager.configure(settings: tempSettings)

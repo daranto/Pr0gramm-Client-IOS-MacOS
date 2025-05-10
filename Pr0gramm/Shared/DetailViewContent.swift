@@ -58,6 +58,9 @@ struct DetailViewContent: View {
     @Binding var fullscreenImageTarget: FullscreenImageTarget?
     let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
+    // --- NEW: Action for long press on favorite button ---
+    let showCollectionSelectionAction: () -> Void
+    // --- END NEW ---
     let showAllTagsAction: () -> Void
 
     let isCommentCollapsed: (Int) -> Bool
@@ -77,7 +80,6 @@ struct DetailViewContent: View {
     @State private var isProcessingFavorite = false
     @State private var showingShareOptions = false
 
-    // MARK: - Computed View Properties (mediaContentInternal, actionIconFont, voteCounterView, favoriteButton, shareButton, addCommentButton are Unchanged)
     @ViewBuilder private var mediaContentInternal: some View {
         ZStack(alignment: .bottom) {
             Group {
@@ -143,17 +145,34 @@ struct DetailViewContent: View {
         }
     }
 
+    // --- MODIFIED: favoriteButton with onLongPressGesture ---
     @ViewBuilder private var favoriteButton: some View {
-        Button { Task { isProcessingFavorite = true; await toggleFavoriteAction(); try? await Task.sleep(for: .milliseconds(100)); isProcessingFavorite = false } }
-        label: {
-            Image(systemName: isFavorited ? "heart.fill" : "heart")
-                .font(actionIconFont)
-                .foregroundColor(isFavorited ? .pink : .secondary)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain).disabled(isProcessingFavorite || !authService.isLoggedIn)
+        let buttonLabel = Image(systemName: isFavorited ? "heart.fill" : "heart")
+            .font(actionIconFont)
+            .foregroundColor(isFavorited ? .pink : .secondary)
+            .frame(width: 44, height: 44) // Ensure consistent tap area
+            .contentShape(Rectangle())
+
+        // Using a simple Button for the label part of the gesture
+        // The actual actions are handled by tap and long press gestures
+        buttonLabel
+            .onTapGesture {
+                // Short tap action
+                Task {
+                    isProcessingFavorite = true
+                    await toggleFavoriteAction()
+                    try? await Task.sleep(for: .milliseconds(100)) // Brief delay for UI feedback
+                    isProcessingFavorite = false
+                }
+            }
+            .onLongPressGesture(minimumDuration: 0.5) { // Long press action
+                DetailViewContent.logger.info("Long press on favorite button for item \(item.id).")
+                showCollectionSelectionAction()
+            }
+            .disabled(isProcessingFavorite || !authService.isLoggedIn)
     }
+    // --- END MODIFICATION ---
+
 
     @ViewBuilder private var shareButton: some View {
         Button { showingShareOptions = true }
@@ -183,9 +202,7 @@ struct DetailViewContent: View {
 
     @ViewBuilder private var uploaderInfoView: some View {
         HStack(spacing: 6) {
-            // --- MODIFIED: Pass showName: false ---
             UserMarkView(markValue: item.mark, showName: false)
-            // --- END MODIFICATION ---
             Text(item.user)
                 .font(UIConstants.subheadlineFont.weight(.medium))
                 .foregroundColor(.primary)
@@ -208,14 +225,13 @@ struct DetailViewContent: View {
         }
     }
 
-    // MARK: - infoAndTagsContent, TagView, commentsContent (Unchanged)
     @ViewBuilder private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 15) {
                 voteCounterView
                 Spacer()
                 if authService.isLoggedIn { addCommentButton }
-                if authService.isLoggedIn { favoriteButton }
+                if authService.isLoggedIn { favoriteButton } // Favorite button is here
                 shareButton
             }
             .frame(minHeight: 44)
@@ -266,7 +282,6 @@ struct DetailViewContent: View {
         )
     }
 
-    // MARK: - Body (Unchanged)
     var body: some View {
         Group {
             if horizontalSizeClass == .regular {
@@ -308,14 +323,12 @@ struct DetailViewContent: View {
         } message: { Text("Welchen Link möchtest du in die Zwischenablage kopieren?") }
     }
 
-    // MARK: - guessAspectRatio (Unchanged)
     private func guessAspectRatio() -> CGFloat? {
         guard item.width > 0, item.height > 0 else { return 1.0 }
         return CGFloat(item.width) / CGFloat(item.height)
     }
 }
 
-// Helper Extension (Unchanged)
 fileprivate extension UIFont {
     static func uiFont(from font: Font) -> UIFont {
         switch font {
@@ -336,7 +349,6 @@ fileprivate extension UIFont {
 }
 
 
-// MARK: - Previews (Unchanged)
 @MainActor
 struct PreviewWrapper: View {
     @State var previewLinkTarget: PreviewLinkTarget? = nil
@@ -348,20 +360,32 @@ struct PreviewWrapper: View {
     @StateObject var navService = NavigationService()
     @StateObject var playerManager = VideoPlayerManager()
     @State private var commentReplyTarget: ReplyTarget? = nil
+    // --- NEW: State for collection selection sheet in preview ---
+    @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
+    // --- END NEW ---
+
 
     let sampleItem: Item
 
     init(isLoggedIn: Bool = true) {
         let tempSettings = AppSettings()
         _settings = StateObject(wrappedValue: tempSettings)
-        let tempAuthService = AuthService(appSettings: tempSettings)
+        let tempAuthService = AuthService(appSettings: tempSettings) // Pass tempSettings
 
         tempAuthService.isLoggedIn = isLoggedIn
         if isLoggedIn {
-            tempAuthService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil)
+            let collections = [
+                ApiCollection(id: 1, name: "Standard", keyword: "standard", isPublic: 0, isDefault: 1, itemCount: 10),
+                ApiCollection(id: 2, name: "Lustig", keyword: "lustig", isPublic: 0, isDefault: 0, itemCount: 5)
+            ]
+            tempAuthService.currentUser = UserInfo(id: 99, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: nil, collections: collections)
+            #if DEBUG
+            tempAuthService.setUserCollectionsForPreview(collections)
+            #endif
+            tempAuthService.userNonce = "preview_nonce"
             tempAuthService.favoritedItemIDs = [2]
             tempAuthService.votedItemStates = [1: 1]
-            tempSettings.selectedCollectionIdForFavorites = 1234
+            tempSettings.selectedCollectionIdForFavorites = 1 // Default collection ID
         }
          _authService = StateObject(wrappedValue: tempAuthService)
          self.sampleItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, subtitles: nil, favorited: isLoggedIn ? true : false)
@@ -393,7 +417,13 @@ struct PreviewWrapper: View {
                 userProfileSheetTarget: $userProfileSheetTarget,
                 fullscreenImageTarget: $fullscreenTarget,
                 isFavorited: authService.favoritedItemIDs.contains(sampleItem.id),
-                toggleFavoriteAction: { Task { print("Preview Toggle Fav") } },
+                toggleFavoriteAction: { Task { print("Preview Toggle Fav (Standard Collection)") } },
+                // --- NEW: Action for preview ---
+                showCollectionSelectionAction: {
+                    print("Preview: Show Collection Selection Tapped")
+                    self.collectionSelectionSheetTarget = CollectionSelectionSheetTarget(item: sampleItem)
+                },
+                // --- END NEW ---
                 showAllTagsAction: {},
                 isCommentCollapsed: isCollapsed,
                 toggleCollapseAction: toggleCollapse,
@@ -408,6 +438,15 @@ struct PreviewWrapper: View {
             .sheet(item: $commentReplyTarget) { target in CommentInputView(itemId: target.itemId, parentId: target.parentId, onSubmit: { _ in }) }
             .sheet(item: $userProfileSheetTarget) { target in Text("Preview: User Profile Sheet for \(target.username)") }
             .sheet(item: $fullscreenTarget) { target in FullscreenImageView(item: target.item) }
+            // --- NEW: Sheet for collection selection preview ---
+            .sheet(item: $collectionSelectionSheetTarget) { target in
+                CollectionSelectionView(item: target.item) { selectedCollection in
+                     print("Preview: Collection '\(selectedCollection.name)' selected.")
+                }
+                .environmentObject(authService) // Pass it to the sheet
+                .environmentObject(settings)   // Pass settings as well
+            }
+            // --- END NEW ---
             .environmentObject(navService)
             .environmentObject(settings)
             .environmentObject(authService)
