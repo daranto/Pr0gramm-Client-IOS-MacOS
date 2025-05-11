@@ -233,15 +233,41 @@ class APIService {
     private let baseURL = URL(string: "https://pr0gramm.com/api")!
     private let decoder = JSONDecoder()
 
+    // --- MODIFIED: Helper for x-www-form-urlencoded encoding ---
+    private func formURLEncode(parameters: [String: String]) -> Data? {
+        let unreservedChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.~"))
+
+        let parameterArray = parameters.map { key, value -> String in
+            let encodedKey = key.addingPercentEncoding(withAllowedCharacters: unreservedChars) ?? key
+            var encodedValue = ""
+            for char in value {
+                if char == " " {
+                    encodedValue += "+"
+                } else if char.unicodeScalars.allSatisfy(unreservedChars.contains) {
+                    encodedValue.append(char)
+                } else {
+                    // Convert Character to String before calling addingPercentEncoding
+                    encodedValue += String(char).addingPercentEncoding(withAllowedCharacters: unreservedChars) ?? String(char)
+                }
+            }
+            return "\(encodedKey)=\(encodedValue)"
+        }
+        
+        let encodedParametersString = parameterArray.joined(separator: "&")
+        Self.logger.trace("Manually form-URL-encoded body: \(encodedParametersString)")
+        return encodedParametersString.data(using: .utf8) // Call .data(using:) on the final string
+    }
+    // --- END MODIFICATION ---
+
+
     func fetchItems(
         flags: Int,
         promoted: Int? = nil,
         user: String? = nil,
-        tags: String? = nil, // This will now include the score tag if needed
+        tags: String? = nil,
         olderThanId: Int? = nil,
         collectionNameForUser: String? = nil,
         isOwnCollection: Bool = false
-        // minScore parameter removed
     ) async throws -> [Item] {
         let endpoint = "/items/get"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
@@ -267,7 +293,7 @@ class APIService {
             logDescription += ", user=\(regularUser) (for uploads/feed)"
         }
 
-        if let tags = tags, !tags.isEmpty { // Check if tags string is not empty
+        if let tags = tags, !tags.isEmpty {
             queryItems.append(URLQueryItem(name: "tags", value: tags))
             logDescription += ", tags='\(tags)'"
         }
@@ -329,15 +355,48 @@ class APIService {
      }
 
     func login(credentials: LoginRequest) async throws -> LoginResponse {
-        let endpoint = "/user/login"; let url = baseURL.appendingPathComponent(endpoint); var request = URLRequest(url: url); request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type"); var components = URLComponents()
-        components.queryItems = [ URLQueryItem(name: "name", value: credentials.username), URLQueryItem(name: "password", value: credentials.password) ]
-        if let captcha = credentials.captcha, let token = credentials.token, !captcha.isEmpty, !token.isEmpty { Self.logger.info("Adding captcha and token to login request."); components.queryItems?.append(URLQueryItem(name: "captcha", value: captcha)); components.queryItems?.append(URLQueryItem(name: "token", value: token)) }
-        else { Self.logger.info("No valid captcha/token provided for login request.") }
-        request.httpBody = components.percentEncodedQuery?.data(using: .utf8); Self.logger.info("Attempting login for user: \(credentials.username)")
-        do { let (data, response) = try await URLSession.shared.data(for: request); let loginResponse: LoginResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint); if loginResponse.success { Self.logger.info("Login successful (API success:true) for user: \(credentials.username)") } else { Self.logger.warning("Login failed (API success:false) for user \(credentials.username): \(loginResponse.error ?? "Unknown API error")") }; if loginResponse.ban?.banned == true { Self.logger.warning("Login failed: User \(credentials.username) is banned.") }; return loginResponse }
-        catch { Self.logger.error("Error during \(endpoint): \(error.localizedDescription)"); throw error }
+        let endpoint = "/user/login"
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        var parameters: [String: String] = [
+            "name": credentials.username,
+            "password": credentials.password
+        ]
+
+        if let captcha = credentials.captcha, let token = credentials.token, !captcha.isEmpty, !token.isEmpty {
+            Self.logger.info("Adding captcha and token to login request parameters.")
+            parameters["captcha"] = captcha
+            parameters["token"] = token
+        } else {
+            Self.logger.info("No valid captcha/token provided for login request.")
+        }
+        
+        request.httpBody = formURLEncode(parameters: parameters)
+
+        Self.logger.info("Attempting login for user: \(credentials.username)")
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let loginResponse: LoginResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint)
+            if loginResponse.success {
+                Self.logger.info("Login successful (API success:true) for user: \(credentials.username)")
+            } else {
+                Self.logger.warning("Login failed (API success:false) for user \(credentials.username): \(loginResponse.error ?? "Unknown API error")")
+            }
+            if loginResponse.ban?.banned == true {
+                Self.logger.warning("Login failed: User \(credentials.username) is banned.")
+            }
+            return loginResponse
+        } catch {
+            Self.logger.error("Error during \(endpoint): \(error.localizedDescription)")
+            throw error
+        }
     }
+
 
     func logout() async throws {
         let endpoint = "/user/logout"; let url = baseURL.appendingPathComponent(endpoint); var request = URLRequest(url: url); request.httpMethod = "POST"; Self.logger.info("Attempting logout.")
@@ -389,13 +448,8 @@ class APIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "itemId", value: String(itemId)),
-            URLQueryItem(name: "collectionId", value: String(collectionId)),
-            URLQueryItem(name: "_nonce", value: nonce)
-        ]
-        request.httpBody = components.query?.data(using: .utf8)
+        let parameters = [ "itemId": String(itemId), "collectionId": String(collectionId), "_nonce": nonce ]
+        request.httpBody = formURLEncode(parameters: parameters)
         logRequestDetails(request, for: endpoint)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -409,7 +463,9 @@ class APIService {
 
     func removeFromCollection(itemId: Int, collectionId: Int, nonce: String) async throws {
         let endpoint = "/collections/remove"; Self.logger.info("Attempting to remove item \(itemId) from collection \(collectionId)."); let url = baseURL.appendingPathComponent(endpoint); var request = URLRequest(url: url); request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type"); var components = URLComponents(); components.queryItems = [ URLQueryItem(name: "itemId", value: String(itemId)), URLQueryItem(name: "collectionId", value: String(collectionId)), URLQueryItem(name: "_nonce", value: nonce) ]; request.httpBody = components.query?.data(using: .utf8)
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let parameters = [ "itemId": String(itemId), "collectionId": String(collectionId), "_nonce": nonce ]
+        request.httpBody = formURLEncode(parameters: parameters)
         logRequestDetails(request, for: endpoint)
         do { let (_, response) = try await URLSession.shared.data(for: request); try handleApiResponseVoid(response: response, endpoint: endpoint + " (item: \(itemId), collection: \(collectionId))"); Self.logger.info("Successfully sent remove from collection request for item \(itemId).") }
         catch { Self.logger.error("Failed to remove item \(itemId) from collection \(collectionId): \(error.localizedDescription)"); throw error }
@@ -422,13 +478,8 @@ class APIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "id", value: String(itemId)),
-            URLQueryItem(name: "vote", value: String(vote)),
-            URLQueryItem(name: "_nonce", value: nonce)
-        ]
-        request.httpBody = components.query?.data(using: .utf8)
+        let parameters = [ "id": String(itemId), "vote": String(vote), "_nonce": nonce ]
+        request.httpBody = formURLEncode(parameters: parameters)
         logRequestDetails(request, for: endpoint)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -447,13 +498,8 @@ class APIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "id", value: String(commentId)),
-            URLQueryItem(name: "vote", value: String(vote)),
-            URLQueryItem(name: "_nonce", value: nonce)
-        ]
-        request.httpBody = components.query?.data(using: .utf8)
+        let parameters = [ "id": String(commentId), "vote": String(vote), "_nonce": nonce ]
+        request.httpBody = formURLEncode(parameters: parameters)
         logRequestDetails(request, for: endpoint)
 
         do {
@@ -466,7 +512,6 @@ class APIService {
         }
     }
 
-    // --- MODIFIED: postComment with manual body encoding ---
     func postComment(itemId: Int, parentId: Int, comment: String, nonce: String) async throws -> [PostCommentResultComment] {
         let endpoint = "/comments/post"
         Self.logger.info("Attempting to post comment to item \(itemId) (parent: \(parentId)).")
@@ -475,36 +520,13 @@ class APIService {
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
-        // Manually construct and encode the body for application/x-www-form-urlencoded
         let parameters: [String: String] = [
             "itemId": String(itemId),
             "parentId": String(parentId),
-            "comment": comment, // The raw comment string
+            "comment": comment,
             "_nonce": nonce
         ]
-
-        // RFC 3986 "unreserved" characters: A-Z a-z 0-9 - _ . ~
-        // Leerzeichen wird zu '+'
-        // Andere Zeichen zu %XX
-        let unreservedChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.~"))
-
-        let encodedParameters = parameters.map { key, value -> String in
-            let encodedKey = key.addingPercentEncoding(withAllowedCharacters: unreservedChars) ?? key
-            var encodedValue = ""
-            for char in value {
-                if char == " " {
-                    encodedValue += "+"
-                } else if char.unicodeScalars.allSatisfy(unreservedChars.contains) {
-                    encodedValue.append(char)
-                } else {
-                    encodedValue += char.unicodeScalars.map { String(format: "%%%02X", $0.value) }.joined()
-                }
-            }
-            return "\(encodedKey)=\(encodedValue)"
-        }.joined(separator: "&")
-
-        request.httpBody = encodedParameters.data(using: .utf8)
-        // End of manual encoding
+        request.httpBody = formURLEncode(parameters: parameters)
 
         logRequestDetails(request, for: endpoint)
         do {
@@ -540,7 +562,6 @@ class APIService {
             throw error
         }
     }
-    // --- END MODIFICATION ---
 
     func fetchFavoritedComments(username: String, flags: Int, before: Int? = nil) async throws -> ProfileCommentLikesResponse {
         let endpoint = "/profile/commentLikes"
@@ -629,12 +650,8 @@ class APIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "id", value: String(commentId)),
-            URLQueryItem(name: "_nonce", value: nonce)
-        ]
-        request.httpBody = components.query?.data(using: .utf8)
+        let parameters = [ "id": String(commentId), "_nonce": nonce ]
+        request.httpBody = formURLEncode(parameters: parameters)
         logRequestDetails(request, for: endpoint)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -653,12 +670,8 @@ class APIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "id", value: String(commentId)),
-            URLQueryItem(name: "_nonce", value: nonce)
-        ]
-        request.httpBody = components.query?.data(using: .utf8)
+        let parameters = [ "id": String(commentId), "_nonce": nonce ]
+        request.httpBody = formURLEncode(parameters: parameters)
         logRequestDetails(request, for: endpoint)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -720,8 +733,17 @@ class APIService {
         if let headers = request.allHTTPHeaderFields, !headers.isEmpty { headers.forEach { key, value in let displayValue = (key.lowercased() == "cookie") ? "\(value.prefix(10))... (masked)" : value; Self.logger.debug("- \(key): \(displayValue)") } }
         else { Self.logger.debug("- (No Headers)") }
         Self.logger.debug("Body:")
-        if let bodyData = request.httpBody, let bodyString = String(data: bodyData, encoding: .utf8) { let maskedBody = bodyString.replacingOccurrences(of: #"password=[^&]+"#, with: "password=****", options: .regularExpression); Self.logger.debug("\(maskedBody)") }
-        else { Self.logger.debug("(No Body or Could not decode body)") }
+        if let bodyData = request.httpBody, let bodyString = String(data: bodyData, encoding: .utf8) {
+            // Mask password specifically in the logged body for login requests.
+            // Other sensitive fields (like _nonce) are generally less critical to mask in client logs.
+            var displayBody = bodyString
+            if endpoint == "/user/login" { // Only mask for login
+                 displayBody = bodyString.replacingOccurrences(of: #"password=([^&]+)"#, with: "password=****", options: .regularExpression)
+            }
+            Self.logger.debug("\(displayBody)")
+        } else {
+            Self.logger.debug("(No Body or Could not decode body)")
+        }
         Self.logger.debug("--- End Request Details ---")
     }
 }
