@@ -6,9 +6,9 @@ import AVKit
 import Combine
 import os
 import Kingfisher
-import UIKit // Für UIPasteboard
+import UIKit // Für UIPasteboard und UIImage
 
-// MARK: - DetailImageView (Unchanged)
+// MARK: - DetailImageView
 @MainActor
 struct DetailImageView: View {
     let item: Item
@@ -31,8 +31,20 @@ struct DetailImageView: View {
     }
 }
 
-// InfoLoadingStatus enum (Unchanged)
+// InfoLoadingStatus enum
 enum InfoLoadingStatus: Equatable { case idle; case loading; case loaded; case error(String) }
+
+struct ShareableItemWrapper: Identifiable {
+    let id = UUID()
+    let itemsToShare: [Any]
+    // --- NEW: Optional URL of a temporary file to be deleted after sharing ---
+    let temporaryFileUrlToDelete: URL?
+
+    init(itemsToShare: [Any], temporaryFileUrlToDelete: URL? = nil) {
+        self.itemsToShare = itemsToShare
+        self.temporaryFileUrlToDelete = temporaryFileUrlToDelete
+    }
+}
 
 
 /// The main content area for the item detail view, arranging media, info, tags, and comments.
@@ -58,9 +70,7 @@ struct DetailViewContent: View {
     @Binding var fullscreenImageTarget: FullscreenImageTarget?
     let isFavorited: Bool
     let toggleFavoriteAction: () async -> Void
-    // --- NEW: Action for long press on favorite button ---
     let showCollectionSelectionAction: () -> Void
-    // --- END NEW ---
     let showAllTagsAction: () -> Void
 
     let isCommentCollapsed: (Int) -> Bool
@@ -79,6 +89,9 @@ struct DetailViewContent: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
     @State private var isProcessingFavorite = false
     @State private var showingShareOptions = false
+    @State private var itemToShare: ShareableItemWrapper? = nil
+    @State private var isPreparingShare = false
+    @State private var sharePreparationError: String? = nil
 
     @ViewBuilder private var mediaContentInternal: some View {
         ZStack(alignment: .bottom) {
@@ -145,45 +158,47 @@ struct DetailViewContent: View {
         }
     }
 
-    // --- MODIFIED: favoriteButton with onLongPressGesture ---
     @ViewBuilder private var favoriteButton: some View {
         let buttonLabel = Image(systemName: isFavorited ? "heart.fill" : "heart")
             .font(actionIconFont)
             .foregroundColor(isFavorited ? .pink : .secondary)
-            .frame(width: 44, height: 44) // Ensure consistent tap area
+            .frame(width: 44, height: 44)
             .contentShape(Rectangle())
 
-        // Using a simple Button for the label part of the gesture
-        // The actual actions are handled by tap and long press gestures
         buttonLabel
             .onTapGesture {
-                // Short tap action
                 Task {
                     isProcessingFavorite = true
                     await toggleFavoriteAction()
-                    try? await Task.sleep(for: .milliseconds(100)) // Brief delay for UI feedback
+                    try? await Task.sleep(for: .milliseconds(100))
                     isProcessingFavorite = false
                 }
             }
-            .onLongPressGesture(minimumDuration: 0.5) { // Long press action
+            .onLongPressGesture(minimumDuration: 0.5) {
                 DetailViewContent.logger.info("Long press on favorite button for item \(item.id).")
                 showCollectionSelectionAction()
             }
             .disabled(isProcessingFavorite || !authService.isLoggedIn)
     }
-    // --- END MODIFICATION ---
 
 
     @ViewBuilder private var shareButton: some View {
-        Button { showingShareOptions = true }
+        Button { showingShareOptions = true; sharePreparationError = nil }
         label: {
-            Image(systemName: "square.and.arrow.up")
-                .font(actionIconFont)
-                .foregroundColor(.secondary)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+            if isPreparingShare {
+                ProgressView()
+                    .frame(width: 24, height: 24)
+                    .padding(10)
+            } else {
+                Image(systemName: "square.and.arrow.up")
+                    .font(actionIconFont)
+                    .foregroundColor(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
         }
         .buttonStyle(.plain)
+        .disabled(isPreparingShare)
     }
 
     @ViewBuilder private var addCommentButton: some View {
@@ -231,12 +246,19 @@ struct DetailViewContent: View {
                 voteCounterView
                 Spacer()
                 if authService.isLoggedIn { addCommentButton }
-                if authService.isLoggedIn { favoriteButton } // Favorite button is here
+                if authService.isLoggedIn { favoriteButton }
                 shareButton
             }
             .frame(minHeight: 44)
 
             uploaderInfoView
+
+            if let shareError = sharePreparationError {
+                Text("Fehler beim Vorbereiten: \(shareError)")
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .padding(.vertical, 2)
+            }
 
             Group {
                 switch infoLoadingStatus {
@@ -316,16 +338,145 @@ struct DetailViewContent: View {
         .onAppear { DetailViewContent.logger.debug("DetailViewContent for item \(item.id) appearing.") }
         .onDisappear { DetailViewContent.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
         .confirmationDialog(
-            "Link kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
+            "Teilen & Kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
         ) {
+            Button("Medium teilen/speichern") {
+                Task { await prepareAndShareMedia() }
+            }
             Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)") }
             Button("Direkter Medien-Link") { if let urlString = item.imageUrl?.absoluteString { UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)") } else { DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)") } }
-        } message: { Text("Welchen Link möchtest du in die Zwischenablage kopieren?") }
+        } message: { Text("Wähle eine Aktion:") }
+        .sheet(item: $itemToShare, onDismiss: { // --- NEW: Cleanup on dismiss ---
+            if let tempUrl = itemToShare?.temporaryFileUrlToDelete {
+                deleteTemporaryFile(at: tempUrl)
+            }
+        }) { shareableItemWrapper in
+            ShareSheet(activityItems: shareableItemWrapper.itemsToShare)
+        }
     }
 
     private func guessAspectRatio() -> CGFloat? {
         guard item.width > 0, item.height > 0 else { return 1.0 }
         return CGFloat(item.width) / CGFloat(item.height)
+    }
+
+    // --- MODIFIED: prepareAndShareMedia for Video Download ---
+    private func prepareAndShareMedia() async {
+        guard let mediaUrl = item.imageUrl else {
+            DetailViewContent.logger.error("Cannot share media: URL is nil for item \(item.id)")
+            sharePreparationError = "Medien-URL nicht verfügbar."
+            return
+        }
+
+        isPreparingShare = true
+        sharePreparationError = nil
+        var temporaryFileToDelete: URL? = nil // To store URL of downloaded video
+
+        defer {
+            isPreparingShare = false
+            // Important: Do not delete temporaryFileToDelete here.
+            // It needs to exist while the ShareSheet is presented.
+            // Deletion will be handled in the .onDismiss of the sheet.
+        }
+
+        if item.isVideo {
+            DetailViewContent.logger.info("Attempting to download video for sharing from URL: \(mediaUrl.absoluteString)")
+            do {
+                // Create a temporary file URL
+                let temporaryDirectory = FileManager.default.temporaryDirectory
+                let fileName = mediaUrl.lastPathComponent
+                let localUrl = temporaryDirectory.appendingPathComponent(fileName)
+                temporaryFileToDelete = localUrl // Store for later deletion
+
+                // Download the video file
+                let (downloadedUrl, response) = try await URLSession.shared.download(from: mediaUrl)
+                
+                guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                    DetailViewContent.logger.error("Video download failed with status code: \(statusCode)")
+                    sharePreparationError = "Video-Download fehlgeschlagen (Code: \(statusCode))."
+                    return
+                }
+                
+                // Move the downloaded file from its temporary location to our desired localUrl
+                // Ensure previous file is removed if it exists
+                if FileManager.default.fileExists(atPath: localUrl.path) {
+                    try FileManager.default.removeItem(at: localUrl)
+                }
+                try FileManager.default.moveItem(at: downloadedUrl, to: localUrl)
+
+                DetailViewContent.logger.info("Video downloaded successfully to: \(localUrl.path)")
+                itemToShare = ShareableItemWrapper(itemsToShare: [localUrl], temporaryFileUrlToDelete: localUrl)
+
+            } catch {
+                DetailViewContent.logger.error("Failed to download video for sharing (item \(item.id)): \(error.localizedDescription)")
+                sharePreparationError = "Video-Download fehlgeschlagen."
+                // Fallback to sharing the remote URL if download fails
+                itemToShare = ShareableItemWrapper(itemsToShare: [mediaUrl])
+            }
+        } else { // Image
+            DetailViewContent.logger.info("Attempting to download image for sharing from URL: \(mediaUrl.absoluteString)")
+            do {
+                let result: Result<ImageLoadingResult, KingfisherError> = await withCheckedContinuation { continuation in
+                    KingfisherManager.shared.downloader.downloadImage(with: mediaUrl, options: nil) { result in
+                        continuation.resume(returning: result)
+                    }
+                }
+                
+                switch result {
+                case .success(let imageLoadingResult):
+                    let downloadedImage = imageLoadingResult.image
+                    DetailViewContent.logger.info("Image downloaded and prepared successfully for sharing.")
+                    itemToShare = ShareableItemWrapper(itemsToShare: [downloadedImage])
+                case .failure(let error):
+                    if error.isTaskCancelled || error.isNotCurrentTask {
+                        DetailViewContent.logger.info("Image download for sharing cancelled (item \(item.id)).")
+                    } else {
+                        DetailViewContent.logger.error("Failed to download image for sharing (item \(item.id)): \(error.localizedDescription)")
+                        sharePreparationError = "Bild-Download fehlgeschlagen."
+                    }
+                }
+            }
+        }
+    }
+    // --- END MODIFICATION ---
+
+    // --- NEW: Function to delete temporary file ---
+    private func deleteTemporaryFile(at url: URL) {
+        Task(priority: .background) { // Perform deletion in background
+            do {
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
+                    DetailViewContent.logger.info("Successfully deleted temporary shared file: \(url.path)")
+                }
+            } catch {
+                DetailViewContent.logger.error("Error deleting temporary shared file \(url.path): \(error.localizedDescription)")
+            }
+        }
+    }
+    // --- END NEW ---
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    let applicationActivities: [UIActivity]? = nil
+    // --- NEW: Completion handler ---
+    var completionHandler: ((UIActivity.ActivityType?, Bool, [Any]?, Error?) -> Void)? = nil
+    // --- END NEW ---
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: applicationActivities
+        )
+        // --- NEW: Set completion handler ---
+        controller.completionWithItemsHandler = completionHandler
+        // --- END NEW ---
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+        // Nothing to update here
     }
 }
 
@@ -360,9 +511,7 @@ struct PreviewWrapper: View {
     @StateObject var navService = NavigationService()
     @StateObject var playerManager = VideoPlayerManager()
     @State private var commentReplyTarget: ReplyTarget? = nil
-    // --- NEW: State for collection selection sheet in preview ---
     @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
-    // --- END NEW ---
 
 
     let sampleItem: Item
@@ -370,7 +519,7 @@ struct PreviewWrapper: View {
     init(isLoggedIn: Bool = true) {
         let tempSettings = AppSettings()
         _settings = StateObject(wrappedValue: tempSettings)
-        let tempAuthService = AuthService(appSettings: tempSettings) // Pass tempSettings
+        let tempAuthService = AuthService(appSettings: tempSettings)
 
         tempAuthService.isLoggedIn = isLoggedIn
         if isLoggedIn {
@@ -385,7 +534,7 @@ struct PreviewWrapper: View {
             tempAuthService.userNonce = "preview_nonce"
             tempAuthService.favoritedItemIDs = [2]
             tempAuthService.votedItemStates = [1: 1]
-            tempSettings.selectedCollectionIdForFavorites = 1 // Default collection ID
+            tempSettings.selectedCollectionIdForFavorites = 1
         }
          _authService = StateObject(wrappedValue: tempAuthService)
          self.sampleItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, subtitles: nil, favorited: isLoggedIn ? true : false)
@@ -418,12 +567,10 @@ struct PreviewWrapper: View {
                 fullscreenImageTarget: $fullscreenTarget,
                 isFavorited: authService.favoritedItemIDs.contains(sampleItem.id),
                 toggleFavoriteAction: { Task { print("Preview Toggle Fav (Standard Collection)") } },
-                // --- NEW: Action for preview ---
                 showCollectionSelectionAction: {
                     print("Preview: Show Collection Selection Tapped")
                     self.collectionSelectionSheetTarget = CollectionSelectionSheetTarget(item: sampleItem)
                 },
-                // --- END NEW ---
                 showAllTagsAction: {},
                 isCommentCollapsed: isCollapsed,
                 toggleCollapseAction: toggleCollapse,
@@ -438,15 +585,13 @@ struct PreviewWrapper: View {
             .sheet(item: $commentReplyTarget) { target in CommentInputView(itemId: target.itemId, parentId: target.parentId, onSubmit: { _ in }) }
             .sheet(item: $userProfileSheetTarget) { target in Text("Preview: User Profile Sheet for \(target.username)") }
             .sheet(item: $fullscreenTarget) { target in FullscreenImageView(item: target.item) }
-            // --- NEW: Sheet for collection selection preview ---
             .sheet(item: $collectionSelectionSheetTarget) { target in
                 CollectionSelectionView(item: target.item) { selectedCollection in
                      print("Preview: Collection '\(selectedCollection.name)' selected.")
                 }
-                .environmentObject(authService) // Pass it to the sheet
-                .environmentObject(settings)   // Pass settings as well
+                .environmentObject(authService)
+                .environmentObject(settings)
             }
-            // --- END NEW ---
             .environmentObject(navService)
             .environmentObject(settings)
             .environmentObject(authService)
