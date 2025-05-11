@@ -24,6 +24,7 @@ struct FilterView: View {
         NavigationStack {
             Form {
                 // Section for Feed Type Selection and Hide Seen toggle
+                // Wird jetzt nur angezeigt, wenn hideFeedOptions = false ist (z.B. in SettingsView, nicht in FeedView oder SearchView)
                 if !hideFeedOptions {
                     Section {
                         Picker("Feed Typ", selection: $settings.feedType) {
@@ -34,8 +35,6 @@ struct FilterView: View {
                         }
                         .pickerStyle(.segmented)
 
-                        // Conditionally show the "Hide Seen" toggle
-                        // Only show if the experimental feature is enabled in AppSettings
                         if settings.enableExperimentalHideSeen {
                             Toggle("Nur Frisches anzeigen (Experimentell)", isOn: $settings.hideSeenItems)
                                 .font(UIConstants.bodyFont)
@@ -43,40 +42,45 @@ struct FilterView: View {
 
                     } header: {
                         Text("Anzeige")
-                    // --- MODIFIED: Footer now only shown if the toggle is visible ---
                     } footer: {
-                        // Only show the basic explanation if the experimental toggle is actually visible
                         if settings.enableExperimentalHideSeen {
                              Text("Blendet Posts aus, die du bereits in der Detailansicht geöffnet hast.")
                                 .font(UIConstants.footnoteFont)
                         }
-                        // No footer text is shown if the experimental feature is off
                     }
                      .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
-                    // --- END MODIFICATION ---
                 }
 
-                // Section for Content Filters (always shown if context allows, visibility depends on login)
+                // Section for Content Filters
                 if authService.isLoggedIn {
                     Section {
+                        // Toggle "Müll anzeigen" wurde entfernt, da es jetzt ein FeedType ist.
+                        // Die folgenden Toggles werden ignoriert, wenn settings.feedType == .junk ist (Logik in AppSettings.apiFlags)
                         Toggle("SFW (Safe for Work)", isOn: $settings.showSFW)
                             .font(UIConstants.bodyFont)
+                            .disabled(settings.feedType == .junk) // Deaktivieren, wenn Müll-Feed aktiv
                         Toggle("NSFW (Not Safe for Work)", isOn: $settings.showNSFW)
                             .font(UIConstants.bodyFont)
+                            .disabled(settings.feedType == .junk)
                         Toggle("NSFL (Not Safe for Life)", isOn: $settings.showNSFL)
                              .font(UIConstants.bodyFont)
+                             .disabled(settings.feedType == .junk)
                         Toggle("NSFP (Not Safe for Public)", isOn: $settings.showNSFP)
                              .font(UIConstants.bodyFont)
+                             .disabled(settings.feedType == .junk)
                         Toggle("POL (Politik)", isOn: $settings.showPOL)
                              .font(UIConstants.bodyFont)
+                             .disabled(settings.feedType == .junk)
                     } header: {
                         Text("Inhaltsfilter")
                     } footer: {
-                        Text("Achtung: Die Anzeige von NSFW/NSFL/NSFP Inhalten unterliegt den App Store Richtlinien und der Verfügbarkeit auf pr0gramm.")
+                        // --- MODIFIED: Footer angepasst ---
+                        Text(settings.feedType == .junk ? "Im 'Müll'-Feed werden nur SFW und NSFP Inhalte angezeigt. Andere Filter sind hier nicht anwendbar." : "Achtung: NSFW/NSFL/NSFP unterliegt App Store Richtlinien und Verfügbarkeit auf pr0gramm.")
+                        // --- END MODIFICATION ---
                             .font(UIConstants.footnoteFont)
                     }
                      .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
-                } else {
+                } else { // User not logged in
                      Section("Inhaltsfilter") {
                          Text("Melde dich an, um NSFW/NSFL Filter anzupassen.")
                             .font(UIConstants.bodyFont)
@@ -99,38 +103,43 @@ struct FilterView: View {
     }
 }
 
-// MARK: - Previews (Unchanged)
+// MARK: - Previews
 
-#Preview("Standard (Feed)") {
-    let previewSettings = AppSettings(); let previewAuthService = AuthService(appSettings: previewSettings); previewAuthService.isLoggedIn = true; previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: []);
-    // Default initializer, shows all options
-    return FilterView()
+#Preview("Standard (Feed) - FilterView nicht mehr direkt von hier") {
+    // Diese Preview ist weniger relevant, da FilterView aus FeedView jetzt hideFeedOptions=true hat.
+    // Die volle FilterView wird eher in den globalen Settings angezeigt.
+    let previewSettings = AppSettings()
+    let previewAuthService = AuthService(appSettings: previewSettings)
+    previewAuthService.isLoggedIn = true
+    previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
+    return FilterView(hideFeedOptions: false) // Zeigt alle Optionen für die Settings-Ansicht
         .environmentObject(previewSettings)
         .environmentObject(previewAuthService)
 }
 
-#Preview("Search Context") {
-    let previewSettings = AppSettings(); let previewAuthService = AuthService(appSettings: previewSettings); previewAuthService.isLoggedIn = true; previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: []);
-    // Initializer with hideFeedOptions = true
-    return FilterView(hideFeedOptions: true)
+#Preview("Aus Feed/Search Kontext (hideFeedOptions=true)") {
+    let previewSettings = AppSettings()
+    let previewAuthService = AuthService(appSettings: previewSettings)
+    previewAuthService.isLoggedIn = true
+    previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
+    return FilterView(hideFeedOptions: true) // So wird es aus FeedView/SearchView aufgerufen
         .environmentObject(previewSettings)
         .environmentObject(previewAuthService)
 }
 
-#Preview("Logged Out") {
-    // Default initializer, Feed options shown, Content filters hidden
-    FilterView()
+#Preview("Logged Out (hideFeedOptions=true)") {
+    FilterView(hideFeedOptions: true)
         .environmentObject(AppSettings())
         .environmentObject(AuthService(appSettings: AppSettings()))
 }
 
-#Preview("Experimental Enabled") {
+#Preview("Junk FeedType Active (hideFeedOptions=true)") {
     let previewSettings = AppSettings()
-    previewSettings.enableExperimentalHideSeen = true // Enable experimental feature for preview
+    previewSettings.feedType = .junk // Setze Junk-Feed für Preview
     let previewAuthService = AuthService(appSettings: previewSettings)
     previewAuthService.isLoggedIn = true
     previewAuthService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
-    return FilterView()
+    return FilterView(hideFeedOptions: true)
         .environmentObject(previewSettings)
         .environmentObject(previewAuthService)
 }

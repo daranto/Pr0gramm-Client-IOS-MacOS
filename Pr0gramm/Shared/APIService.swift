@@ -233,7 +233,6 @@ class APIService {
     private let baseURL = URL(string: "https://pr0gramm.com/api")!
     private let decoder = JSONDecoder()
 
-    // --- MODIFIED: Helper for x-www-form-urlencoded encoding ---
     private func formURLEncode(parameters: [String: String]) -> Data? {
         let unreservedChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.~"))
 
@@ -246,7 +245,6 @@ class APIService {
                 } else if char.unicodeScalars.allSatisfy(unreservedChars.contains) {
                     encodedValue.append(char)
                 } else {
-                    // Convert Character to String before calling addingPercentEncoding
                     encodedValue += String(char).addingPercentEncoding(withAllowedCharacters: unreservedChars) ?? String(char)
                 }
             }
@@ -255,19 +253,21 @@ class APIService {
         
         let encodedParametersString = parameterArray.joined(separator: "&")
         Self.logger.trace("Manually form-URL-encoded body: \(encodedParametersString)")
-        return encodedParametersString.data(using: .utf8) // Call .data(using:) on the final string
+        return encodedParametersString.data(using: .utf8)
     }
-    // --- END MODIFICATION ---
 
 
     func fetchItems(
         flags: Int,
-        promoted: Int? = nil,
+        promoted: Int? = nil, // Kann nil sein, wenn showJunk true ist
         user: String? = nil,
         tags: String? = nil,
         olderThanId: Int? = nil,
         collectionNameForUser: String? = nil,
-        isOwnCollection: Bool = false
+        isOwnCollection: Bool = false,
+        // --- MODIFIED: showJunk Parameter ---
+        showJunkParameter: Bool = false // Umbenannt zur Klarheit, da `flags` jetzt dynamisch ist
+        // --- END MODIFICATION ---
     ) async throws -> [Item] {
         let endpoint = "/items/get"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
@@ -275,6 +275,16 @@ class APIService {
         }
         var queryItems = [URLQueryItem(name: "flags", value: String(flags))]
         var logDescription = "flags=\(flags)"
+
+        // --- MODIFIED: Add show_junk parameter if true ---
+        if showJunkParameter { // Parameter hier verwenden
+            queryItems.append(URLQueryItem(name: "show_junk", value: "1"))
+            logDescription += ", show_junk=1"
+            // Wenn show_junk=1, wird 'promoted' ignoriert oder sollte nicht gesetzt werden.
+            // 'flags' sollte hier bereits auf 9 (oder den passenden Wert) gesetzt sein durch AppSettings.
+        }
+        // --- END MODIFICATION ---
+
 
         if let name = collectionNameForUser {
             queryItems.append(URLQueryItem(name: "collection", value: name))
@@ -297,10 +307,12 @@ class APIService {
             queryItems.append(URLQueryItem(name: "tags", value: tags))
             logDescription += ", tags='\(tags)'"
         }
-        if let promoted = promoted, collectionNameForUser == nil {
-            queryItems.append(URLQueryItem(name: "promoted", value: String(promoted)))
-            logDescription += ", promoted=\(promoted)"
+        // --- MODIFIED: 'promoted' nur wenn showJunkParameter false ist UND es sich nicht um eine Sammlung handelt ---
+        if let promotedValue = promoted, collectionNameForUser == nil, !showJunkParameter {
+            queryItems.append(URLQueryItem(name: "promoted", value: String(promotedValue)))
+            logDescription += ", promoted=\(promotedValue)"
         }
+        // --- END MODIFICATION ---
         if let olderId = olderThanId {
             queryItems.append(URLQueryItem(name: "older", value: String(olderId)))
             logDescription += ", older=\(olderId)"
@@ -325,8 +337,18 @@ class APIService {
 
     func fetchItem(id: Int, flags: Int) async throws -> Item? {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
-        let queryItems = [ URLQueryItem(name: "id", value: String(id)), URLQueryItem(name: "flags", value: String(flags)) ]; urlComponents.queryItems = queryItems
-        guard let url = urlComponents.url else { throw URLError(.badURL) }; Self.logger.debug("Fetching single item with ID \(id) and flags \(flags)"); let request = URLRequest(url: url)
+        var queryItemsList = [ URLQueryItem(name: "id", value: String(id)), URLQueryItem(name: "flags", value: String(flags)) ]
+        // --- NEW: If flags suggest junk, add show_junk ---
+        // Dies ist eine Annahme, dass `flags = 9` Junk impliziert und die API dies auch für Einzelabrufe so handhabt.
+        if flags == 9 { // Spezifischer Flag-Wert für Junk
+            queryItemsList.append(URLQueryItem(name: "show_junk", value: "1"))
+            Self.logger.debug("Fetching single item ID \(id) with flags \(flags) and show_junk=1")
+        } else {
+            Self.logger.debug("Fetching single item with ID \(id) and flags \(flags)")
+        }
+        // --- END NEW ---
+        urlComponents.queryItems = queryItemsList
+        guard let url = urlComponents.url else { throw URLError(.badURL) }; let request = URLRequest(url: url)
         do { let (data, response) = try await URLSession.shared.data(for: request); let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (single item)"); let foundItem = apiResponse.items.first; if foundItem == nil && !apiResponse.items.isEmpty { Self.logger.warning("API returned items for ID \(id), but none matched the requested ID.") } else if apiResponse.items.count > 1 { Self.logger.warning("API returned \(apiResponse.items.count) items when fetching single ID \(id).") }; return foundItem }
         catch { Self.logger.error("Error during /items/get (single item) for ID \(id): \(error.localizedDescription)"); throw error }
     }
@@ -338,13 +360,15 @@ class APIService {
             user: username,
             olderThanId: olderThanId,
             collectionNameForUser: collectionKeyword,
-            isOwnCollection: true
+            isOwnCollection: true,
+            showJunkParameter: false // Favoriten sind nie Junk
         )
     }
 
-    @available(*, deprecated, message: "Use fetchItems(tags:flags:promoted:olderThanId:) instead")
+    // searchItems (deprecated) bleibt unverändert, da es showJunk nicht berücksichtigt.
+    @available(*, deprecated, message: "Use fetchItems(tags:flags:promoted:olderThanId:showJunkParameter:) instead")
     func searchItems(tags: String, flags: Int) async throws -> [Item] {
-        return try await fetchItems(flags: flags, user: nil, tags: tags)
+        return try await fetchItems(flags: flags, user: nil, tags: tags, showJunkParameter: false)
     }
 
     func fetchItemInfo(itemId: Int) async throws -> ItemsInfoResponse {
@@ -734,10 +758,8 @@ class APIService {
         else { Self.logger.debug("- (No Headers)") }
         Self.logger.debug("Body:")
         if let bodyData = request.httpBody, let bodyString = String(data: bodyData, encoding: .utf8) {
-            // Mask password specifically in the logged body for login requests.
-            // Other sensitive fields (like _nonce) are generally less critical to mask in client logs.
             var displayBody = bodyString
-            if endpoint == "/user/login" { // Only mask for login
+            if endpoint == "/user/login" {
                  displayBody = bodyString.replacingOccurrences(of: #"password=([^&]+)"#, with: "password=****", options: .regularExpression)
             }
             Self.logger.debug("\(displayBody)")

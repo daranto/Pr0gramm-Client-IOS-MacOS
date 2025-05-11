@@ -8,14 +8,24 @@ import Kingfisher
 import CloudKit // Needed for NSUbiquitousKeyValueStore
 import SwiftUI // Needed for ColorScheme
 
-// FeedType and CommentSortOrder enums remain the same...
+// --- MODIFIED: FeedType Enum erweitert ---
 enum FeedType: Int, CaseIterable, Identifiable {
-    case new = 0, promoted = 1
+    case new = 0
+    case promoted = 1
+    case junk = 2 // Neuer Typ für Müll
+
     var id: Int { self.rawValue }
+
     var displayName: String {
-        switch self { case .new: return "Neu"; case .promoted: return "Beliebt" }
+        switch self {
+        case .new: return "Neu"
+        case .promoted: return "Beliebt"
+        case .junk: return "Müll" // Anzeigename für Müll
+        }
     }
 }
+// --- END MODIFICATION ---
+
 enum CommentSortOrder: Int, CaseIterable, Identifiable {
     case date = 0, score = 1
     var id: Int { self.rawValue }
@@ -38,7 +48,6 @@ enum SubtitleActivationMode: Int, CaseIterable, Identifiable {
     }
 }
 
-// --- NEW: Enum for Color Scheme Setting ---
 enum ColorSchemeSetting: Int, CaseIterable, Identifiable {
     case system = 0
     case light = 1
@@ -56,13 +65,12 @@ enum ColorSchemeSetting: Int, CaseIterable, Identifiable {
 
     var swiftUIScheme: ColorScheme? {
         switch self {
-        case .system: return nil // nil uses the system setting
+        case .system: return nil
         case .light: return .light
         case .dark: return .dark
         }
     }
 }
-// --- END NEW ---
 
 
 /// Manages application-wide settings, persists them to UserDefaults, and provides access to cache services.
@@ -76,33 +84,43 @@ class AppSettings: ObservableObject {
 
     // UserDefaults Keys
     private static let isVideoMutedPreferenceKey = "isVideoMutedPreference_v1"
-    private static let feedTypeKey = "feedTypePreference_v1"
+    private static let feedTypeKey = "feedTypePreference_v1" // Bleibt für Neu/Beliebt/Müll
     private static let showSFWKey = "showSFWPreference_v1"
     private static let showNSFWKey = "showNSFWPreference_v1"
     private static let showNSFLKey = "showNSFLPreference_v1"
     private static let showNSFPKey = "showNSFPPreference_v1"
     private static let showPOLKey = "showPOLPreference_v1"
+    // private static let showJunkKey = "showJunkPreference_v1" // Entfernt
     private static let maxImageCacheSizeMBKey = "maxImageCacheSizeMB_v1"
     private static let commentSortOrderKey = "commentSortOrder_v1"
     private static let hideSeenItemsKey = "hideSeenItems_v1"
     private static let enableExperimentalHideSeenKey = "enableExperimentalHideSeen_v1"
     private static let subtitleActivationModeKey = "subtitleActivationMode_v1"
     private static let selectedCollectionIdForFavoritesKey = "selectedCollectionIdForFavorites_v1"
-    // --- NEW: Key for color scheme setting ---
     private static let colorSchemeSettingKey = "colorSchemeSetting_v1"
-    // --- END NEW ---
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
     private var keyValueStoreChangeObserver: NSObjectProtocol?
 
     // MARK: - Published User Settings (Persisted via UserDefaults)
     @Published var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
-    @Published var feedType: FeedType { didSet { UserDefaults.standard.set(feedType.rawValue, forKey: Self.feedTypeKey) } }
+    // --- MODIFIED: feedType didSet Logik ---
+    @Published var feedType: FeedType {
+        didSet {
+            UserDefaults.standard.set(feedType.rawValue, forKey: Self.feedTypeKey)
+            Self.logger.info("Feed type changed to: \(self.feedType.displayName)")
+            // Wenn Junk ausgewählt wird, werden andere Inhaltsfilter irrelevant/angepasst
+            // Diese Logik ist nun in `apiFlags` und `apiShowJunk`
+        }
+    }
+    // --- END MODIFICATION ---
     @Published var showSFW: Bool { didSet { UserDefaults.standard.set(showSFW, forKey: Self.showSFWKey) } }
     @Published var showNSFW: Bool { didSet { UserDefaults.standard.set(showNSFW, forKey: Self.showNSFWKey) } }
     @Published var showNSFL: Bool { didSet { UserDefaults.standard.set(showNSFL, forKey: Self.showNSFLKey) } }
     @Published var showNSFP: Bool { didSet { UserDefaults.standard.set(showNSFP, forKey: Self.showNSFPKey) } }
     @Published var showPOL: Bool { didSet { UserDefaults.standard.set(showPOL, forKey: Self.showPOLKey) } }
+    // @Published var showJunk: Bool { ... } // Entfernt
+
     @Published var maxImageCacheSizeMB: Int {
         didSet {
             UserDefaults.standard.set(maxImageCacheSizeMB, forKey: Self.maxImageCacheSizeMBKey)
@@ -154,14 +172,12 @@ class AppSettings: ObservableObject {
             }
         }
     }
-    // --- NEW: Published property for color scheme ---
     @Published var colorSchemeSetting: ColorSchemeSetting {
         didSet {
             UserDefaults.standard.set(colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey)
             Self.logger.info("Color scheme setting changed to: \(self.colorSchemeSetting.displayName)")
         }
     }
-    // --- END NEW ---
 
 
     // MARK: - Published Session State (Not Persisted)
@@ -176,21 +192,61 @@ class AppSettings: ObservableObject {
 
     // MARK: - Computed Properties for API Usage
     var apiFlags: Int {
-        get { var flags = 0; if showSFW { flags |= 1 }; if showNSFW { flags |= 2 }; if showNSFL { flags |= 4 }; if showNSFP { flags |= 8 }; if showPOL { flags |= 16 }; return flags == 0 ? 1 : flags }
+        get {
+            if feedType == .junk {
+                // Für Müll-Feed: flags = 9 (SFW + NSFP) laut API-Beispiel.
+                // Andere Filter (showSFW etc.) sind hier irrelevant.
+                return 9
+            } else {
+                var flags = 0
+                if showSFW { flags |= 1 }
+                if showNSFW { flags |= 2 }
+                if showNSFL { flags |= 4 }
+                if showNSFP { flags |= 8 }
+                if showPOL { flags |= 16 }
+                // Wenn kein normaler Filter aktiv ist, aber auch nicht Junk, dann SFW als Default.
+                return flags == 0 ? 1 : flags
+            }
+        }
     }
-    var apiPromoted: Int { get { return feedType.rawValue } }
-    var hasActiveContentFilter: Bool { return showSFW || showNSFW || showNSFL || showNSFP || showPOL }
+
+    var apiPromoted: Int? { // Kann nil sein, wenn Junk ausgewählt ist
+        get {
+            switch feedType {
+            case .new: return 0
+            case .promoted: return 1
+            case .junk: return nil // Junk-Feed hat keinen "promoted" Status in diesem Sinne
+            }
+        }
+    }
+
+    var apiShowJunk: Bool {
+        return feedType == .junk
+    }
+
+    var hasActiveContentFilter: Bool {
+        // Wenn Junk ausgewählt ist, ist der Filter aktiv.
+        // Ansonsten, wenn einer der Standardfilter aktiv ist.
+        return feedType == .junk || showSFW || showNSFW || showNSFL || showNSFP || showPOL
+    }
 
     // MARK: - Initializer
     init() {
-        // Initialize standard settings
         self.isVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil ? true : UserDefaults.standard.bool(forKey: Self.isVideoMutedPreferenceKey)
-        self.feedType = FeedType(rawValue: UserDefaults.standard.integer(forKey: Self.feedTypeKey)) ?? .promoted
+        // --- MODIFIED: feedType Initialisierung ---
+        // Standardmäßig auf .promoted, wenn kein Wert gespeichert ist oder der gespeicherte Wert ungültig ist.
+        // .junk wird nur geladen, wenn es explizit gespeichert wurde.
+        let rawFeedType = UserDefaults.standard.integer(forKey: Self.feedTypeKey)
+        self.feedType = FeedType(rawValue: rawFeedType) ?? .promoted
+        // --- END MODIFICATION ---
+
         self.showSFW = UserDefaults.standard.object(forKey: Self.showSFWKey) == nil ? true : UserDefaults.standard.bool(forKey: Self.showSFWKey)
         self.showNSFW = UserDefaults.standard.bool(forKey: Self.showNSFWKey)
         self.showNSFL = UserDefaults.standard.bool(forKey: Self.showNSFLKey)
         self.showNSFP = UserDefaults.standard.bool(forKey: Self.showNSFPKey)
         self.showPOL = UserDefaults.standard.bool(forKey: Self.showPOLKey)
+        // showJunk wird nicht mehr separat geladen/initialisiert
+
         self.maxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) == nil ? 100 : UserDefaults.standard.integer(forKey: Self.maxImageCacheSizeMBKey)
         self.commentSortOrder = CommentSortOrder(rawValue: UserDefaults.standard.integer(forKey: Self.commentSortOrderKey)) ?? .date
 
@@ -207,29 +263,27 @@ class AppSettings: ObservableObject {
         } else {
             self.selectedCollectionIdForFavorites = nil
         }
-        // --- NEW: Initialize color scheme setting ---
         self.colorSchemeSetting = ColorSchemeSetting(rawValue: UserDefaults.standard.integer(forKey: Self.colorSchemeSettingKey)) ?? .system
-        // --- END NEW ---
 
 
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
+        Self.logger.info("- feedType: \(self.feedType.displayName)")
+        Self.logger.info("- showSFW: \(self.showSFW), showNSFW: \(self.showNSFW), showNSFL: \(self.showNSFL), showNSFP: \(self.showNSFP), showPOL: \(self.showPOL)")
+        Self.logger.info("- apiFlags computed: \(self.apiFlags), apiPromoted computed: \(String(describing: self.apiPromoted)), apiShowJunk computed: \(self.apiShowJunk)")
         Self.logger.info("- enableExperimentalHideSeen: \(self.enableExperimentalHideSeen)")
         Self.logger.info("- hideSeenItems (actual): \(self.hideSeenItems)")
         Self.logger.info("- subtitleActivationMode: \(self.subtitleActivationMode.displayName)")
         Self.logger.info("- selectedCollectionIdForFavorites: \(self.selectedCollectionIdForFavorites != nil ? String(self.selectedCollectionIdForFavorites!) : "nil")")
-        // --- NEW: Log color scheme ---
         Self.logger.info("- colorSchemeSetting: \(self.colorSchemeSetting.displayName)")
-        // --- END NEW ---
 
 
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
+        if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
         if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil && self.enableExperimentalHideSeen { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
         if UserDefaults.standard.object(forKey: Self.enableExperimentalHideSeenKey) == nil { UserDefaults.standard.set(self.enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey) }
         if UserDefaults.standard.object(forKey: Self.subtitleActivationModeKey) == nil { UserDefaults.standard.set(self.subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey) }
-        // --- NEW: Default for color scheme setting ---
         if UserDefaults.standard.object(forKey: Self.colorSchemeSettingKey) == nil { UserDefaults.standard.set(self.colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey) }
-        // --- END NEW ---
 
 
         updateKingfisherCacheLimit()
