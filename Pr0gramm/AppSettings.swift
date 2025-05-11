@@ -6,6 +6,7 @@ import Combine // Needed for observer token
 import os
 import Kingfisher
 import CloudKit // Needed for NSUbiquitousKeyValueStore
+import SwiftUI // Needed for ColorScheme
 
 // FeedType and CommentSortOrder enums remain the same...
 enum FeedType: Int, CaseIterable, Identifiable {
@@ -37,6 +38,32 @@ enum SubtitleActivationMode: Int, CaseIterable, Identifiable {
     }
 }
 
+// --- NEW: Enum for Color Scheme Setting ---
+enum ColorSchemeSetting: Int, CaseIterable, Identifiable {
+    case system = 0
+    case light = 1
+    case dark = 2
+
+    var id: Int { self.rawValue }
+
+    var displayName: String {
+        switch self {
+        case .system: return "Systemeinstellung"
+        case .light: return "Hell"
+        case .dark: return "Dunkel"
+        }
+    }
+
+    var swiftUIScheme: ColorScheme? {
+        switch self {
+        case .system: return nil // nil uses the system setting
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+// --- END NEW ---
+
 
 /// Manages application-wide settings, persists them to UserDefaults, and provides access to cache services.
 /// Also manages synchronization of 'seen' items via iCloud Key-Value Store.
@@ -60,8 +87,9 @@ class AppSettings: ObservableObject {
     private static let hideSeenItemsKey = "hideSeenItems_v1"
     private static let enableExperimentalHideSeenKey = "enableExperimentalHideSeen_v1"
     private static let subtitleActivationModeKey = "subtitleActivationMode_v1"
-    // --- NEW: Key for selected favorites collection ID ---
     private static let selectedCollectionIdForFavoritesKey = "selectedCollectionIdForFavorites_v1"
+    // --- NEW: Key for color scheme setting ---
+    private static let colorSchemeSettingKey = "colorSchemeSetting_v1"
     // --- END NEW ---
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
@@ -115,7 +143,6 @@ class AppSettings: ObservableObject {
             Self.logger.info("Subtitle activation mode changed to: \(self.subtitleActivationMode.displayName)")
         }
     }
-    // --- NEW: Setting for selected favorites collection ID ---
     @Published var selectedCollectionIdForFavorites: Int? {
         didSet {
             if let newId = selectedCollectionIdForFavorites {
@@ -125,6 +152,13 @@ class AppSettings: ObservableObject {
                 UserDefaults.standard.removeObject(forKey: Self.selectedCollectionIdForFavoritesKey)
                 Self.logger.info("Selected Collection ID for Favorites cleared (set to nil).")
             }
+        }
+    }
+    // --- NEW: Published property for color scheme ---
+    @Published var colorSchemeSetting: ColorSchemeSetting {
+        didSet {
+            UserDefaults.standard.set(colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey)
+            Self.logger.info("Color scheme setting changed to: \(self.colorSchemeSetting.displayName)")
         }
     }
     // --- END NEW ---
@@ -168,12 +202,13 @@ class AppSettings: ObservableObject {
         }
         self.subtitleActivationMode = SubtitleActivationMode(rawValue: UserDefaults.standard.integer(forKey: Self.subtitleActivationModeKey)) ?? .automatic
         
-        // --- NEW: Initialize selected favorites collection ID ---
         if UserDefaults.standard.object(forKey: Self.selectedCollectionIdForFavoritesKey) != nil {
             self.selectedCollectionIdForFavorites = UserDefaults.standard.integer(forKey: Self.selectedCollectionIdForFavoritesKey)
         } else {
-            self.selectedCollectionIdForFavorites = nil // Explicitly nil if not set
+            self.selectedCollectionIdForFavorites = nil
         }
+        // --- NEW: Initialize color scheme setting ---
+        self.colorSchemeSetting = ColorSchemeSetting(rawValue: UserDefaults.standard.integer(forKey: Self.colorSchemeSettingKey)) ?? .system
         // --- END NEW ---
 
 
@@ -182,8 +217,9 @@ class AppSettings: ObservableObject {
         Self.logger.info("- enableExperimentalHideSeen: \(self.enableExperimentalHideSeen)")
         Self.logger.info("- hideSeenItems (actual): \(self.hideSeenItems)")
         Self.logger.info("- subtitleActivationMode: \(self.subtitleActivationMode.displayName)")
-        // --- NEW: Log selected favorites collection ID ---
         Self.logger.info("- selectedCollectionIdForFavorites: \(self.selectedCollectionIdForFavorites != nil ? String(self.selectedCollectionIdForFavorites!) : "nil")")
+        // --- NEW: Log color scheme ---
+        Self.logger.info("- colorSchemeSetting: \(self.colorSchemeSetting.displayName)")
         // --- END NEW ---
 
 
@@ -191,7 +227,8 @@ class AppSettings: ObservableObject {
         if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil && self.enableExperimentalHideSeen { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
         if UserDefaults.standard.object(forKey: Self.enableExperimentalHideSeenKey) == nil { UserDefaults.standard.set(self.enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey) }
         if UserDefaults.standard.object(forKey: Self.subtitleActivationModeKey) == nil { UserDefaults.standard.set(self.subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey) }
-        // --- NEW: Default for selectedCollectionIdForFavoritesKey is NOT set here, as it depends on login data ---
+        // --- NEW: Default for color scheme setting ---
+        if UserDefaults.standard.object(forKey: Self.colorSchemeSettingKey) == nil { UserDefaults.standard.set(self.colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey) }
         // --- END NEW ---
 
 
@@ -268,7 +305,6 @@ class AppSettings: ObservableObject {
          guard !cacheKey.isEmpty else { return nil }
          return await cacheService.loadItems(forKey: cacheKey)
     }
-    // --- MODIFIED: clearFavoritesCache needs to handle dynamic cache keys ---
     func clearFavoritesCache(username: String?, collectionId: Int?) async {
         guard let user = username, let colId = collectionId else {
             Self.logger.warning("Cannot clear favorites cache: username or collectionId is nil.")
@@ -276,10 +312,9 @@ class AppSettings: ObservableObject {
         }
         let cacheKey = "favorites_\(user.lowercased())_collection_\(colId)"
         Self.logger.info("Clearing favorites data cache requested via AppSettings for key: \(cacheKey).")
-        await cacheService.clearCache(forKey: cacheKey) // Use generic clearCache
+        await cacheService.clearCache(forKey: cacheKey)
         await updateDataCacheSize()
     }
-    // --- END MODIFICATION ---
 
     // MARK: - Seen Items Management Methods
     func markItemAsSeen(id: Int) async {

@@ -2,8 +2,8 @@
 // --- START OF COMPLETE FILE ---
 
 import SwiftUI
-import AVFoundation // <-- Import ist bereits vorhanden
-import os         // <-- Import ist bereits vorhanden
+import AVFoundation
+import os
 
 /// The main entry point for the Pr0gramm SwiftUI application.
 @main
@@ -15,7 +15,7 @@ struct Pr0grammApp: App {
     /// Manages the currently selected tab and navigation requests.
     @StateObject private var navigationService = NavigationService()
 
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Pr0grammApp") // <-- Logger ist bereits vorhanden
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Pr0grammApp")
 
     init() {
         // Initialize services, ensuring AuthService has access to AppSettings
@@ -23,9 +23,7 @@ struct Pr0grammApp: App {
         _appSettings = StateObject(wrappedValue: settings)
         _authService = StateObject(wrappedValue: AuthService(appSettings: settings))
 
-        // --- Add AVAudioSession Configuration ---
         configureAudioSession()
-        // ---------------------------------------
     }
 
     var body: some Scene {
@@ -38,6 +36,9 @@ struct Pr0grammApp: App {
                     // Check if the user is already logged in when the app starts
                     await authService.checkInitialLoginStatus()
                 }
+                // --- MODIFIED: Apply preferredColorScheme dynamically ---
+                .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
+                // --- END MODIFICATION ---
         }
     }
 
@@ -57,18 +58,12 @@ struct Pr0grammApp: App {
             try audioSession.setActive(true)
             Self.logger.info("AVAudioSession activated.")
 
-            // --- NEW: Force output to built-in speaker ---
-            // This overrides the default routing (e.g., AirPlay, Bluetooth)
-            // and sends the app's audio specifically to the device speaker.
             do {
                 try audioSession.overrideOutputAudioPort(.speaker)
                 Self.logger.info("AVAudioSession output successfully overridden to force speaker.")
             } catch let error as NSError {
-                // Log specific errors, e.g., if the category doesn't support override
                 Self.logger.error("Failed to override output port to speaker: \(error.localizedDescription) (Code: \(error.code))")
-                // Consider specific error codes if necessary, e.g., cannotBeOverridden = 560161140
             }
-            // --- END NEW ---
 
             Self.logger.info("AVAudioSession configuration complete.")
 

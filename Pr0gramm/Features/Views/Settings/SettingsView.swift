@@ -17,6 +17,19 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                // --- NEW: Section for Color Scheme ---
+                Section("Darstellung") {
+                    Picker("Farbschema", selection: $settings.colorSchemeSetting) {
+                        ForEach(ColorSchemeSetting.allCases) { scheme in
+                            Text(scheme.displayName).tag(scheme)
+                                .font(UIConstants.bodyFont)
+                        }
+                    }
+                    .font(UIConstants.bodyFont)
+                }
+                .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+                // --- END NEW ---
+
                 // Section for Video & Audio Settings
                 Section {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
@@ -56,9 +69,7 @@ struct SettingsView: View {
                     Section("Favoriten-Standardordner") {
                         Picker("Als Favoriten verwenden", selection: $settings.selectedCollectionIdForFavorites) {
                             ForEach(authService.userCollections) { collection in
-                                // --- MODIFIED: Item count removed ---
                                 Text(collection.name).tag(collection.id as Int?)
-                                // --- END MODIFICATION ---
                                     .font(UIConstants.bodyFont)
                             }
                         }
@@ -99,7 +110,7 @@ struct SettingsView: View {
                 } header: {
                      Text("Anzeige-Verlauf")
                 } footer: {
-                     Text("Entfernt die Markierungen für bereits angesehene Posts. Die Bilder selbst bleiben im Cache erhalten. Die Option, gesehene Posts auszublenden, muss ggf. unter 'Experimentelle Features' aktiviert werden.")
+                     Text("Entfernt die Markierungen für bereits angesehene Bilder und Videos. Die Posts erscheinen wieder als 'neu'. Die Option, gesehene Posts auszublenden, muss ggf. unter 'Experimentelle Features' aktiviert werden.")
                         .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
