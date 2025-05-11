@@ -2,6 +2,10 @@
 
 Eine in SwiftUI geschriebene App für iOS und Mac (Apple Silicon Macs) für den Zugriff auf pr0gramm.com mit Fokus auf Performance, Bedienbarkeit und moderne Technologien.
 
+##  Installation
+
+Testflight Link: https://testflight.apple.com/join/41yj2PYp
+
 ## 📱 Features
 
 **Kernfunktionen & Browsing:**
