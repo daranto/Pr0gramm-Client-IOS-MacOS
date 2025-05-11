@@ -382,7 +382,6 @@ class APIService {
         }
     }
 
-    // --- MODIFIED: addToCollection now accepts collectionId ---
     func addToCollection(itemId: Int, collectionId: Int, nonce: String) async throws {
         let endpoint = "/collections/add"
         Self.logger.info("Attempting to add item \(itemId) to collection \(collectionId).")
@@ -393,7 +392,7 @@ class APIService {
         var components = URLComponents()
         components.queryItems = [
             URLQueryItem(name: "itemId", value: String(itemId)),
-            URLQueryItem(name: "collectionId", value: String(collectionId)), // Add collectionId
+            URLQueryItem(name: "collectionId", value: String(collectionId)),
             URLQueryItem(name: "_nonce", value: nonce)
         ]
         request.httpBody = components.query?.data(using: .utf8)
@@ -407,7 +406,6 @@ class APIService {
             throw error
         }
     }
-    // --- END MODIFICATION ---
 
     func removeFromCollection(itemId: Int, collectionId: Int, nonce: String) async throws {
         let endpoint = "/collections/remove"; Self.logger.info("Attempting to remove item \(itemId) from collection \(collectionId)."); let url = baseURL.appendingPathComponent(endpoint); var request = URLRequest(url: url); request.httpMethod = "POST"
@@ -468,6 +466,7 @@ class APIService {
         }
     }
 
+    // --- MODIFIED: postComment with manual body encoding ---
     func postComment(itemId: Int, parentId: Int, comment: String, nonce: String) async throws -> [PostCommentResultComment] {
         let endpoint = "/comments/post"
         Self.logger.info("Attempting to post comment to item \(itemId) (parent: \(parentId)).")
@@ -475,14 +474,38 @@ class APIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "itemId", value: String(itemId)),
-            URLQueryItem(name: "parentId", value: String(parentId)),
-            URLQueryItem(name: "comment", value: comment),
-            URLQueryItem(name: "_nonce", value: nonce)
+
+        // Manually construct and encode the body for application/x-www-form-urlencoded
+        let parameters: [String: String] = [
+            "itemId": String(itemId),
+            "parentId": String(parentId),
+            "comment": comment, // The raw comment string
+            "_nonce": nonce
         ]
-        request.httpBody = components.query?.data(using: .utf8)
+
+        // RFC 3986 "unreserved" characters: A-Z a-z 0-9 - _ . ~
+        // Leerzeichen wird zu '+'
+        // Andere Zeichen zu %XX
+        let unreservedChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.~"))
+
+        let encodedParameters = parameters.map { key, value -> String in
+            let encodedKey = key.addingPercentEncoding(withAllowedCharacters: unreservedChars) ?? key
+            var encodedValue = ""
+            for char in value {
+                if char == " " {
+                    encodedValue += "+"
+                } else if char.unicodeScalars.allSatisfy(unreservedChars.contains) {
+                    encodedValue.append(char)
+                } else {
+                    encodedValue += char.unicodeScalars.map { String(format: "%%%02X", $0.value) }.joined()
+                }
+            }
+            return "\(encodedKey)=\(encodedValue)"
+        }.joined(separator: "&")
+
+        request.httpBody = encodedParameters.data(using: .utf8)
+        // End of manual encoding
+
         logRequestDetails(request, for: endpoint)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -517,6 +540,7 @@ class APIService {
             throw error
         }
     }
+    // --- END MODIFICATION ---
 
     func fetchFavoritedComments(username: String, flags: Int, before: Int? = nil) async throws -> ProfileCommentLikesResponse {
         let endpoint = "/profile/commentLikes"
