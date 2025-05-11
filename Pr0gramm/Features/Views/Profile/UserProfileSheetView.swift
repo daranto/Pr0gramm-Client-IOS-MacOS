@@ -9,7 +9,7 @@ struct UserProfileSheetView: View {
     let username: String
 
     @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var settings: AppSettings // Wird jetzt für API Flags verwendet
     @Environment(\.dismiss) var dismiss
 
     @State private var profileInfo: ProfileInfoResponse?
@@ -65,6 +65,12 @@ struct UserProfileSheetView: View {
             .refreshable {
                 await loadAllData(forceRefresh: true)
             }
+            // --- MODIFIED: Add onChange listeners for filter changes ---
+            .onChange(of: settings.apiFlags) { _, _ in
+                UserProfileSheetView.logger.info("Global filters (apiFlags) changed. Reloading data for \(username) sheet.")
+                Task { await loadAllData(forceRefresh: true) }
+            }
+            // --- END MODIFICATION ---
             .navigationDestination(item: $itemToNavigate) { loadedItem in
                  PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager)
                      .environmentObject(settings)
@@ -84,18 +90,16 @@ struct UserProfileSheetView: View {
                     EmptyView()
                 }
             }
-            // --- NEW: Handle OpenURL for links within comments inside the sheet ---
             .environment(\.openURL, OpenURLAction { url in
                 if let itemID = parsePr0grammLink(url: url) {
                     UserProfileSheetView.logger.info("Pr0gramm link tapped in UserProfileSheet comment, attempting to navigate to item ID: \(itemID)")
-                    Task { await prepareAndNavigateToItem(itemID) } // Use existing navigation
+                    Task { await prepareAndNavigateToItem(itemID) }
                     return .handled
                 } else {
                     UserProfileSheetView.logger.info("Non-pr0gramm link tapped in UserProfileSheet: \(url). Opening in system browser.")
                     return .systemAction
                 }
             })
-            // --- END NEW ---
             .overlay {
                 if isLoadingNavigationTarget {
                     ProgressView("Lade Post \(navigationTargetItemId ?? 0)...")
@@ -107,10 +111,12 @@ struct UserProfileSheetView: View {
 
     private func loadAllData(forceRefresh: Bool = false) async {
         UserProfileSheetView.logger.info("Loading all data for user \(username). Force refresh: \(forceRefresh)")
+        // Profile info loading is independent of content filters, so flags=31 is fine here.
+        // Only uploads and comments lists will use settings.apiFlags.
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { await loadProfileInfo(forceRefresh: forceRefresh) }
-            group.addTask { await loadUserUploads(isRefresh: forceRefresh, initialLoad: true) }
-            group.addTask { await loadUserComments(isRefresh: forceRefresh, initialLoad: true) }
+            group.addTask { await loadProfileInfo(forceRefresh: forceRefresh) } // flags=31 internally
+            group.addTask { await loadUserUploads(isRefresh: forceRefresh, initialLoad: true) } // Will use settings.apiFlags
+            group.addTask { await loadUserComments(isRefresh: forceRefresh, initialLoad: true) } // Will use settings.apiFlags
         }
     }
 
@@ -160,6 +166,7 @@ struct UserProfileSheetView: View {
             profileInfoError = nil
         }
         do {
+            // Profile info itself should always load all data, hence flags=31
             let infoResponse = try await apiService.getProfileInfo(username: username, flags: 31)
             await MainActor.run { profileInfo = infoResponse }
         } catch {
@@ -177,7 +184,7 @@ struct UserProfileSheetView: View {
             } else if let error = uploadsError {
                 Text("Fehler: \(error)").foregroundColor(.red)
             } else if userUploads.isEmpty {
-                Text("\(username) hat (noch) keine Uploads.").foregroundColor(.secondary)
+                Text("\(username) hat (noch) keine Uploads, die deinen Filtern entsprechen.").foregroundColor(.secondary)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -218,7 +225,9 @@ struct UserProfileSheetView: View {
 
     private func loadUserUploads(isRefresh: Bool = false, initialLoad: Bool = false) async {
         if !initialLoad && !isRefresh { return }
-        UserProfileSheetView.logger.info("Loading uploads for \(username) (Profile Sheet - IGNORING FILTERS)... Refresh: \(isRefresh), Initial: \(initialLoad)")
+        // --- MODIFIED: Use global settings.apiFlags ---
+        UserProfileSheetView.logger.info("Loading uploads for \(username) (Profile Sheet - Using global filters: \(settings.apiFlags)). Refresh: \(isRefresh), Initial: \(initialLoad)")
+        // --- END MODIFICATION ---
 
         await MainActor.run {
             if isRefresh || initialLoad { userUploads = [] }
@@ -227,12 +236,14 @@ struct UserProfileSheetView: View {
         }
 
         do {
-            let flagsToFetchWith = 31
-            UserProfileSheetView.logger.debug("Fetching uploads for \(username) using flags: \(flagsToFetchWith)")
+            // --- MODIFIED: Use global settings.apiFlags ---
+            let flagsToFetchWith = settings.apiFlags
+            UserProfileSheetView.logger.debug("Fetching uploads for \(username) using global flags: \(flagsToFetchWith)")
+            // --- END MODIFICATION ---
             let fetchedItems = try await apiService.fetchItems(
                 flags: flagsToFetchWith,
                 user: username,
-                olderThanId: nil
+                olderThanId: nil // For the preview, only load the first page
             )
             await MainActor.run {
                 userUploads = Array(fetchedItems.prefix(uploadsPageLimit))
@@ -252,14 +263,12 @@ struct UserProfileSheetView: View {
             } else if let error = commentsError {
                 Text("Fehler: \(error)").foregroundColor(.red)
             } else if userComments.isEmpty {
-                Text("\(username) hat (noch) keine Kommentare.").foregroundColor(.secondary)
+                Text("\(username) hat (noch) keine Kommentare, die deinen Filtern entsprechen.").foregroundColor(.secondary)
             } else {
                 ForEach(userComments.prefix(commentsPageLimit)) { comment in
-                    // The Button is for the whole row, to navigate to the item the comment belongs to
                     Button {
                         Task { await prepareAndNavigateToItem(comment.itemId) }
                     } label: {
-                        // FavoritedCommentRow will render its internal Text with AttributedString
                         FavoritedCommentRow(
                             comment: comment,
                             overrideUsername: username,
@@ -292,7 +301,9 @@ struct UserProfileSheetView: View {
 
     private func loadUserComments(isRefresh: Bool = false, initialLoad: Bool = false) async {
         if !initialLoad && !isRefresh { return }
-        UserProfileSheetView.logger.info("Loading comments for \(username) (Profile Sheet - IGNORING FILTERS)... Refresh: \(isRefresh), Initial: \(initialLoad)")
+        // --- MODIFIED: Use global settings.apiFlags ---
+        UserProfileSheetView.logger.info("Loading comments for \(username) (Profile Sheet - Using global filters: \(settings.apiFlags)). Refresh: \(isRefresh), Initial: \(initialLoad)")
+        // --- END MODIFICATION ---
 
         await MainActor.run {
             if isRefresh || initialLoad { userComments = [] }
@@ -301,15 +312,18 @@ struct UserProfileSheetView: View {
         }
 
         do {
-            let flagsToFetchWith = 31
-            UserProfileSheetView.logger.debug("Fetching profile comments for \(username) using flags: \(flagsToFetchWith)")
+            // --- MODIFIED: Use global settings.apiFlags ---
+            let flagsToFetchWith = settings.apiFlags
+            UserProfileSheetView.logger.debug("Fetching profile comments for \(username) using global flags: \(flagsToFetchWith)")
+            // --- END MODIFICATION ---
             let response = try await apiService.fetchProfileComments(
                 username: username,
                 flags: flagsToFetchWith,
-                before: nil
+                before: nil // For the preview, only load the first page
             )
             await MainActor.run {
                 userComments = Array(response.comments.prefix(commentsPageLimit))
+                // Ensure profileInfo's mark is used if it differs, to maintain consistency within this sheet
                 if profileInfo?.user.name.lowercased() == username.lowercased() && profileInfo?.user.mark != response.user?.mark {
                     UserProfileSheetView.logger.info("Mark for \(username) in ProfileCommentsResponse (\(response.user?.mark ?? -98)) differs from ProfileInfoResponse (\(profileInfo?.user.mark ?? -99)). Using ProfileInfoResponse for consistency in this sheet.")
                 }
@@ -359,7 +373,6 @@ struct UserProfileSheetView: View {
         return germanDateFormatter.string(from: date)
     }
 
-    // Helper function to parse pr0gramm links (copied for now)
     private func parsePr0grammLink(url: URL) -> Int? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
         let pathComponents = url.pathComponents
@@ -376,7 +389,6 @@ struct UserProfileSheetView: View {
         UserProfileSheetView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
         return nil
     }
-    // End copied helper
 
     @MainActor
     private func prepareAndNavigateToItem(_ itemId: Int?) async {
@@ -394,8 +406,10 @@ struct UserProfileSheetView: View {
         navigationTargetItemId = id
 
         do {
-            let flagsToFetchWith = 31
-            UserProfileSheetView.logger.debug("Fetching item \(id) for navigation from profile sheet using flags: \(flagsToFetchWith)")
+            // --- MODIFIED: Use global settings.apiFlags when navigating from the sheet ---
+            let flagsToFetchWith = settings.apiFlags
+            UserProfileSheetView.logger.debug("Fetching item \(id) for navigation from profile sheet using global flags: \(flagsToFetchWith)")
+            // --- END MODIFICATION ---
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
 
             guard navigationTargetItemId == id else {
@@ -404,9 +418,11 @@ struct UserProfileSheetView: View {
             }
             if let item = fetchedItem {
                 UserProfileSheetView.logger.info("Successfully fetched item \(id) for navigation.")
-                itemToNavigate = item // This will trigger the .navigationDestination
+                itemToNavigate = item
             } else {
-                 UserProfileSheetView.logger.warning("Could not fetch item \(id) for navigation even with flags=31.")
+                 UserProfileSheetView.logger.warning("Could not fetch item \(id) for navigation (using global flags).")
+                 // Hier könnte man überlegen, ob man einen Fallback auf flags=31 macht,
+                 // aber für Konsistenz mit der Listenanzeige bleiben wir bei settings.apiFlags.
             }
         } catch is CancellationError {
             UserProfileSheetView.logger.info("Item fetch for navigation cancelled (ID: \(id)).")
@@ -427,6 +443,11 @@ struct UserProfileSheetView: View {
 
         init() {
             let tempSettings = AppSettings()
+            // --- MODIFIED: Set some filters for preview ---
+            tempSettings.showSFW = true
+            tempSettings.showNSFW = false
+            // --- END MODIFICATION ---
+
             let tempAuth = AuthService(appSettings: tempSettings)
             tempAuth.isLoggedIn = true
             tempAuth.currentUser = UserInfo(id: 1, name: "Rockabilly", registered: 1609459200, score: 12345, mark: 2, badges: [ApiBadge(image: "pr0-coin.png", description: "Test Badge", created: 0, link: nil, category: nil)], collections: [])
