@@ -26,64 +26,54 @@ struct LinkedItemPreviewView: View {
 
     // MARK: - Body
     var body: some View {
-        // --- MODIFIED: Wrap content in NavigationStack for Toolbar ---
-        NavigationStack {
-            Group {
-                if isLoading {
-                    ProgressView("Lade Vorschau für \(itemID)...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the progress view
-                } else if let error = errorMessage {
-                    // Display error state with retry option
-                    VStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.largeTitle)
-                            .foregroundColor(.orange)
-                            .padding(.bottom)
-                        Text("Fehler beim Laden")
-                            .font(UIConstants.headlineFont)
-                        Text(error)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding()
-                        Button("Erneut versuchen") {
-                            Task { await loadItem() } // Retry loading on button tap
-                        }
-                        .buttonStyle(.bordered)
-                        .padding(.top)
+        // --- MODIFIED: Removed outer NavigationStack and its modifiers ---
+        Group {
+            if isLoading {
+                ProgressView("Lade Vorschau für \(itemID)...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the progress view
+            } else if let error = errorMessage {
+                // Display error state with retry option
+                VStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.largeTitle)
+                        .foregroundColor(.orange)
+                        .padding(.bottom)
+                    Text("Fehler beim Laden")
+                        .font(UIConstants.headlineFont)
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                    Button("Erneut versuchen") {
+                        Task { await loadItem() } // Retry loading on button tap
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the error view
-                } else if let item = fetchedItem {
-                    // Use the *SHARED* wrapper view
-                    PagedDetailViewWrapperForItem(
-                        item: item,
-                        playerManager: playerManager
-                    )
-                    // Environment objects (settings, authService) are passed down automatically
-                } else {
-                    // Fallback if not loading, no error, but no item (initial state or unexpected issue)
-                     Text("Vorschau wird vorbereitet...")
-                         .foregroundColor(.secondary)
-                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .buttonStyle(.bordered)
+                    .padding(.top)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the error view
+            } else if let item = fetchedItem {
+                // Use the *SHARED* wrapper view
+                PagedDetailViewWrapperForItem(
+                    item: item,
+                    playerManager: playerManager
+                )
+                // Environment objects (settings, authService) are passed down automatically
+            } else {
+                // Fallback if not loading, no error, but no item (initial state or unexpected issue)
+                 Text("Vorschau wird vorbereitet...")
+                     .foregroundColor(.secondary)
+                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .task { // Use .task for automatic loading AND manager configuration
-                 // Configure the local player manager when the task starts
-                 playerManager.configure(settings: settings)
-                 // Load the item data
-                 await loadItem()
-             }
-            // --- Add Toolbar inside NavigationStack ---
-             .navigationTitle("Vorschau")
-             #if os(iOS)
-             .navigationBarTitleDisplayMode(.inline)
-             #endif
-             .toolbar {
-                 ToolbarItem(placement: .confirmationAction) { // Or .navigationBarLeading if preferred
-                     Button("Fertig") { dismiss() }
-                 }
-             }
-        } // --- End NavigationStack ---
+        }
+        .task { // Use .task for automatic loading AND manager configuration
+             // Configure the local player manager when the task starts
+             playerManager.configure(settings: settings)
+             // Load the item data
+             await loadItem()
+         }
+        // Toolbar and navigationTitle are now handled by the presenting wrapper (LinkedItemPreviewWrapperView)
+        // --- END MODIFICATION ---
     }
 
     // MARK: - Data Loading
@@ -155,10 +145,4 @@ struct LinkedItemPreviewView: View {
         .environmentObject(settings)
         .environmentObject(auth)
 }
-
-// --- REMOVED Preview Wrapper Struct ---
-// The @MainActor struct LinkedItemPreviewWrapperView definition
-// that was here previously has been removed to fix the redeclaration error.
-// --- END REMOVED ---
-
 // --- END OF COMPLETE FILE ---
