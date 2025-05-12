@@ -259,15 +259,13 @@ class APIService {
 
     func fetchItems(
         flags: Int,
-        promoted: Int? = nil, // Kann nil sein, wenn showJunk true ist
+        promoted: Int? = nil,
         user: String? = nil,
         tags: String? = nil,
         olderThanId: Int? = nil,
         collectionNameForUser: String? = nil,
         isOwnCollection: Bool = false,
-        // --- MODIFIED: showJunk Parameter ---
-        showJunkParameter: Bool = false // Umbenannt zur Klarheit, da `flags` jetzt dynamisch ist
-        // --- END MODIFICATION ---
+        showJunkParameter: Bool = false
     ) async throws -> [Item] {
         let endpoint = "/items/get"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
@@ -276,14 +274,10 @@ class APIService {
         var queryItems = [URLQueryItem(name: "flags", value: String(flags))]
         var logDescription = "flags=\(flags)"
 
-        // --- MODIFIED: Add show_junk parameter if true ---
-        if showJunkParameter { // Parameter hier verwenden
+        if showJunkParameter {
             queryItems.append(URLQueryItem(name: "show_junk", value: "1"))
             logDescription += ", show_junk=1"
-            // Wenn show_junk=1, wird 'promoted' ignoriert oder sollte nicht gesetzt werden.
-            // 'flags' sollte hier bereits auf 9 (oder den passenden Wert) gesetzt sein durch AppSettings.
         }
-        // --- END MODIFICATION ---
 
 
         if let name = collectionNameForUser {
@@ -307,12 +301,10 @@ class APIService {
             queryItems.append(URLQueryItem(name: "tags", value: tags))
             logDescription += ", tags='\(tags)'"
         }
-        // --- MODIFIED: 'promoted' nur wenn showJunkParameter false ist UND es sich nicht um eine Sammlung handelt ---
         if let promotedValue = promoted, collectionNameForUser == nil, !showJunkParameter {
             queryItems.append(URLQueryItem(name: "promoted", value: String(promotedValue)))
             logDescription += ", promoted=\(promotedValue)"
         }
-        // --- END MODIFICATION ---
         if let olderId = olderThanId {
             queryItems.append(URLQueryItem(name: "older", value: String(olderId)))
             logDescription += ", older=\(olderId)"
@@ -335,23 +327,50 @@ class APIService {
         }
     }
 
+    // --- MODIFIED: fetchItem ---
     func fetchItem(id: Int, flags: Int) async throws -> Item? {
-        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else { throw URLError(.badURL) }
-        var queryItemsList = [ URLQueryItem(name: "id", value: String(id)), URLQueryItem(name: "flags", value: String(flags)) ]
-        // --- NEW: If flags suggest junk, add show_junk ---
-        // Dies ist eine Annahme, dass `flags = 9` Junk impliziert und die API dies auch für Einzelabrufe so handhabt.
-        if flags == 9 { // Spezifischer Flag-Wert für Junk
-            queryItemsList.append(URLQueryItem(name: "show_junk", value: "1"))
-            Self.logger.debug("Fetching single item ID \(id) with flags \(flags) and show_junk=1")
-        } else {
-            Self.logger.debug("Fetching single item with ID \(id) and flags \(flags)")
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
         }
-        // --- END NEW ---
+        // For fetching a single item by ID, we generally don't want to add `show_junk=1` automatically based on flags,
+        // as `flags=9` (SFW+NSFP) can be a valid user filter for non-junk content.
+        // The API should return the item if its `flags` match the requested `flags`.
+        // If an item is *only* visible with `show_junk=1` AND specific flags, that's a different scenario
+        // typically handled when browsing a "junk" feed, not usually when directly fetching a known ID.
+        let queryItemsList = [
+            URLQueryItem(name: "id", value: String(id)),
+            URLQueryItem(name: "flags", value: String(flags))
+        ]
+        Self.logger.debug("Fetching single item with ID \(id) and flags \(flags). (No 'show_junk' parameter for single item fetch by default)")
+
         urlComponents.queryItems = queryItemsList
-        guard let url = urlComponents.url else { throw URLError(.badURL) }; let request = URLRequest(url: url)
-        do { let (data, response) = try await URLSession.shared.data(for: request); let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (single item)"); let foundItem = apiResponse.items.first; if foundItem == nil && !apiResponse.items.isEmpty { Self.logger.warning("API returned items for ID \(id), but none matched the requested ID.") } else if apiResponse.items.count > 1 { Self.logger.warning("API returned \(apiResponse.items.count) items when fetching single ID \(id).") }; return foundItem }
-        catch { Self.logger.error("Error during /items/get (single item) for ID \(id): \(error.localizedDescription)"); throw error }
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        let request = URLRequest(url: url)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (single item ID: \(id), flags: \(flags))")
+
+            // The API *might* still return a list if the ID also matches broader criteria when flags are very open,
+            // or if the 'id' parameter is treated as a filter rather than a unique lookup in some API edge cases.
+            // So, we explicitly find the item matching the requested ID from the response.
+            let foundItem = apiResponse.items.first { $0.id == id }
+
+            if apiResponse.items.count > 1 && foundItem == nil {
+                Self.logger.warning("API returned \(apiResponse.items.count) items for ID \(id), but none matched the requested ID. This might indicate the item does not conform to flags \(flags).")
+            } else if apiResponse.items.count > 1 {
+                 Self.logger.info("API returned \(apiResponse.items.count) items when fetching single ID \(id). Correct item with ID \(id) was found and selected.")
+            } else if foundItem == nil && !apiResponse.items.isEmpty {
+                 Self.logger.warning("API returned a single item for ID \(id), but its ID did not match the requested ID.")
+            }
+            return foundItem
+        } catch {
+            Self.logger.error("Error during /items/get (single item) for ID \(id): \(error.localizedDescription)")
+            throw error
+        }
     }
+    // --- END MODIFICATION ---
+
 
     func fetchFavorites(username: String, collectionKeyword: String, flags: Int, olderThanId: Int? = nil) async throws -> [Item] {
         Self.logger.debug("Fetching favorites for user \(username), collectionKeyword '\(collectionKeyword)', flags \(flags), olderThan: \(olderThanId ?? -1)")
@@ -361,11 +380,10 @@ class APIService {
             olderThanId: olderThanId,
             collectionNameForUser: collectionKeyword,
             isOwnCollection: true,
-            showJunkParameter: false // Favoriten sind nie Junk
+            showJunkParameter: false
         )
     }
 
-    // searchItems (deprecated) bleibt unverändert, da es showJunk nicht berücksichtigt.
     @available(*, deprecated, message: "Use fetchItems(tags:flags:promoted:olderThanId:showJunkParameter:) instead")
     func searchItems(tags: String, flags: Int) async throws -> [Item] {
         return try await fetchItems(flags: flags, user: nil, tags: tags, showJunkParameter: false)
