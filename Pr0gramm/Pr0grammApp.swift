@@ -15,10 +15,13 @@ struct Pr0grammApp: App {
     /// Manages the currently selected tab and navigation requests.
     @StateObject private var navigationService = NavigationService()
 
+    // --- NEW: Environment variable for scenePhase ---
+    @Environment(\.scenePhase) var scenePhase
+    // --- END NEW ---
+
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Pr0grammApp")
 
     init() {
-        // Initialize services, ensuring AuthService has access to AppSettings
         let settings = AppSettings()
         _appSettings = StateObject(wrappedValue: settings)
         _authService = StateObject(wrappedValue: AuthService(appSettings: settings))
@@ -32,29 +35,50 @@ struct Pr0grammApp: App {
                 .environmentObject(appSettings)
                 .environmentObject(authService)
                 .environmentObject(navigationService)
-                .task {
-                    // Check if the user is already logged in when the app starts
+                .task { // Wird einmal beim Start der WindowGroup ausgeführt
                     await authService.checkInitialLoginStatus()
+                    // --- NEW: Filter-Reset beim ersten Start (nach Login-Check) ---
+                    applyFilterResetIfNeeded()
+                    // --- END NEW ---
                 }
-                // --- MODIFIED: Apply preferredColorScheme dynamically ---
                 .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
-                // --- END MODIFICATION ---
+                // --- NEW: Beobachte scenePhase für Filter-Reset ---
+                .onChange(of: scenePhase) { oldPhase, newPhase in
+                    if newPhase == .active && oldPhase == .inactive { // Von inaktiv zu aktiv (z.B. Rückkehr aus Hintergrund)
+                        Pr0grammApp.logger.info("App became active from inactive state.")
+                        applyFilterResetIfNeeded()
+                    } else if newPhase == .active && oldPhase == .background { // Von Hintergrund zu aktiv
+                        Pr0grammApp.logger.info("App became active from background state.")
+                        applyFilterResetIfNeeded()
+                    }
+                }
+                // --- END NEW ---
         }
     }
+    
+    // --- NEW: Methode zum Zurücksetzen der Filter ---
+    private func applyFilterResetIfNeeded() {
+        if appSettings.resetFiltersOnAppOpen {
+            Pr0grammApp.logger.info("Applying filter reset to SFW as per settings.")
+            appSettings.showSFW = true
+            appSettings.showNSFW = false
+            appSettings.showNSFL = false
+            appSettings.showNSFP = false
+            appSettings.showPOL = false
+            // Der FeedType (Neu/Beliebt/Müll) wird hier nicht geändert, nur die Inhaltsfilter.
+        } else {
+            Pr0grammApp.logger.info("Filter reset on app open is disabled.")
+        }
+    }
+    // --- END NEW ---
 
-    /// Configures the shared AVAudioSession to:
-    /// 1. Allow audio playback even when the silent switch is on (`.playback`).
-    /// 2. Attempt to mix with other audio playing on the system (`.mixWithOthers`).
-    /// 3. Force audio output to the device's built-in speaker (`overrideOutputAudioPort(.speaker)`).
     private func configureAudioSession() {
         Self.logger.info("Configuring AVAudioSession...")
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            // Set category to playback (ignores mute switch) and allow mixing
             try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             Self.logger.info("AVAudioSession category set to '.playback' with options '[.mixWithOthers]'.")
 
-            // Activate the session BEFORE overriding the port
             try audioSession.setActive(true)
             Self.logger.info("AVAudioSession activated.")
 

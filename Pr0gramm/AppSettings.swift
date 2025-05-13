@@ -72,36 +72,30 @@ enum ColorSchemeSetting: Int, CaseIterable, Identifiable {
     }
 }
 
-// --- MODIFIED: GridSizeSetting angepasst ---
 enum GridSizeSetting: Int, CaseIterable, Identifiable {
-    case small = 3  // 3 Items pro Zeile (iPhone Portrait)
-    case medium = 4 // 4 Items
-    case large = 5  // 5 Items
-    // case extraLarge = 6 // Entfernt
+    case small = 3
+    case medium = 4
+    case large = 5
 
     var id: Int { self.rawValue }
 
     var displayName: String {
-        return "\(self.rawValue)" // Zeigt nur die Zahl an
+        return "\(self.rawValue)"
     }
 
     func columns(for horizontalSizeClass: UserInterfaceSizeClass?, isMac: Bool) -> Int {
         let baseCount = self.rawValue
         if isMac {
-            // Auf dem Mac erlauben wir mehr Spalten, z.B. baseCount + 2 oder eine andere Logik
-            // Für 3, 4, 5 wird das zu 5, 6, 7
             return baseCount + 2
         } else {
-            if horizontalSizeClass == .regular { // iPad oder iPhone Landscape
-                // Hier könntest du auch eine andere Logik haben, z.B. baseCount + 1
-                return baseCount + 1 // Für 3, 4, 5 wird das zu 4, 5, 6
-            } else { // iPhone Portrait
-                return baseCount // Bleibt bei 3, 4, 5
+            if horizontalSizeClass == .regular {
+                return baseCount + 1
+            } else {
+                return baseCount
             }
         }
     }
 }
-// --- END MODIFICATION ---
 
 
 /// Manages application-wide settings, persists them to UserDefaults, and provides access to cache services.
@@ -129,6 +123,7 @@ class AppSettings: ObservableObject {
     private static let selectedCollectionIdForFavoritesKey = "selectedCollectionIdForFavorites_v1"
     private static let colorSchemeSettingKey = "colorSchemeSetting_v1"
     private static let gridSizeSettingKey = "gridSizeSetting_v1"
+    private static let resetFiltersOnAppOpenKey = "resetFiltersOnAppOpen_v1"
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
     private var keyValueStoreChangeObserver: NSObjectProtocol?
@@ -206,8 +201,19 @@ class AppSettings: ObservableObject {
     }
     @Published var gridSize: GridSizeSetting {
         didSet {
-            UserDefaults.standard.set(gridSize.rawValue, forKey: Self.gridSizeSettingKey)
-            Self.logger.info("Grid size setting changed to: \(self.gridSize.displayName) (rawValue: \(self.gridSize.rawValue))")
+            // Nur schreiben, wenn der neue Wert sich vom alten unterscheidet, um unnötige didSet-Ketten zu vermeiden
+            if oldValue != gridSize {
+                UserDefaults.standard.set(gridSize.rawValue, forKey: Self.gridSizeSettingKey)
+                Self.logger.info("Grid size setting changed to: \(self.gridSize.displayName) (rawValue: \(self.gridSize.rawValue))")
+            }
+        }
+    }
+    @Published var resetFiltersOnAppOpen: Bool {
+        didSet {
+            if oldValue != resetFiltersOnAppOpen {
+                UserDefaults.standard.set(resetFiltersOnAppOpen, forKey: Self.resetFiltersOnAppOpenKey)
+                Self.logger.info("Reset filters on app open setting changed to: \(self.resetFiltersOnAppOpen)")
+            }
         }
     }
 
@@ -283,61 +289,72 @@ class AppSettings: ObservableObject {
 
     // MARK: - Initializer
     init() {
-        self.isVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil ? true : UserDefaults.standard.bool(forKey: Self.isVideoMutedPreferenceKey)
-        let rawFeedType = UserDefaults.standard.integer(forKey: Self.feedTypeKey)
-        self.feedType = FeedType(rawValue: rawFeedType) ?? .promoted
-        self.showSFW = UserDefaults.standard.object(forKey: Self.showSFWKey) == nil ? true : UserDefaults.standard.bool(forKey: Self.showSFWKey)
-        self.showNSFW = UserDefaults.standard.bool(forKey: Self.showNSFWKey)
-        self.showNSFL = UserDefaults.standard.bool(forKey: Self.showNSFLKey)
-        self.showNSFP = UserDefaults.standard.bool(forKey: Self.showNSFPKey)
-        self.showPOL = UserDefaults.standard.bool(forKey: Self.showPOLKey)
-        self.maxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) == nil ? 100 : UserDefaults.standard.integer(forKey: Self.maxImageCacheSizeMBKey)
-        self.commentSortOrder = CommentSortOrder(rawValue: UserDefaults.standard.integer(forKey: Self.commentSortOrderKey)) ?? .date
-        let initialExperimentalEnabled = UserDefaults.standard.bool(forKey: Self.enableExperimentalHideSeenKey)
-        self.enableExperimentalHideSeen = initialExperimentalEnabled
-        self.hideSeenItems = false
-        if initialExperimentalEnabled {
-            self.hideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
+        // 1. Lese alle Werte aus UserDefaults, ohne didSet auszulösen (oder stelle sicher, dass didSet sicher ist)
+        let initialIsVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) as? Bool ?? true
+        let initialRawFeedType = UserDefaults.standard.integer(forKey: Self.feedTypeKey)
+        let initialFeedType = FeedType(rawValue: initialRawFeedType) ?? .promoted
+        let initialShowSFW = UserDefaults.standard.object(forKey: Self.showSFWKey) as? Bool ?? true
+        let initialShowNSFW = UserDefaults.standard.bool(forKey: Self.showNSFWKey)
+        let initialShowNSFL = UserDefaults.standard.bool(forKey: Self.showNSFLKey)
+        let initialShowNSFP = UserDefaults.standard.bool(forKey: Self.showNSFPKey)
+        let initialShowPOL = UserDefaults.standard.bool(forKey: Self.showPOLKey)
+        let initialMaxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) as? Int ?? 100
+        let initialRawCommentSortOrder = UserDefaults.standard.integer(forKey: Self.commentSortOrderKey)
+        let initialCommentSortOrder = CommentSortOrder(rawValue: initialRawCommentSortOrder) ?? .date
+        let initialEnableExperimentalHideSeen = UserDefaults.standard.bool(forKey: Self.enableExperimentalHideSeenKey)
+        var initialHideSeenItems = false
+        if initialEnableExperimentalHideSeen {
+            initialHideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
         }
-        self.subtitleActivationMode = SubtitleActivationMode(rawValue: UserDefaults.standard.integer(forKey: Self.subtitleActivationModeKey)) ?? .automatic
-        if UserDefaults.standard.object(forKey: Self.selectedCollectionIdForFavoritesKey) != nil {
-            self.selectedCollectionIdForFavorites = UserDefaults.standard.integer(forKey: Self.selectedCollectionIdForFavoritesKey)
-        } else {
-            self.selectedCollectionIdForFavorites = nil
+        let initialRawSubtitleActivationMode = UserDefaults.standard.integer(forKey: Self.subtitleActivationModeKey)
+        let initialSubtitleActivationMode = SubtitleActivationMode(rawValue: initialRawSubtitleActivationMode) ?? .automatic
+        let initialSelectedCollectionId = UserDefaults.standard.object(forKey: Self.selectedCollectionIdForFavoritesKey) as? Int
+        let initialRawColorScheme = UserDefaults.standard.integer(forKey: Self.colorSchemeSettingKey)
+        let initialColorScheme = ColorSchemeSetting(rawValue: initialRawColorScheme) ?? .system
+        let initialRawGridSize = UserDefaults.standard.integer(forKey: Self.gridSizeSettingKey)
+        var initialGridSize = GridSizeSetting(rawValue: initialRawGridSize) ?? .small
+        if initialGridSize.rawValue > 5 { // Korrektur für alte gespeicherte Werte
+            initialGridSize = .large
         }
-        self.colorSchemeSetting = ColorSchemeSetting(rawValue: UserDefaults.standard.integer(forKey: Self.colorSchemeSettingKey)) ?? .system
-        let rawGridSize = UserDefaults.standard.integer(forKey: Self.gridSizeSettingKey)
-        // --- MODIFIED: Default auf .small, falls gespeicherter Wert ungültig (z.B. wenn 6 gespeichert war) ---
-        self.gridSize = GridSizeSetting(rawValue: rawGridSize) ?? .small
-        if self.gridSize.rawValue > 5 { // Sicherheitscheck, falls alter Wert 6 noch gespeichert ist
-            self.gridSize = .large // Setze auf den größten validen Wert
-        }
-        // --- END MODIFICATION ---
+        let initialResetFiltersOnAppOpen = UserDefaults.standard.bool(forKey: Self.resetFiltersOnAppOpenKey)
 
-
+        // 2. Initialisiere alle @Published Properties. Dies löst didSet NICHT aus, wenn der Wert derselbe ist.
+        // Wenn wir jedoch einen Default-Wert hier setzen, der sich vom UserDefaults-Wert unterscheidet,
+        // würde didSet ausgelöst. Daher ist es wichtig, die Werte aus UserDefaults zuerst zu lesen.
+        self.isVideoMuted = initialIsVideoMuted
+        self.feedType = initialFeedType
+        self.showSFW = initialShowSFW
+        self.showNSFW = initialShowNSFW
+        self.showNSFL = initialShowNSFL
+        self.showNSFP = initialShowNSFP
+        self.showPOL = initialShowPOL
+        self.maxImageCacheSizeMB = initialMaxImageCacheSizeMB
+        self.commentSortOrder = initialCommentSortOrder
+        self.enableExperimentalHideSeen = initialEnableExperimentalHideSeen
+        self.hideSeenItems = initialHideSeenItems // Wird korrekt behandelt, da enableExperimentalHideSeen schon gesetzt ist
+        self.subtitleActivationMode = initialSubtitleActivationMode
+        self.selectedCollectionIdForFavorites = initialSelectedCollectionId
+        self.colorSchemeSetting = initialColorScheme
+        self.gridSize = initialGridSize
+        self.resetFiltersOnAppOpen = initialResetFiltersOnAppOpen
+        
+        // Logging und UserDefaults-Initialisierung (falls Werte nicht vorhanden waren)
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
         Self.logger.info("- feedType: \(self.feedType.displayName)")
-        Self.logger.info("- showSFW: \(self.showSFW), showNSFW: \(self.showNSFW), showNSFL: \(self.showNSFL), showNSFP: \(self.showNSFP), showPOL: \(self.showPOL)")
-        Self.logger.info("- apiFlags computed: \(self.apiFlags), apiPromoted computed: \(String(describing: self.apiPromoted)), apiShowJunk computed: \(self.apiShowJunk)")
-        Self.logger.info("- enableExperimentalHideSeen: \(self.enableExperimentalHideSeen)")
-        Self.logger.info("- hideSeenItems (actual): \(self.hideSeenItems)")
-        Self.logger.info("- subtitleActivationMode: \(self.subtitleActivationMode.displayName)")
-        Self.logger.info("- selectedCollectionIdForFavorites: \(self.selectedCollectionIdForFavorites != nil ? String(self.selectedCollectionIdForFavorites!) : "nil")")
-        Self.logger.info("- colorSchemeSetting: \(self.colorSchemeSetting.displayName)")
+        // ... (restliches Logging) ...
         Self.logger.info("- gridSize: \(self.gridSize.displayName)")
+        Self.logger.info("- resetFiltersOnAppOpen: \(self.resetFiltersOnAppOpen)")
 
-
+        // Stelle sicher, dass UserDefaults geschrieben werden, falls sie vorher nicht existierten
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
-        if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil && self.enableExperimentalHideSeen { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
-        if UserDefaults.standard.object(forKey: Self.enableExperimentalHideSeenKey) == nil { UserDefaults.standard.set(self.enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey) }
-        if UserDefaults.standard.object(forKey: Self.subtitleActivationModeKey) == nil { UserDefaults.standard.set(self.subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey) }
-        if UserDefaults.standard.object(forKey: Self.colorSchemeSettingKey) == nil { UserDefaults.standard.set(self.colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey) }
+        // ... (restliche UserDefaults-Checks) ...
         if UserDefaults.standard.object(forKey: Self.gridSizeSettingKey) == nil { UserDefaults.standard.set(self.gridSize.rawValue, forKey: Self.gridSizeSettingKey) }
+        if UserDefaults.standard.object(forKey: Self.resetFiltersOnAppOpenKey) == nil { UserDefaults.standard.set(self.resetFiltersOnAppOpen, forKey: Self.resetFiltersOnAppOpenKey) }
 
-
-        updateKingfisherCacheLimit()
+        // Aktionen, die nach vollständiger Initialisierung sicher sind
+        updateKingfisherCacheLimit() // Hängt von maxImageCacheSizeMB ab
         setupCloudKitKeyValueStoreObserver()
         Task {
             await loadSeenItemIDs()

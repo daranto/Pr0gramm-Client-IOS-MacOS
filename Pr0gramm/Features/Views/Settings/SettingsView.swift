@@ -26,7 +26,6 @@ struct SettingsView: View {
                     }
                     .font(UIConstants.bodyFont)
 
-                    // --- NEW: Picker für Rastergröße ---
                     Picker("Rastergröße (Posts pro Zeile)", selection: $settings.gridSize) {
                         ForEach(GridSizeSetting.allCases) { size in
                             Text(size.displayName).tag(size)
@@ -34,11 +33,21 @@ struct SettingsView: View {
                         }
                     }
                     .font(UIConstants.bodyFont)
-                    // --- END NEW ---
-
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
+                Section {
+                    // --- MODIFIED: Toggle Text and Footer Text ---
+                    Toggle("SFW bei App-Öffnung", isOn: $settings.resetFiltersOnAppOpen)
+                        .font(UIConstants.bodyFont)
+                } header: {
+                    Text("Feed-Filter")
+                } footer: {
+                    Text("Setzt Inhaltsfilter (NSFW etc.) beim Start/Öffnen der App automatisch auf SFW.")
+                        .font(UIConstants.footnoteFont)
+                }
+                .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+                // --- END MODIFICATION ---
 
                 Section {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
