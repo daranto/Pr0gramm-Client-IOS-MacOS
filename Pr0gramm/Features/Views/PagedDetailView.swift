@@ -157,14 +157,10 @@ struct PagedDetailView: View {
 
     @State private var isTogglingFavorite = false
     @State private var localFavoritedStatus: [Int: Bool] = [:]
-    // --- REMOVED: newlyVisitedItemIDsThisSession is not strictly needed for this specific logic ---
-    // @State private var newlyVisitedItemIDsThisSession: Set<Int> = []
     @State private var collapsedCommentIDs: Set<Int> = []
     @State private var commentReplyTarget: ReplyTarget? = nil
 
-    // --- NEW: Store the ID of the item that was active *before* a swipe ---
     @State private var previouslySelectedItemForMarking: Item? = nil
-    // --- END NEW ---
 
 
     let loadMoreAction: () async -> Void
@@ -180,11 +176,9 @@ struct PagedDetailView: View {
         self._selectedIndex = State(initialValue: selectedIndex)
         self.playerManager = playerManager
         self.loadMoreAction = loadMoreAction
-        // --- NEW: Initialize previouslySelectedItemForMarking in init ---
         if selectedIndex >= 0 && selectedIndex < items.wrappedValue.count {
             self._previouslySelectedItemForMarking = State(initialValue: items.wrappedValue[selectedIndex])
         }
-        // --- END NEW ---
         PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex)")
     }
 
@@ -256,8 +250,14 @@ struct PagedDetailView: View {
     private func resumePlayerIfNeeded() {
         if wasPlayingBeforeAnySheet {
             if selectedIndex >= 0 && selectedIndex < items.count && items[selectedIndex].isVideo && items[selectedIndex].id == playerManager.playerItemID {
-                playerManager.player?.play()
-                PagedDetailView.logger.debug("Player resumed after sheet dismissed.")
+                // --- MODIFIED: Ensure player is not playing in fullscreen context after sheet ---
+                if !isFullscreen {
+                    playerManager.player?.play()
+                    PagedDetailView.logger.debug("Player resumed after sheet dismissed (not fullscreen).")
+                } else {
+                    PagedDetailView.logger.debug("Sheet dismissed, but view is in fullscreen. Player state managed by system.")
+                }
+                // --- END MODIFICATION ---
             } else {
                 PagedDetailView.logger.debug("Not resuming player: current item is not the video or player changed.")
             }
@@ -290,25 +290,22 @@ struct PagedDetailView: View {
              }
         }
         .onChange(of: selectedIndex) { oldValue, newValue in
-            // --- MODIFIED: Mark the *previous* item as seen ---
             if oldValue >= 0 && oldValue < items.count {
                 let previousItem = items[oldValue]
                 settings.markItemAsSeen(id: previousItem.id)
                 PagedDetailView.logger.info("Marked PREVIOUS item \(previousItem.id) as seen due to swipe.")
             }
-            // Update the previouslySelectedItemForMarking to the new current item
             if newValue >= 0 && newValue < items.count {
                 previouslySelectedItemForMarking = items[newValue]
             } else {
                 previouslySelectedItemForMarking = nil
             }
-            // --- END MODIFICATION ---
             
             handleIndexChangeImmediate(oldValue: oldValue, newValue: newValue)
             Task {
                 try? await Task.sleep(for: swipeSettleDelay)
                 if self.selectedIndex == newValue {
-                    await handleIndexChangeDeferred(newValue: newValue) // No longer pass markAsSeen here
+                    await handleIndexChangeDeferred(newValue: newValue)
                 } else {
                     PagedDetailView.logger.debug("Deferred actions skipped for index \(newValue), selection changed again during settle delay.")
                 }
@@ -316,7 +313,7 @@ struct PagedDetailView: View {
             Task { await triggerLoadMoreIfNeeded(currentIndex: newValue) }
         }
         .onAppear { setupView() }
-        .onDisappear { cleanupViewAndMarkLastActiveItemVisited() } // Modified name
+        .onDisappear { cleanupViewAndMarkLastActiveItemVisited() }
         .onChange(of: scenePhase) { oldPhase, newPhase in handleScenePhaseChange(oldPhase: oldPhase, newPhase: newPhase) }
         .onChange(of: settings.commentSortOrder) { oldOrder, newOrder in handleSortOrderChange(newOrder: newOrder) }
         .onChange(of: items.count) { _, newCount in PagedDetailView.logger.info("Detected change in items count from binding. New count: \(newCount)") }
@@ -376,7 +373,7 @@ struct PagedDetailView: View {
                  keyboardActionHandler: keyboardActionHandler,
                  playerManager: playerManager,
                  onWillBeginFullScreen: { self.isFullscreen = true },
-                 onWillEndFullScreen: handleEndFullScreen,
+                 onWillEndFullScreen: handleEndFullScreen, // Direkt die Methode übergeben
                  toggleFavoriteAction: toggleFavorite,
                  showCollectionSelectionAction: {
                      guard self.selectedIndex >= 0 && self.selectedIndex < self.items.count else { return }
@@ -505,27 +502,31 @@ struct PagedDetailView: View {
 
     private func setupView() {
         PagedDetailView.logger.info("PagedDetailView appeared.")
-        if isFullscreen { isFullscreen = false }
+        if isFullscreen { // If appearing while fullscreen is still true (e.g. after sheet dismissal in FS)
+            PagedDetailView.logger.debug("PagedDetailView appeared, isFullscreen is true. Player state managed by system or handleEndFullScreen.")
+        } else { // Normal appear, or returning from FS where isFullscreen was set to false
+            PagedDetailView.logger.debug("PagedDetailView appeared, isFullscreen is false.")
+        }
         isTogglingFavorite = false
         keyboardActionHandler.selectNextAction = self.selectNext
         keyboardActionHandler.selectPreviousAction = self.selectPrevious
         keyboardActionHandler.seekForwardAction = playerManager.seekForward
         keyboardActionHandler.seekBackwardAction = playerManager.seekBackward
-        Task {
-            if selectedIndex >= 0 && selectedIndex < items.count {
-                 let initialItem = items[selectedIndex]
-                 playerManager.setupPlayerIfNeeded(for: initialItem, isFullscreen: isFullscreen)
-                 // Das initiale Item wird erst beim Verlassen oder Swipen als gesehen markiert.
-                 previouslySelectedItemForMarking = initialItem // Set for onDisappear
-                 PagedDetailView.logger.debug("Initial item \(initialItem.id) set for potential marking on disappear.")
-                 await handleIndexChangeDeferred(newValue: selectedIndex)
-            } else {
-                 PagedDetailView.logger.warning("onAppear: Invalid selectedIndex \(selectedIndex) for items count \(items.count).")
+        
+        if selectedIndex >= 0 && selectedIndex < items.count {
+            let initialItem = items[selectedIndex]
+            // Übergebe den aktuellen isFullscreen-Status an den PlayerManager
+            playerManager.setupPlayerIfNeeded(for: initialItem, isFullscreen: self.isFullscreen)
+            previouslySelectedItemForMarking = initialItem
+            PagedDetailView.logger.debug("Initial item \(initialItem.id) set for potential marking on disappear. isFullscreen: \(self.isFullscreen)")
+            Task { // Starte Deferred-Aktionen
+                await handleIndexChangeDeferred(newValue: selectedIndex)
             }
+        } else {
+            PagedDetailView.logger.warning("onAppear: Invalid selectedIndex \(selectedIndex) for items count \(items.count).")
         }
     }
 
-    // --- MODIFIED: cleanupViewAndMarkLastActiveItemVisited ---
     private func cleanupViewAndMarkLastActiveItemVisited() {
         PagedDetailView.logger.info("PagedDetailView disappearing.")
         imagePrefetcher.stop()
@@ -533,18 +534,20 @@ struct PagedDetailView: View {
         keyboardActionHandler.selectPreviousAction = nil
         keyboardActionHandler.seekForwardAction = nil
         keyboardActionHandler.seekBackwardAction = nil
-        if !isFullscreen { playerManager.cleanupPlayer() }
-        else { PagedDetailView.logger.info("Skipping player cleanup (fullscreen).") }
+        
+        if !isFullscreen { // Nur aufräumen, wenn wir nicht im Vollbild sind
+            playerManager.cleanupPlayer()
+        } else {
+            PagedDetailView.logger.info("Skipping player cleanup (PagedDetailView disappearing but isFullscreen is true).")
+        }
         showAllTagsForItem = []
         
-        // Mark the very last active item as seen when the view disappears
         if let itemToMark = previouslySelectedItemForMarking {
             settings.markItemAsSeen(id: itemToMark.id)
             PagedDetailView.logger.info("Marked last active item \(itemToMark.id) as seen on disappear.")
-            previouslySelectedItemForMarking = nil // Reset
+            previouslySelectedItemForMarking = nil
         }
     }
-    // --- END MODIFICATION ---
 
     private func handleIndexChangeImmediate(oldValue: Int, newValue: Int) {
         PagedDetailView.logger.info("Selected index changed from \(oldValue) to \(newValue)")
@@ -554,13 +557,14 @@ struct PagedDetailView: View {
         }
         let newItem = items[newValue]
         PagedDetailView.logger.debug("Immediate actions for index change to \(newValue). Setting up player.")
-        playerManager.setupPlayerIfNeeded(for: newItem, isFullscreen: isFullscreen)
+        // Übergebe den aktuellen isFullscreen-Status
+        playerManager.setupPlayerIfNeeded(for: newItem, isFullscreen: self.isFullscreen)
         
         isTogglingFavorite = false
         imagePrefetcher.stop()
     }
     
-    private func handleIndexChangeDeferred(newValue: Int) async { // Removed markAsSeen parameter
+    private func handleIndexChangeDeferred(newValue: Int) async {
          PagedDetailView.logger.debug("Deferred actions executing for index \(newValue).")
          guard newValue >= 0 && newValue < items.count else {
              PagedDetailView.logger.warning("handleIndexChangeDeferred: Invalid index \(newValue) (items.count: \(items.count)).")
@@ -603,14 +607,23 @@ struct PagedDetailView: View {
           PagedDetailView.logger.debug("Scene phase: \(String(describing: oldPhase)) -> \(String(describing: newPhase))")
           if newPhase == .active {
               settings.transientSessionMuteState = nil
-              if let player = playerManager.player, player.isMuted != settings.isVideoMuted { player.isMuted = settings.isVideoMuted }
-               if isFullscreen, let player = playerManager.player, player.timeControlStatus != .playing { player.play() }
+              // Nur Mute-Status anpassen, wenn NICHT im Vollbild. Im Vollbild steuert der Systemplayer.
+              if !isFullscreen, let player = playerManager.player, player.isMuted != settings.isVideoMuted {
+                  player.isMuted = settings.isVideoMuted
+              }
+              // Player nur starten, wenn aktiv, NICHT im Vollbild und nicht schon spielt.
+              if !isFullscreen, let player = playerManager.player, player.timeControlStatus != .playing {
+                  player.play()
+                  PagedDetailView.logger.debug("Scene became active. Resuming player (not fullscreen).")
+              }
           } else if newPhase == .inactive || newPhase == .background {
-              if (!isFullscreen && previewLinkTarget == nil && userProfileSheetTarget == nil && collectionSelectionSheetTarget == nil), let player = playerManager.player, player.timeControlStatus == .playing {
+              // Player nur pausieren, wenn NICHT im Vollbild und keine Sheets offen sind.
+              if !isFullscreen && previewLinkTarget == nil && userProfileSheetTarget == nil && collectionSelectionSheetTarget == nil,
+                 let player = playerManager.player, player.timeControlStatus == .playing {
                   PagedDetailView.logger.debug("Scene became inactive/background. Pausing player (not fullscreen, no sheets active).")
                   player.pause()
               } else {
-                  PagedDetailView.logger.debug("Scene became inactive/background. NOT pausing player (is fullscreen or a sheet is active).")
+                  PagedDetailView.logger.debug("Scene became inactive/background. NOT pausing player (is fullscreen or a sheet is active or player not playing).")
               }
               
               PagedDetailView.logger.info("App going to background/inactive. Forcing save of seen items.")
@@ -642,23 +655,35 @@ struct PagedDetailView: View {
           }
      }
 
+    // --- MODIFIED: handleEndFullScreen ---
     private func handleEndFullScreen() {
-          self.isFullscreen = false
-          PagedDetailView.logger.debug("[View] Callback: handleEndFullScreen")
-          if selectedIndex >= 0 && selectedIndex < items.count,
-             items[selectedIndex].isVideo,
-             items[selectedIndex].id == playerManager.playerItemID {
-              Task { @MainActor in
-                  try? await Task.sleep(for: .milliseconds(100))
-                  if !self.isFullscreen && self.previewLinkTarget == nil && self.userProfileSheetTarget == nil && self.collectionSelectionSheetTarget == nil && self.playerManager.player?.timeControlStatus != .playing {
-                      PagedDetailView.logger.debug("Resuming player after ending fullscreen (no sheets active).")
-                      self.playerManager.player?.play()
-                  } else {
-                      PagedDetailView.logger.debug("NOT resuming player after ending fullscreen (a sheet is active or player already playing/paused).")
-                  }
-              }
-          }
-     }
+        self.isFullscreen = false
+        PagedDetailView.logger.debug("[View] Callback: handleEndFullScreen. isFullscreen set to false.")
+        
+        // Nach dem Beenden des Vollbilds ist der Player normalerweise pausiert.
+        // Wir müssen ihn explizit wieder starten, wenn er nicht durch ein Sheet unterbrochen wurde.
+        if selectedIndex >= 0 && selectedIndex < items.count && items[selectedIndex].isVideo {
+            let currentItem = items[selectedIndex]
+            if currentItem.id == playerManager.playerItemID {
+                if !wasPlayingBeforeAnySheet && previewLinkTarget == nil && userProfileSheetTarget == nil && collectionSelectionSheetTarget == nil {
+                    // Wenn der Player nicht schon wegen eines Sheets pausiert wurde,
+                    // und wir jetzt nicht mehr im Vollbild sind, starten wir ihn.
+                    playerManager.player?.play()
+                    PagedDetailView.logger.debug("Resuming player after ending fullscreen (no sheets active, was not playing due to sheet).")
+                } else if wasPlayingBeforeAnySheet {
+                    // Wenn er wegen eines Sheets pausiert war, wird er in resumePlayerIfNeeded wieder gestartet.
+                    PagedDetailView.logger.debug("Player was paused for a sheet; resumePlayerIfNeeded will handle it.")
+                } else {
+                     PagedDetailView.logger.debug("Not resuming player after fullscreen: conditions not met (sheet might be active or player state already handled).")
+                }
+            } else {
+                PagedDetailView.logger.debug("Not resuming player after fullscreen: current item is not the one that was playing or player changed.")
+            }
+        }
+        // Wichtig: `wasPlayingBeforeAnySheet` wird in `resumePlayerIfNeeded` behandelt, falls ein Sheet im Spiel war.
+        // Hier geht es primär um den direkten Übergang von Fullscreen zu Non-Fullscreen.
+    }
+    // --- END MODIFICATION ---
 
     private func triggerLoadMoreIfNeeded(currentIndex: Int) async {
           guard currentIndex >= items.count - preloadThreshold else { return }

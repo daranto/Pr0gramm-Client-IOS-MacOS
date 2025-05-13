@@ -104,22 +104,17 @@ class AppSettings: ObservableObject {
 
     // MARK: - Published User Settings (Persisted via UserDefaults)
     @Published var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
-    // --- MODIFIED: feedType didSet Logik ---
     @Published var feedType: FeedType {
         didSet {
             UserDefaults.standard.set(feedType.rawValue, forKey: Self.feedTypeKey)
             Self.logger.info("Feed type changed to: \(self.feedType.displayName)")
-            // Wenn Junk ausgewählt wird, werden andere Inhaltsfilter irrelevant/angepasst
-            // Diese Logik ist nun in `apiFlags` und `apiShowJunk`
         }
     }
-    // --- END MODIFICATION ---
     @Published var showSFW: Bool { didSet { UserDefaults.standard.set(showSFW, forKey: Self.showSFWKey) } }
     @Published var showNSFW: Bool { didSet { UserDefaults.standard.set(showNSFW, forKey: Self.showNSFWKey) } }
     @Published var showNSFL: Bool { didSet { UserDefaults.standard.set(showNSFL, forKey: Self.showNSFLKey) } }
     @Published var showNSFP: Bool { didSet { UserDefaults.standard.set(showNSFP, forKey: Self.showNSFPKey) } }
     @Published var showPOL: Bool { didSet { UserDefaults.standard.set(showPOL, forKey: Self.showPOLKey) } }
-    // @Published var showJunk: Bool { ... } // Entfernt
 
     @Published var maxImageCacheSizeMB: Int {
         didSet {
@@ -179,7 +174,6 @@ class AppSettings: ObservableObject {
         }
     }
 
-
     // MARK: - Published Session State (Not Persisted)
     @Published var transientSessionMuteState: Bool? = nil
 
@@ -192,6 +186,29 @@ class AppSettings: ObservableObject {
 
     private var saveSeenItemsTask: Task<Void, Never>?
     private let saveSeenItemsDebounceDelay: Duration = .seconds(2)
+
+    // --- MODIFIED: Publisher for relevant favorite settings changes ---
+    var favoritesSettingsChangedPublisher: AnyPublisher<Void, Never> {
+        let sfwPublisher = $showSFW.map { _ in () }.eraseToAnyPublisher()
+        let nsfwPublisher = $showNSFW.map { _ in () }.eraseToAnyPublisher()
+        let nsflPublisher = $showNSFL.map { _ in () }.eraseToAnyPublisher()
+        let nsfpPublisher = $showNSFP.map { _ in () }.eraseToAnyPublisher()
+        let polPublisher = $showPOL.map { _ in () }.eraseToAnyPublisher()
+        let collectionIdPublisher = $selectedCollectionIdForFavorites.map { _ in () }.eraseToAnyPublisher()
+
+        return Publishers.MergeMany([
+            sfwPublisher,
+            nsfwPublisher,
+            nsflPublisher,
+            nsfpPublisher,
+            polPublisher,
+            collectionIdPublisher
+        ])
+        .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
+        .eraseToAnyPublisher()
+    }
+    // --- END MODIFICATION ---
+
 
     // MARK: - Computed Properties for API Usage
     var apiFlags: Int {
@@ -409,13 +426,13 @@ class AppSettings: ObservableObject {
          }
     }
 
-    public func forceSaveSeenItems() async { // Ist public
+    public func forceSaveSeenItems() async {
         saveSeenItemsTask?.cancel()
         Self.logger.info("Force save seen items requested. Current debounced task (if any) cancelled.")
         await saveSeenItemIDsToCloudAndLocal()
     }
 
-    private func saveSeenItemIDsToCloudAndLocal() async { // Ist private
+    private func saveSeenItemIDsToCloudAndLocal() async {
         let idsToSave = self.seenItemIDs
         Self.logger.debug("Saving \(idsToSave.count) seen item IDs to iCloud KVS (Key: \(Self.iCloudSeenItemsKey))...")
         do {

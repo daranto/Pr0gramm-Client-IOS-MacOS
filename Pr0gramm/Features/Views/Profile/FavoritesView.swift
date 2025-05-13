@@ -4,6 +4,7 @@
 import SwiftUI
 import os
 import Kingfisher
+// import Combine // Nicht mehr zwingend hier benötigt
 
 /// Displays the user's favorited items in a grid.
 /// Requires the user to be logged in. Handles loading, pagination, filtering, and navigation.
@@ -11,9 +12,7 @@ struct FavoritesView: View {
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
-    // --- NEW: Add NavigationService ---
     @EnvironmentObject var navigationService: NavigationService
-    // --- END NEW ---
     @State private var items: [Item] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
@@ -26,6 +25,15 @@ struct FavoritesView: View {
     @State private var showingFilterSheet = false
 
     @StateObject private var playerManager = VideoPlayerManager()
+
+    // --- State-Variablen zur Steuerung des Refresh ---
+    @State private var needsRefreshForTabChange = false
+    @State private var needsRefreshForLoginChange = false
+    @State private var needsRefreshForCollectionChange = false
+    @State private var needsRefreshForFilterChange = false
+    
+    @State private var didPerformInitialLoadForCurrentContext = false
+
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "FavoritesView")
@@ -81,21 +89,84 @@ struct FavoritesView: View {
         .sheet(isPresented: $showingFilterSheet) {
             FilterView().environmentObject(settings).environmentObject(authService)
         }
-        .task(id: authService.isLoggedIn) {
+        .onAppear { // Nur für einmalige Setup-Aktionen beim Erscheinen der View Instanz
             playerManager.configure(settings: settings)
-            await handleLoginOrFilterChange()
+            // Der Haupt-Task unten kümmert sich um das initiale Laden
         }
-        .task(id: settings.selectedCollectionIdForFavorites) {
-            FavoritesView.logger.info("Detected change in selectedCollectionIdForFavorites: \(settings.selectedCollectionIdForFavorites ?? -1). Refreshing favorites.")
-            await handleLoginOrFilterChange()
+        // --- Haupt-Task für Lade- und Refresh-Logik ---
+        .task(id: triggerKey) { // Dieser Task läuft, wenn triggerKey sich ändert
+            FavoritesView.logger.info("Main task running. Trigger Key: \(triggerKey). didPerformInitialLoad: \(didPerformInitialLoadForCurrentContext)")
+            await loadDataIfNeeded()
         }
-        .onChange(of: settings.showSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
-        .onChange(of: settings.showNSFW) { _, _ in Task { await handleLoginOrFilterChange() } }
-        .onChange(of: settings.showNSFL) { _, _ in Task { await handleLoginOrFilterChange() } }
-        .onChange(of: settings.showNSFP) { _, _ in Task { await handleLoginOrFilterChange() } }
-        .onChange(of: settings.showPOL) { _, _ in Task { await handleLoginOrFilterChange() } }
+        // --- Beobachter, die nur Flags setzen ---
+        .onChange(of: navigationService.selectedTab) { oldValue, newTab in
+            if newTab == .favorites && oldValue != .favorites {
+                FavoritesView.logger.info("FavoritesView: Tab switched to favorites.")
+                needsRefreshForTabChange = true // Signal für den Haupt-Task
+                didPerformInitialLoadForCurrentContext = false // Erlaube initialen Ladevorgang für neuen Kontext
+            } else if newTab != .favorites && oldValue == .favorites {
+                FavoritesView.logger.info("FavoritesView: Tab changed away from favorites.")
+                didPerformInitialLoadForCurrentContext = false // Zurücksetzen für nächsten Besuch
+            }
+        }
+        .onChange(of: authService.isLoggedIn) { _, _ in
+            FavoritesView.logger.info("FavoritesView: Login status changed.")
+            needsRefreshForLoginChange = true
+            didPerformInitialLoadForCurrentContext = false
+        }
+        .onChange(of: settings.selectedCollectionIdForFavorites) { _, _ in
+            FavoritesView.logger.info("FavoritesView: Selected collection ID changed.")
+            needsRefreshForCollectionChange = true
+            didPerformInitialLoadForCurrentContext = false
+        }
+        .onChange(of: settings.apiFlags) { _, _ in
+            FavoritesView.logger.info("FavoritesView: API flags changed.")
+            needsRefreshForFilterChange = true
+            didPerformInitialLoadForCurrentContext = false
+        }
         .onChange(of: settings.seenItemIDs) { _, _ in FavoritesView.logger.trace("SeenItemIDs changed.") }
     }
+
+    // --- NEW: Computed property als Schlüssel für den Haupt-Task ---
+    private var triggerKey: String {
+        // Erzeuge einen eindeutigen String, der sich ändert, wenn sich relevante Daten ändern
+        // ODER wenn ein Refresh manuell getriggert werden soll.
+        let tabActive = navigationService.selectedTab == .favorites
+        let loginStatus = authService.isLoggedIn
+        let collectionId = settings.selectedCollectionIdForFavorites ?? -1 // Default-Wert, falls nil
+        let flags = settings.apiFlags
+        
+        return "\(tabActive)-\(loginStatus)-\(collectionId)-\(flags)-\(needsRefreshForTabChange)-\(needsRefreshForLoginChange)-\(needsRefreshForCollectionChange)-\(needsRefreshForFilterChange)"
+    }
+    // --- END NEW ---
+    
+    // --- NEW: Zentrale Ladelogik, aufgerufen vom Haupt-Task ---
+    private func loadDataIfNeeded() async {
+        guard navigationService.selectedTab == .favorites else {
+            FavoritesView.logger.info("loadDataIfNeeded: Skipped, Favorites tab not active.")
+            if didPerformInitialLoadForCurrentContext { // Nur zurücksetzen, wenn schon mal geladen wurde
+                didPerformInitialLoadForCurrentContext = false
+            }
+            return
+        }
+
+        if !didPerformInitialLoadForCurrentContext || needsRefreshForTabChange || needsRefreshForLoginChange || needsRefreshForCollectionChange || needsRefreshForFilterChange {
+            FavoritesView.logger.info("loadDataIfNeeded: Proceeding with data refresh. Initial: \(!didPerformInitialLoadForCurrentContext), TabChange: \(needsRefreshForTabChange), LoginChange: \(needsRefreshForLoginChange), CollectionChange: \(needsRefreshForCollectionChange), FilterChange: \(needsRefreshForFilterChange)")
+            
+            // Flags zurücksetzen nach Auswertung
+            needsRefreshForTabChange = false
+            needsRefreshForLoginChange = false
+            needsRefreshForCollectionChange = false
+            needsRefreshForFilterChange = false
+
+            await performActualDataRefresh() // Die Methode, die refreshFavorites etc. aufruft
+            didPerformInitialLoadForCurrentContext = true // Markiere als geladen für diesen Kontext
+        } else {
+            FavoritesView.logger.info("loadDataIfNeeded: Skipped refresh, no relevant changes or already loaded for current context.")
+        }
+    }
+    // --- END NEW ---
+
 
     @ViewBuilder
     private var favoritesContentView: some View {
@@ -105,7 +176,7 @@ struct FavoritesView: View {
                     noCollectionSelectedContentView
                 } else if showNoFilterMessage {
                     noFilterContentView
-                } else if isLoading && items.isEmpty {
+                } else if isLoading && items.isEmpty && !didPerformInitialLoadForCurrentContext {
                     ProgressView("Lade Favoriten...").frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if items.isEmpty && !isLoading && errorMessage == nil && !showNoFilterMessage && !showNoCollectionSelectedMessage {
                     Text("Du hast noch keine Favoriten in dieser Sammlung (oder sie passen nicht zum Filter).")
@@ -150,7 +221,10 @@ struct FavoritesView: View {
             .padding(.horizontal, 5)
             .padding(.bottom)
         }
-        .refreshable { await refreshFavorites() }
+        .refreshable {
+            didPerformInitialLoadForCurrentContext = false // Erlaube refresh
+            await loadDataIfNeeded()
+        }
     }
 
     private var noFilterContentView: some View {
@@ -166,7 +240,10 @@ struct FavoritesView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .refreshable { await refreshFavorites() }
+        .refreshable {
+            didPerformInitialLoadForCurrentContext = false
+            await loadDataIfNeeded()
+        }
     }
     
     private var noCollectionSelectedContentView: some View {
@@ -178,16 +255,17 @@ struct FavoritesView: View {
             Text("Bitte wähle in den Einstellungen einen Ordner aus, der als Standard für deine Favoriten verwendet werden soll.")
                 .font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
             Button("Zu den Einstellungen") {
-                // --- MODIFIED: Use NavigationService to switch tab ---
                 FavoritesView.logger.info("User tapped 'Zu den Einstellungen'. Navigating to Settings tab.")
                 navigationService.selectedTab = .settings
-                // --- END MODIFICATION ---
             }
             .buttonStyle(.bordered).padding(.top)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .refreshable { await refreshFavorites() }
+        .refreshable {
+            didPerformInitialLoadForCurrentContext = false
+            await loadDataIfNeeded()
+        }
     }
 
     private var loggedOutContentView: some View {
@@ -204,21 +282,28 @@ struct FavoritesView: View {
     }
 
     // MARK: - Logic Methods
-
-    private func handleLoginOrFilterChange() async {
+    private func performActualDataRefresh() async { // Umbenannt von handleLoginOrFilterChange
+        FavoritesView.logger.info("performActualDataRefresh called. isLoading: \(isLoading)")
+        guard !isLoading else {
+            FavoritesView.logger.info("performActualDataRefresh skipped: isLoading is true.")
+            return
+        }
+        
         if authService.isLoggedIn {
             if settings.selectedCollectionIdForFavorites != nil {
                 self.showNoCollectionSelectedMessage = false
                 await refreshFavorites()
             } else {
                 FavoritesView.logger.warning("Cannot refresh favorites: No collection selected in AppSettings.")
-                self.items = []
-                self.errorMessage = nil
-                self.isLoading = false
-                self.canLoadMore = false
-                self.isLoadingMore = false
-                self.showNoFilterMessage = false
-                self.showNoCollectionSelectedMessage = true
+                await MainActor.run {
+                    self.items = []
+                    self.errorMessage = nil
+                    self.isLoading = false
+                    self.canLoadMore = false
+                    self.isLoadingMore = false
+                    self.showNoFilterMessage = false
+                    self.showNoCollectionSelectedMessage = true
+                }
             }
         } else {
             await MainActor.run {
@@ -261,10 +346,18 @@ struct FavoritesView: View {
             return
         }
         self.showNoFilterMessage = false; self.isLoading = true; self.errorMessage = nil
-        defer { Task { @MainActor in self.isLoading = false; FavoritesView.logger.info("Finished favorites refresh process.") } }
+        
+        defer {
+            Task { @MainActor in
+                self.isLoading = false
+                // didPerformInitialLoadForCurrentContext wird jetzt in loadDataIfNeeded gesetzt
+                FavoritesView.logger.info("Finished favorites refresh process.")
+            }
+        }
         canLoadMore = true; isLoadingMore = false; var initialItemsFromCache: [Item]? = nil
 
-        if items.isEmpty {
+        // Cache nur laden, wenn Items leer SIND und es der allererste Ladeversuch ist für diesen Kontext
+        if items.isEmpty && !didPerformInitialLoadForCurrentContext {
              initialItemsFromCache = await settings.loadItemsFromCache(forKey: cacheKey)
              if let cached = initialItemsFromCache, !cached.isEmpty {
                  self.items = cached.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
@@ -285,7 +378,8 @@ struct FavoritesView: View {
             guard !Task.isCancelled else { FavoritesView.logger.info("Refresh task cancelled."); return }
 
             let newFirstItemId = fetchedItemsFromAPI.first?.id
-            let contentChanged = initialItemsFromCache == nil || initialItemsFromCache?.count != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId
+            let contentChanged = initialItemsFromCache == nil || (initialItemsFromCache != nil && (initialItemsFromCache?.count != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId))
+
             self.items = fetchedItemsFromAPI.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
             self.canLoadMore = !fetchedItemsFromAPI.isEmpty;
             FavoritesView.logger.info("FavoritesView updated. Total: \(self.items.count).");
@@ -293,7 +387,10 @@ struct FavoritesView: View {
             authService.favoritedItemIDs = Set(self.items.map { $0.id })
             FavoritesView.logger.info("Updated global favorite ID set in AuthService (\(authService.favoritedItemIDs.count) IDs) based on collection '\(collectionKeyword)'.")
 
-            if !navigationPath.isEmpty && contentChanged { navigationPath = NavigationPath(); FavoritesView.logger.info("Popped navigation.") }
+            if !navigationPath.isEmpty && contentChanged {
+                navigationPath = NavigationPath()
+                FavoritesView.logger.info("Popped navigation due to content change from refresh.")
+            }
             await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
             await settings.updateCacheSizes()
         }
@@ -372,7 +469,7 @@ struct FavoritesView: View {
     let previewSettings = AppSettings()
     previewSettings.selectedCollectionIdForFavorites = 101
     let previewAuthService = AuthService(appSettings: previewSettings)
-    let previewNavigationService = NavigationService() // Add for preview
+    let previewNavigationService = NavigationService()
     previewAuthService.isLoggedIn = true
     let sampleCollections = [
         ApiCollection(id: 101, name: "Meine Favoriten", keyword: "favoriten", isPublic: 0, isDefault: 1, itemCount: 123),
@@ -387,14 +484,14 @@ struct FavoritesView: View {
     return FavoritesView()
         .environmentObject(previewSettings)
         .environmentObject(previewAuthService)
-        .environmentObject(previewNavigationService) // Provide NavigationService
+        .environmentObject(previewNavigationService)
 }
 
 #Preview("Logged In - No Collection Selected") {
     let previewSettings = AppSettings()
     previewSettings.selectedCollectionIdForFavorites = nil
     let previewAuthService = AuthService(appSettings: previewSettings)
-    let previewNavigationService = NavigationService() // Add for preview
+    let previewNavigationService = NavigationService()
     previewAuthService.isLoggedIn = true
     previewAuthService.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2, badges: [])
     #if DEBUG
@@ -404,7 +501,7 @@ struct FavoritesView: View {
     return FavoritesView()
         .environmentObject(previewSettings)
         .environmentObject(previewAuthService)
-        .environmentObject(previewNavigationService) // Provide NavigationService
+        .environmentObject(previewNavigationService)
 }
 
 
@@ -412,6 +509,6 @@ struct FavoritesView: View {
     FavoritesView()
         .environmentObject(AppSettings())
         .environmentObject(AuthService(appSettings: AppSettings()))
-        .environmentObject(NavigationService()) // Provide NavigationService
+        .environmentObject(NavigationService())
 }
 // --- END OF COMPLETE FILE ---
