@@ -3,12 +3,10 @@
 
 import SwiftUI
 import os
-import Kingfisher // Import Kingfisher
+import Kingfisher
 
-/// Zeigt die vom Benutzer favorisierten ("Favorisierten") Kommentare an.
-/// Erfordert, dass der Benutzer angemeldet ist. Handhabt Laden, Paginierung und Filterung.
 struct UserFavoritedCommentsView: View {
-    let username: String // Benutzername, dessen Favorisierte Kommentare angezeigt werden sollen
+    let username: String
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
@@ -18,21 +16,30 @@ struct UserFavoritedCommentsView: View {
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
-    @State private var itemToNavigate: Item? = nil
+    struct ItemNavigationValue: Hashable, Identifiable {
+        let item: Item
+        let targetCommentID: Int?
+        var id: Int { item.id }
+    }
+    @State private var itemNavigationValue: ItemNavigationValue? = nil
+
     @State private var isLoadingNavigationTarget: Bool = false
     @State private var navigationTargetItemId: Int? = nil
 
     @State private var previewLinkTargetFromComment: PreviewLinkTarget? = nil
+    @State private var didLoad: Bool = false
 
     @StateObject private var playerManager = VideoPlayerManager()
 
     private let apiService = APIService()
-    // --- MODIFIED: logger to fileprivate ---
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserFavoritedCommentsView")
-    // --- END MODIFICATION ---
 
     var body: some View {
-        Group {
+        // Der NavigationStack hier ist wichtig.
+        // Wenn die übergeordnete View (z.B. ProfileView) ebenfalls einen NavigationStack hat,
+        // könnte dies zu verschachtelten Stacks führen, was manchmal Probleme macht.
+        // Oft ist es besser, den NavigationStack so weit oben wie möglich in der Hierarchie zu haben.
+        Group { // NavigationStack wurde hier entfernt, da ProfileView einen hat.
             commentsContentView
         }
         .navigationTitle("Favorisierte Kommentare")
@@ -42,19 +49,22 @@ struct UserFavoritedCommentsView: View {
         .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
             Button("OK") { errorMessage = nil; isLoadingNavigationTarget = false; navigationTargetItemId = nil }
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
-        .task {
-            playerManager.configure(settings: settings)
-            await refreshComments()
-        }
-        .onChange(of: settings.showSFW) { _, _ in Task { await refreshComments() } }
-        .onChange(of: settings.showNSFW) { _, _ in Task { await refreshComments() } }
-        .onChange(of: settings.showNSFL) { _, _ in Task { await refreshComments() } }
-        .onChange(of: settings.showNSFP) { _, _ in Task { await refreshComments() } }
-        .onChange(of: settings.showPOL) { _, _ in Task { await refreshComments() } }
-        .navigationDestination(item: $itemToNavigate) { loadedItem in
-             PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager)
-                 .environmentObject(settings)
-                 .environmentObject(authService)
+        
+        .onChange(of: settings.apiFlags) { _, _ in Task { await refreshComments() } } // Vereinfacht
+        .navigationDestination(item: $itemNavigationValue) { navValue in
+             PagedDetailViewWrapperForItem(
+                 item: navValue.item,
+                 playerManager: playerManager,
+                 targetCommentID: navValue.targetCommentID
+             )
+             .environmentObject(settings)
+             .environmentObject(authService)
+             .onDisappear {
+                 // Wenn die PagedDetailView verschwindet, wird itemNavigationValue
+                 // von SwiftUI automatisch auf nil gesetzt.
+                 // Wir können hier loggen, um das zu bestätigen.
+                 UserFavoritedCommentsView.logger.info("PagedDetailViewWrapperForItem disappeared. itemNavigationValue should now be nil.")
+             }
         }
         .sheet(item: $previewLinkTargetFromComment) { target in
             LinkedItemPreviewView(itemID: target.id)
@@ -70,6 +80,19 @@ struct UserFavoritedCommentsView: View {
                     .shadow(radius: 5)
             }
         }
+        .onAppear {
+            guard !didLoad else { return }
+            didLoad = true
+            Task {
+                playerManager.configure(settings: settings)
+                await refreshComments()
+            }
+        }
+        // --- DEBUG: Log when itemNavigationValue changes ---
+        // .onChange(of: itemNavigationValue) { oldValue, newValue in
+        //     UserFavoritedCommentsView.logger.info("itemNavigationValue changed from \(String(describing: oldValue)) to \(String(describing: newValue))")
+        // }
+        // --- END DEBUG ---
     }
 
     @ViewBuilder private var commentsContentView: some View {
@@ -100,7 +123,7 @@ struct UserFavoritedCommentsView: View {
         List {
             ForEach(comments) { comment in
                 Button {
-                    Task { await prepareAndNavigateToItem(comment.itemId) }
+                    Task { await prepareAndNavigateToItem(comment.itemId, targetCommentID: comment.id) }
                 } label: {
                     FavoritedCommentRow(comment: comment)
                 }
@@ -158,7 +181,7 @@ struct UserFavoritedCommentsView: View {
     }
 
     @MainActor
-    private func prepareAndNavigateToItem(_ itemId: Int?) async {
+    private func prepareAndNavigateToItem(_ itemId: Int?, targetCommentID: Int?) async {
         guard let id = itemId else {
             UserFavoritedCommentsView.logger.warning("Attempted to navigate, but itemId was nil.")
             return
@@ -168,20 +191,25 @@ struct UserFavoritedCommentsView: View {
             return
         }
 
-        UserFavoritedCommentsView.logger.info("Preparing navigation for item ID: \(id)")
+        UserFavoritedCommentsView.logger.info("Preparing navigation for item ID: \(id), targetCommentID: \(targetCommentID ?? -1)")
         isLoadingNavigationTarget = true
         navigationTargetItemId = id
         errorMessage = nil
+        
+        // Wichtig: itemNavigationValue wird erst gesetzt, wenn das Item erfolgreich geladen wurde.
 
         do {
-            let fetchedItem = try await apiService.fetchItem(id: id, flags: settings.apiFlags)
+            let flagsToFetchWith = settings.apiFlags
+            UserFavoritedCommentsView.logger.debug("Fetching item \(id) for navigation using global flags: \(flagsToFetchWith)")
+            let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
+
             guard navigationTargetItemId == id else {
                  UserFavoritedCommentsView.logger.info("Navigation target changed while item \(id) was loading. Discarding result.")
                  isLoadingNavigationTarget = false; navigationTargetItemId = nil; return
             }
             if let item = fetchedItem {
                 UserFavoritedCommentsView.logger.info("Successfully fetched item \(id) for navigation.")
-                itemToNavigate = item
+                self.itemNavigationValue = ItemNavigationValue(item: item, targetCommentID: targetCommentID) // Jetzt setzen
             } else {
                 UserFavoritedCommentsView.logger.warning("Could not fetch item \(id) for navigation (API returned nil or filter mismatch).")
                 errorMessage = "Post \(id) konnte nicht geladen werden oder entspricht nicht den Filtern."
@@ -211,6 +239,7 @@ struct UserFavoritedCommentsView: View {
 
         self.isLoadingNavigationTarget = false
         self.navigationTargetItemId = nil
+        self.itemNavigationValue = nil // Wichtig: Beim Refresh zurücksetzen
         self.isLoading = true
         self.errorMessage = nil
         let initialTimestamp = Int(Date.distantFuture.timeIntervalSince1970)
@@ -292,6 +321,7 @@ struct UserFavoritedCommentsView: View {
     }
 }
 
+
 struct FavoritedCommentRow: View {
     let comment: ItemComment
     var overrideUsername: String? = nil
@@ -333,7 +363,6 @@ struct FavoritedCommentRow: View {
                 attributedString[range].font = baseUIFont
             }
         } catch {
-            // Use the logger of the outer struct (UserFavoritedCommentsView)
             UserFavoritedCommentsView.logger.error("Error creating NSDataDetector in FavoritedCommentRow: \(error.localizedDescription)")
         }
         return attributedString
@@ -386,7 +415,7 @@ struct FavoritedCommentRow: View {
         }
 
         var body: some View {
-            NavigationStack {
+            NavigationStack { // Wichtig: Hier den NavigationStack für die Preview hinzufügen
                 UserFavoritedCommentsView(username: "Daranto")
                     .environmentObject(previewSettings)
                     .environmentObject(previewAuthService)

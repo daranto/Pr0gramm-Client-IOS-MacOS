@@ -303,20 +303,20 @@ struct DetailViewContent: View {
                              attemptScrollToComment(proxy: proxy, targetID: tid)
                         }
                     }
-                    .onChange(of: flatComments.count) { _, _ in
+                    .onChange(of: flatComments.count) { _, _ in // Re-check if comments list changes
                         if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
                             attemptScrollToComment(proxy: proxy, targetID: tid)
                         }
                     }
-                    .onAppear {
+                    .onAppear { // Also attempt on appear if data is already loaded
                         if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
                             attemptScrollToComment(proxy: proxy, targetID: tid)
                         }
                     }
             }
-        } else {
+        } else { // Compact
             ScrollViewReader { proxy in
-                ScrollView {
+                ScrollView { // This is the main ScrollView for compact layout
                     VStack(spacing: 0) {
                         GeometryReader { geo in
                             let aspect = guessAspectRatio() ?? 1.0
@@ -325,7 +325,7 @@ struct DetailViewContent: View {
                         }
                         .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
                         infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
-                        commentsContentSection(scrollViewProxy: proxy)
+                        commentsContentSection(scrollViewProxy: proxy) // Pass proxy
                             .padding(.horizontal).padding(.bottom, 10)
                     }
                 }
@@ -334,12 +334,12 @@ struct DetailViewContent: View {
                          attemptScrollToComment(proxy: proxy, targetID: tid)
                     }
                 }
-                .onChange(of: flatComments.count) { _, _ in
+                .onChange(of: flatComments.count) { _, _ in // Re-check if comments list changes
                     if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
                         attemptScrollToComment(proxy: proxy, targetID: tid)
                     }
                 }
-                .onAppear {
+                .onAppear { // Also attempt on appear
                     if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
                         attemptScrollToComment(proxy: proxy, targetID: tid)
                     }
@@ -361,9 +361,7 @@ struct DetailViewContent: View {
             toggleCollapseAction: toggleCollapseAction,
             showCommentInputAction: { parentId in showCommentInputAction(item.id, parentId) },
             targetCommentID: self.targetCommentID,
-            // --- MODIFIED: Pass new callback ---
             onHighlightCompletedForCommentID: self.onHighlightCompletedForCommentID
-            // --- END MODIFICATION ---
         )
     }
     
@@ -372,21 +370,26 @@ struct DetailViewContent: View {
             DetailViewContent.logger.warning("AttemptScroll: ScrollViewProxy is nil.")
             return
         }
+        // Check if the target comment is actually in the currently rendered flatComments
         guard flatComments.contains(where: { $0.id == targetID }) else {
             DetailViewContent.logger.info("AttemptScroll: Target comment ID \(targetID) not found in current flatComments. Scroll not attempted yet.")
+            // Don't mark as attempted if the comment isn't even in the list,
+            // it might appear later if a parent is expanded.
             return
         }
 
         DetailViewContent.logger.info("Attempting to scroll to comment ID: \(targetID)")
-        didAttemptScrollToTarget = true
+        didAttemptScrollToTarget = true // Mark as attempted *now*
 
         Task {
-            try? await Task.sleep(for: .milliseconds(200)) // Slightly longer delay to ensure layout pass
+            // --- MODIFIED: Increased delay slightly ---
+            try? await Task.sleep(for: .milliseconds(300)) // Increased from 200ms
+            // --- END MODIFICATION ---
             withAnimation {
-                proxy.scrollTo(targetID, anchor: .center)
+                proxy.scrollTo(targetID, anchor: .top)
             }
-            DetailViewContent.logger.info("Scroll to comment ID \(targetID) requested.")
-            // onHighlightCompletedForCommentID wird jetzt von CommentView aufgerufen, nachdem dessen Highlight beendet ist.
+            DetailViewContent.logger.info("Scroll to comment ID \(targetID) requested with anchor: .top")
+            // The onHighlightCompletedForCommentID will be called by CommentView
         }
     }
 
@@ -398,23 +401,23 @@ struct DetailViewContent: View {
                     mediaContentInternal
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     Divider()
-                    ScrollView {
+                    ScrollView { // This ScrollView is for the right panel (info + comments)
                         VStack(alignment: .leading, spacing: 15) {
                             infoAndTagsContent.padding([.horizontal, .top]);
-                            commentsWrapper
+                            commentsWrapper // This will inject ScrollViewReader and pass proxy
                                 .padding([.horizontal, .bottom])
                         }
                     }
                     .frame(minWidth: 300, idealWidth: 450, maxWidth: 600).background(Color(.secondarySystemBackground))
                 }
-            } else {
-                commentsWrapper
+            } else { // Compact
+                commentsWrapper // This will inject ScrollViewReader around its own ScrollView
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             DetailViewContent.logger.debug("DetailViewContent for item \(item.id) appearing. TargetCommentID: \(targetCommentID ?? -1)")
-            didAttemptScrollToTarget = false
+            didAttemptScrollToTarget = false // Reset this on appear/item change
         }
         .onDisappear {
             DetailViewContent.logger.debug("DetailViewContent for item \(item.id) disappearing.")
@@ -435,7 +438,7 @@ struct DetailViewContent: View {
         }) { shareableItemWrapper in
             ShareSheet(activityItems: shareableItemWrapper.itemsToShare)
         }
-        .onChange(of: targetCommentID) { _, newTargetID in
+        .onChange(of: targetCommentID) { _, newTargetID in // Reset if target changes
             DetailViewContent.logger.debug("targetCommentID in DetailViewContent changed to: \(newTargetID ?? -1). Resetting didAttemptScrollToTarget.")
             didAttemptScrollToTarget = false
         }
@@ -631,7 +634,7 @@ struct PreviewWrapper: View {
                      self.commentReplyTarget = ReplyTarget(itemId: itemId, parentId: parentId)
                 },
                 targetCommentID: previewTargetCommentID,
-                onHighlightCompletedForCommentID: { completedID in // Beachte den Namen des Callbacks
+                onHighlightCompletedForCommentID: { completedID in
                     print("Preview: Highlight completed for comment \(completedID), clearing previewTargetCommentID.")
                     if previewTargetCommentID == completedID {
                         previewTargetCommentID = nil

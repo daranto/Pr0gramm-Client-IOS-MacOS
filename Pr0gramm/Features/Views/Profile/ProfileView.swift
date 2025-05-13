@@ -4,6 +4,7 @@
 import SwiftUI
 import Kingfisher
 
+// --- MODIFIED: Sicherstellen, dass der Enum nicht private/fileprivate ist ---
 enum ProfileNavigationTarget: Hashable {
     case uploads(username: String)
     case favoritedComments(username: String)
@@ -11,13 +12,16 @@ enum ProfileNavigationTarget: Hashable {
     case collectionItems(collection: ApiCollection, username: String)
     case allUserUploads(username: String)
     case allUserComments(username: String)
+    case postDetail(item: Item, targetCommentID: Int?) // Dieser Case muss hier sein und der Enum zugänglich
 }
+// --- END MODIFICATION ---
 
 /// Displays the user's profile information when logged in, or prompts for login otherwise.
 struct ProfileView: View {
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var settings: AppSettings
     @State private var showingLoginSheet = false
+    @State private var navigationPath = NavigationPath()
 
     private let germanDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -28,7 +32,7 @@ struct ProfileView: View {
     }()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             List {
                 if authService.isLoggedIn {
                     loggedInContent
@@ -49,7 +53,7 @@ struct ProfileView: View {
             }
             .navigationDestination(for: ProfileNavigationTarget.self) { target in
                  switch target {
-                 case .uploads(let username):
+                 case .uploads(let username): // Dieser Case wird von ProfileView selbst genutzt
                      UserUploadsView(username: username)
                  case .favoritedComments(let username):
                      UserFavoritedCommentsView(username: username)
@@ -57,10 +61,17 @@ struct ProfileView: View {
                      UserCollectionsListView(username: username)
                  case .collectionItems(let collection, let username):
                      CollectionItemsView(collection: collection, username: username)
-                 case .allUserUploads(let username):
+                 case .allUserUploads(let username): // Wird auch von UserProfileSheetView verwendet
                      UserUploadsView(username: username)
-                 case .allUserComments(let username):
+                 case .allUserComments(let username): // Wird auch von UserProfileSheetView verwendet
                      UserProfileCommentsView(username: username)
+                 case .postDetail(let item, let targetCommentID): // Dieser Case ist für UserProfileSheetView wichtig
+                     PagedDetailViewWrapperForItem(
+                         item: item,
+                         playerManager: StateObject(wrappedValue: VideoPlayerManager()).wrappedValue, // Erzeuge hier eine Instanz oder übergebe eine
+                         targetCommentID: targetCommentID
+                     )
+                     // Environment Objects werden normalerweise durchgereicht, wenn sie in der Hierarchie oben sind
                  }
             }
         }
@@ -81,9 +92,7 @@ struct ProfileView: View {
                     Text("Rang")
                         .font(UIConstants.bodyFont)
                     Spacer()
-                    // --- MODIFIED: Use UserMarkView here directly ---
                     UserMarkView(markValue: user.mark)
-                    // --- END MODIFICATION ---
                 }
                 HStack {
                     Text("Benis")
@@ -207,23 +216,19 @@ struct ProfileView: View {
     }
 }
 
-// --- MODIFIED: UserMarkView to display name again ---
 struct UserMarkView: View {
     let markValue: Int?
-    // --- NEW: Add showName parameter ---
-    let showName: Bool // Default is true, set in init
+    let showName: Bool
 
     private var markEnum: Mark
     private var markColor: Color { markEnum.displayColor }
     private var markName: String { markEnum.displayName }
 
-    // --- NEW: Initializer with default value ---
     init(markValue: Int?, showName: Bool = true) {
         self.markValue = markValue
         self.markEnum = Mark(rawValue: markValue ?? -1)
         self.showName = showName
     }
-    // --- END NEW ---
 
     static func getMarkName(for mark: Int) -> String { Mark(rawValue: mark).displayName }
 
@@ -232,21 +237,16 @@ struct UserMarkView: View {
             Circle().fill(markColor)
                 .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
                 .frame(width: 8, height: 8)
-
-            // --- MODIFIED: Conditionally show Text ---
             if showName {
                 Text(markName)
-                    .font(UIConstants.subheadlineFont) // Or bodyFont depending on context
+                    .font(UIConstants.subheadlineFont)
                     .foregroundColor(.secondary)
             }
-            // --- END MODIFICATION ---
         }
     }
 }
 
-// --- END MODIFICATION ---
-
-// MARK: - Previews (Unchanged)
+// MARK: - Previews
 private struct LoggedInProfilePreviewWrapper: View {
     @StateObject private var settings: AppSettings
     @StateObject private var authService: AuthService
