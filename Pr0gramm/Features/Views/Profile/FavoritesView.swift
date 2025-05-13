@@ -1,10 +1,8 @@
 // Pr0gramm/Pr0gramm/Features/Views/Profile/FavoritesView.swift
-// --- START OF COMPLETE FILE ---
 
 import SwiftUI
 import os
 import Kingfisher
-// import Combine // Nicht mehr zwingend hier benötigt
 
 /// Displays the user's favorited items in a grid.
 /// Requires the user to be logged in. Handles loading, pagination, filtering, and navigation.
@@ -23,6 +21,9 @@ struct FavoritesView: View {
 
     @State private var navigationPath = NavigationPath()
     @State private var showingFilterSheet = false
+    
+    // Add a flag to prevent navigation reset when returning from fullscreen
+    @State private var isReturningFromFullscreen = false
 
     @StateObject private var playerManager = VideoPlayerManager()
 
@@ -70,6 +71,22 @@ struct FavoritesView: View {
                             playerManager: playerManager,
                             loadMoreAction: { Task { await loadMoreFavorites() } }
                         )
+                        .onDisappear {
+                            // Check if we're returning from fullscreen mode and ignore the navigation reset
+                            if isReturningFromFullscreen {
+                                isReturningFromFullscreen = false
+                            }
+                        }
+                        .onAppear {
+                            // Reset the fullscreen flag when entering a detail view
+                            isReturningFromFullscreen = false
+                        }
+                        // Add a listener for the fullscreen state change notification
+                        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                            // Set flag when returning from system fullscreen
+                            isReturningFromFullscreen = true
+                            FavoritesView.logger.info("Detected return from fullscreen, preventing navigation reset")
+                        }
                     } else {
                         Text("Fehler: Item nicht in Favoriten gefunden.")
                              .onAppear { FavoritesView.logger.warning("Navigation destination item \(destinationItem.id) not found.") }
@@ -293,6 +310,12 @@ struct FavoritesView: View {
             return
         }
         
+        // Skip refresh if currently in a detail view
+        guard navigationPath.isEmpty || isReturningFromFullscreen else {
+            FavoritesView.logger.info("performActualDataRefresh skipped: User is in a detail view.")
+            return
+        }
+        
         if authService.isLoggedIn {
             if settings.selectedCollectionIdForFavorites != nil {
                 self.showNoCollectionSelectedMessage = false
@@ -391,7 +414,8 @@ struct FavoritesView: View {
             authService.favoritedItemIDs = Set(self.items.map { $0.id })
             FavoritesView.logger.info("Updated global favorite ID set in AuthService (\(authService.favoritedItemIDs.count) IDs) based on collection '\(collectionKeyword)'.")
 
-            if !navigationPath.isEmpty && contentChanged {
+            // Only reset navigation if not returning from fullscreen and content has changed significantly
+            if !navigationPath.isEmpty && contentChanged && !isReturningFromFullscreen {
                 navigationPath = NavigationPath()
                 FavoritesView.logger.info("Popped navigation due to content change from refresh.")
             }
@@ -508,11 +532,9 @@ struct FavoritesView: View {
         .environmentObject(previewNavigationService)
 }
 
-
 #Preview("Logged Out") {
     FavoritesView()
         .environmentObject(AppSettings())
         .environmentObject(AuthService(appSettings: AppSettings()))
         .environmentObject(NavigationService())
 }
-// --- END OF COMPLETE FILE ---
