@@ -3,6 +3,7 @@
 
 import SwiftUI
 import Foundation // Für ProcessInfo
+import UIKit // Für UIFont
 
 /// Defines adaptive UI constants, especially font sizes, for different platforms.
 struct UIConstants {
@@ -45,4 +46,30 @@ struct UIConstants {
     static var gridItemMinWidth: CGFloat { isRunningOnMac ? 250 : 100 }
 
 }
+
+// --- NEW: Moved UIFont extension here and made it internal (default) ---
+extension UIFont {
+    static func uiFont(from font: Font) -> UIFont {
+        // Logger kann hier nicht direkt verwendet werden, da UIConstants keine Member hat.
+        // Aber die Logik ist einfach genug.
+        switch font {
+            case .largeTitle: return UIFont.preferredFont(forTextStyle: .largeTitle)
+            case .title: return UIFont.preferredFont(forTextStyle: .title1)
+            case .title2: return UIFont.preferredFont(forTextStyle: .title2)
+            case .title3: return UIFont.preferredFont(forTextStyle: .title3)
+            case .headline: return UIFont.preferredFont(forTextStyle: .headline)
+            case .subheadline: return UIFont.preferredFont(forTextStyle: .subheadline)
+            case .body: return UIFont.preferredFont(forTextStyle: .body)
+            case .callout: return UIFont.preferredFont(forTextStyle: .callout)
+            case .footnote: return UIFont.preferredFont(forTextStyle: .footnote)
+            case .caption: return UIFont.preferredFont(forTextStyle: .caption1)
+            case .caption2: return UIFont.preferredFont(forTextStyle: .caption2)
+            default:
+                // print("Warning: Could not precisely convert SwiftUI Font to UIFont. Using body style as fallback.")
+                // In einer Utility-Klasse könnte man hier ggf. loggen, in einer Struct-Extension ist print() eine Option.
+                return UIFont.preferredFont(forTextStyle: .body)
+        }
+    }
+}
+// --- END NEW ---
 // --- END OF COMPLETE FILE ---

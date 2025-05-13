@@ -13,16 +13,13 @@ struct CommentsSection: View {
     let isCommentCollapsed: (Int) -> Bool
     let toggleCollapseAction: (Int) -> Void
     let showCommentInputAction: (Int) -> Void // parentId
+    let targetCommentID: Int?
+    let onHighlightCompletedForCommentID: (Int) -> Void
 
-    // --- MODIFIED: Entferne showAllComments und initialCommentLimit ---
-    // @State private var showAllComments = false
-    // private let initialCommentLimit = 50
 
     private var commentsToDisplay: [FlatCommentDisplayItem] {
-        // --- MODIFIED: Zeige immer alle flatComments an ---
         return flatComments
     }
-    // --- END MODIFICATION ---
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -54,7 +51,7 @@ struct CommentsSection: View {
                        .foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .center).padding()
              } else {
                  LazyVStack(alignment: .leading, spacing: 0) {
-                     ForEach(commentsToDisplay) { flatItem in // commentsToDisplay gibt jetzt immer alle flatComments zurück
+                     ForEach(commentsToDisplay) { flatItem in
                          VStack(alignment: .leading, spacing: 0) {
                              CommentView(
                                  comment: flatItem.comment,
@@ -64,7 +61,9 @@ struct CommentsSection: View {
                                  hasChildren: flatItem.hasChildren,
                                  isCollapsed: isCommentCollapsed(flatItem.id),
                                  onToggleCollapse: { toggleCollapseAction(flatItem.id) },
-                                 onReply: { showCommentInputAction(flatItem.id) }
+                                 onReply: { showCommentInputAction(flatItem.id) },
+                                 targetCommentID: targetCommentID,
+                                 onHighlightCompleted: onHighlightCompletedForCommentID
                              )
                              .padding(.leading, CGFloat(flatItem.level * 15))
                              .padding(.horizontal)
@@ -77,16 +76,6 @@ struct CommentsSection: View {
                      }
                  }
                  .padding(.vertical, 5)
-
-                 // --- MODIFIED: Entferne den "Alle Kommentare anzeigen" Button ---
-                 // if !showAllComments && flatComments.count > initialCommentLimit {
-                 //     Button { withAnimation { showAllComments = true } } label: {
-                 //         Text("Alle \(flatComments.count) sichtbaren Kommentare anzeigen (von \(totalCommentCount))").font(.footnote.weight(.medium)).frame(maxWidth: .infinity).padding(.vertical, 8)
-                 //     }
-                 //     .buttonStyle(.bordered).padding(.horizontal).padding(.top, 10)
-                 //     Divider().padding(.top, 5)
-                 // }
-                 // --- END MODIFICATION ---
              }
         }
     }
@@ -98,7 +87,7 @@ struct CommentsSection: View {
     let comment2 = ItemComment(id: 2, parent: 1, content: "Reply 1.1", created: 2, up: 5, down: 0, confidence: 1, name: "UserB", mark: 2)
     let comment3 = ItemComment(id: 3, parent: 1, content: "Reply 1.2", created: 3, up: 2, down: 0, confidence: 1, name: "UserC", mark: 1)
     let comment4 = ItemComment(id: 4, parent: 2, content: "Reply 1.1.1", created: 4, up: 1, down: 0, confidence: 1, name: "UserD", mark: 0)
-    let comment5 = ItemComment(id: 5, parent: 0, content: "Top 2", created: 5, up: 8, down: 1, confidence: 1, name: "UserA", mark: 1) // Comment from OP
+    let comment5 = ItemComment(id: 5, parent: 0, content: "Top 2", created: 5, up: 8, down: 1, confidence: 1, name: "UserA", mark: 1)
     return [
         FlatCommentDisplayItem(id: 1, comment: comment1, level: 0, hasChildren: true),
         FlatCommentDisplayItem(id: 2, comment: comment2, level: 1, hasChildren: true),
@@ -109,29 +98,33 @@ struct CommentsSection: View {
 }
 
 private struct CommentsSectionPreviewWrapper<Content: View>: View {
-    @State private var previewTarget: PreviewLinkTarget? = nil
-    @State private var userProfileTarget: UserProfileSheetTarget? = nil
+    @State private var previewTargetLink: PreviewLinkTarget? = nil
+    @State private var userProfileTargetLink: UserProfileSheetTarget? = nil
     @State private var collapsedIDs: Set<Int> = []
+    let initialTargetCommentIDForPreview: Int?
 
-    let content: (Binding<PreviewLinkTarget?>, Binding<UserProfileSheetTarget?>, @escaping (Int) -> Bool, @escaping (Int) -> Void, @escaping (Int) -> Void) -> Content
+    let content: (Binding<PreviewLinkTarget?>, Binding<UserProfileSheetTarget?>, @escaping (Int) -> Bool, @escaping (Int) -> Void, @escaping (Int) -> Void, Int?, @escaping (Int) -> Void) -> Content
 
-    init(@ViewBuilder content: @escaping (Binding<PreviewLinkTarget?>, Binding<UserProfileSheetTarget?>, @escaping (Int) -> Bool, @escaping (Int) -> Void, @escaping (Int) -> Void) -> Content) {
+    init(previewTargetCommentID: Int? = nil, @ViewBuilder content: @escaping (Binding<PreviewLinkTarget?>, Binding<UserProfileSheetTarget?>, @escaping (Int) -> Bool, @escaping (Int) -> Void, @escaping (Int) -> Void, Int?, @escaping (Int) -> Void) -> Content) {
+        self.initialTargetCommentIDForPreview = previewTargetCommentID
         self.content = content
     }
+
     private func isCollapsed(_ id: Int) -> Bool { collapsedIDs.contains(id) }
     private func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
     private func showCommentInput(_ parentId: Int) { print("Preview: Show Comment Input for parentId: \(parentId)") }
+    private func highlightCompletedLog(_ id: Int) { print("Preview: Highlight completed for comment ID \(id)")}
 
     var body: some View {
-        content($previewTarget, $userProfileTarget, isCollapsed, toggleCollapse, showCommentInput)
+        content($previewTargetLink, $userProfileTargetLink, isCollapsed, toggleCollapse, showCommentInput, initialTargetCommentIDForPreview, highlightCompletedLog)
             .environmentObject(AppSettings())
             .environmentObject(AuthService(appSettings: AppSettings()))
     }
 }
 
 
-#Preview("Loaded Limited") { // Name der Preview könnte angepasst werden, da es kein "Limited" mehr gibt
-    CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in
+#Preview("Loaded All Comments") {
+    CommentsSectionPreviewWrapper(previewTargetCommentID: 2) { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb in
         ScrollView {
              let comments = createPreviewFlatCommentsHelper()
              let previewUploader = "UserA"
@@ -144,14 +137,16 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
                 userProfileSheetTarget: $userTarget,
                 isCommentCollapsed: isCollapsed,
                 toggleCollapseAction: toggleCollapse,
-                showCommentInputAction: showCommentInput
+                showCommentInputAction: showCommentInput,
+                targetCommentID: actualTargetCommentIDInContent,
+                onHighlightCompletedForCommentID: highlightCompletedCb
             )
         }
     }
 }
 
-#Preview("Loading") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loading, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput) } }
-#Preview("Error") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in CommentsSection(flatComments: [], totalCommentCount: 0, status: .error("Netzwerkfehler."), uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput) } }
-#Preview("Empty") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loaded, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput) } }
+#Preview("Loading") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loading, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput, targetCommentID: actualTargetCommentIDInContent, onHighlightCompletedForCommentID: highlightCompletedCb) } }
+#Preview("Error") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb in CommentsSection(flatComments: [], totalCommentCount: 0, status: .error("Netzwerkfehler."), uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput, targetCommentID: actualTargetCommentIDInContent, onHighlightCompletedForCommentID: highlightCompletedCb) } }
+#Preview("Empty") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loaded, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput, targetCommentID: actualTargetCommentIDInContent, onHighlightCompletedForCommentID: highlightCompletedCb) } }
 
 // --- END OF COMPLETE FILE ---

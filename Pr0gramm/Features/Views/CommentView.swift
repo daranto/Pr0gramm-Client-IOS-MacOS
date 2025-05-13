@@ -8,29 +8,25 @@ import os // Für Logger
 
 struct CommentView: View {
     let comment: ItemComment
-    // --- NEW: Add uploader name ---
     let uploaderName: String
-    // --- END NEW ---
     @Binding var previewLinkTarget: PreviewLinkTarget?
     @Binding var userProfileSheetTarget: UserProfileSheetTarget?
     let hasChildren: Bool
     let isCollapsed: Bool
     let onToggleCollapse: () -> Void
     let onReply: () -> Void
+    let targetCommentID: Int?
+    let onHighlightCompleted: (Int) -> Void
 
     @EnvironmentObject var authService: AuthService
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CommentView")
 
+    @State private var isHighlighted: Bool = false
+
     private var markEnum: Mark { Mark(rawValue: comment.mark ?? -1) }
     private var userMarkColor: Color { markEnum.displayColor }
     private var score: Int { comment.up - comment.down }
-
-    // --- NEW: Check if the commenter is the OP ---
-    private var isOriginalPoster: Bool {
-        // Case-insensitive comparison might be safer depending on API consistency
-        comment.name?.lowercased() == uploaderName.lowercased()
-    }
-    // --- END NEW ---
+    private var isOriginalPoster: Bool { comment.name?.lowercased() == uploaderName.lowercased() }
 
     private var relativeTime: String {
         let date = Date(timeIntervalSince1970: TimeInterval(comment.created))
@@ -92,13 +88,11 @@ struct CommentView: View {
                     .frame(width: 8, height: 8)
                 Text(comment.name ?? "User")
                     .font(UIConstants.captionFont.weight(.semibold))
-                // --- NEW: Show OP indicator ---
                 if isOriginalPoster {
-                    Image(systemName: "crown.fill") // Kronen-Symbol für OP
-                        .font(.caption2) // Kleinere Schriftgröße
-                        .foregroundColor(.accentColor) // Akzentfarbe verwenden
+                    Image(systemName: "crown.fill")
+                        .font(.caption2)
+                        .foregroundColor(.accentColor)
                 }
-                // --- END NEW ---
                 Text("•").foregroundColor(.secondary)
                 Text("\(score)").font(UIConstants.captionFont).foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
                 Text("•").foregroundColor(.secondary)
@@ -121,6 +115,10 @@ struct CommentView: View {
             }
         }
         .padding(.vertical, 6)
+        .background(isHighlighted ? Color.accentColor.opacity(0.3) : Color.clear)
+        // --- MODIFIED: Animationsdauer für den Hintergrund ---
+        .animation(.easeInOut(duration: 0.35), value: isHighlighted) // Dauer leicht erhöht
+        // --- END MODIFICATION ---
         .opacity(isCollapsed ? 0.7 : 1.0)
         .environment(\.openURL, OpenURLAction { url in
             if let itemID = parsePr0grammLink(url: url) {
@@ -135,7 +133,44 @@ struct CommentView: View {
         .onChange(of: authService.favoritedCommentIDs) { _, _ in }
         .onChange(of: authService.votedCommentStates) { _, _ in }
         .contextMenu { contextMenuContent }
-        // Sheet wird jetzt von PagedDetailView gehandhabt
+        .onChange(of: targetCommentID, initial: true) { oldTargetID, newTargetID in
+            CommentView.logger.trace("Comment \(comment.id): onChange(targetCommentID) fired. Old: \(oldTargetID ?? -99), New: \(newTargetID ?? -99), isHighlighted: \(isHighlighted)")
+            if newTargetID == comment.id {
+                CommentView.logger.debug("Comment \(comment.id): targetCommentID (\(newTargetID ?? -1)) matches. Triggering highlight.")
+                triggerHighlight()
+            }
+        }
+    }
+
+    private func triggerHighlight() {
+        Task { @MainActor in
+            guard !isHighlighted else {
+                CommentView.logger.trace("Highlight for comment \(comment.id) skipped, already highlighted or in process.")
+                return
+            }
+            
+            // --- MODIFIED: Explizite Animation für das Setzen von isHighlighted ---
+            withAnimation(.easeInOut(duration: 0.35)) { // Dauer passend zur .animation oben
+                isHighlighted = true
+            }
+            // --- END MODIFICATION ---
+            CommentView.logger.info("Highlight triggered for comment ID: \(comment.id)")
+            
+            Task {
+                // --- MODIFIED: Dauer der Hervorhebung ---
+                try? await Task.sleep(for: .milliseconds(700)) // z.B. 0.7 Sekunden sichtbar
+                // --- END MODIFICATION ---
+                await MainActor.run {
+                    // --- MODIFIED: Explizite Animation für das Zurücksetzen ---
+                    withAnimation(.easeInOut(duration: 0.4)) { // Dauer leicht erhöht für sanfteres Ausblenden
+                        isHighlighted = false
+                    }
+                    // --- END MODIFICATION ---
+                    CommentView.logger.info("Highlight removed for comment ID: \(comment.id)")
+                    onHighlightCompleted(comment.id)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -213,143 +248,133 @@ extension String: Identifiable {
     public var id: String { self }
 }
 
-fileprivate extension UIFont {
-    static func uiFont(from font: Font) -> UIFont {
-        switch font {
-            case .largeTitle: return UIFont.preferredFont(forTextStyle: .largeTitle)
-            case .title: return UIFont.preferredFont(forTextStyle: .title1)
-            case .title2: return UIFont.preferredFont(forTextStyle: .title2)
-            case .title3: return UIFont.preferredFont(forTextStyle: .title3)
-            case .headline: return UIFont.preferredFont(forTextStyle: .headline)
-            case .subheadline: return UIFont.preferredFont(forTextStyle: .subheadline)
-            case .body: return UIFont.preferredFont(forTextStyle: .body)
-            case .callout: return UIFont.preferredFont(forTextStyle: .callout)
-            case .footnote: return UIFont.preferredFont(forTextStyle: .footnote)
-            case .caption: return UIFont.preferredFont(forTextStyle: .caption1)
-            case .caption2: return UIFont.preferredFont(forTextStyle: .caption2)
-            default:
-                CommentView.logger.warning("Warning: Could not precisely convert SwiftUI Font to UIFont. Using body style as fallback.")
-                return UIFont.preferredFont(forTextStyle: .body)
-        }
-    }
-}
-
 
 // MARK: - Preview
 #Preview("Normal with Reply & Voted") {
-    struct PreviewWrapper: View {
-        @State var target: PreviewLinkTarget? = nil
-        @State var userProfileTarget: UserProfileSheetTarget? = nil
+    struct PreviewWrapperNormal: View {
+        @State var previewLinkTarget_Normal: PreviewLinkTarget? = nil
+        @State var userProfileSheetTarget_Normal: UserProfileSheetTarget? = nil
         var body: some View {
             let auth = AuthService(appSettings: AppSettings())
             auth.isLoggedIn = true
             auth.favoritedCommentIDs = [1]
             auth.votedCommentStates = [1: 1, 4: -1]
-            let uploader = "S0ulreaver" // Für den OP-Check
+            let uploader = "S0ulreaver"
 
             return List {
                  CommentView(
                      comment: ItemComment(id: 1, parent: 0, content: "Top comment http://pr0gramm.com/new/12345", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
-                     uploaderName: uploader, // Uploader übergeben
-                     previewLinkTarget: $target,
-                     userProfileSheetTarget: $userProfileTarget,
+                     uploaderName: uploader,
+                     previewLinkTarget: $previewLinkTarget_Normal,
+                     userProfileSheetTarget: $userProfileSheetTarget_Normal,
                      hasChildren: true,
                      isCollapsed: false,
                      onToggleCollapse: { print("Toggle tapped") },
-                     onReply: { print("Reply Tapped") }
+                     onReply: { print("Reply Tapped") },
+                     targetCommentID: 1,
+                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
                  )
                  .listRowInsets(EdgeInsets())
 
                  CommentView(
                      comment: ItemComment(id: 4, parent: 0, content: "RIP neben msn und icq.", created: Int(Date().timeIntervalSince1970)-150, up: 152, down: 3, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
-                     uploaderName: uploader, // Uploader übergeben
-                     previewLinkTarget: $target,
-                     userProfileSheetTarget: $userProfileTarget,
+                     uploaderName: uploader,
+                     previewLinkTarget: $previewLinkTarget_Normal,
+                     userProfileSheetTarget: $userProfileSheetTarget_Normal,
                      hasChildren: false,
                      isCollapsed: false,
                      onToggleCollapse: { print("Toggle tapped") },
-                     onReply: { print("Reply Tapped") }
+                     onReply: { print("Reply Tapped") },
+                     targetCommentID: nil,
+                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
                  )
                   .listRowInsets(EdgeInsets())
 
                  CommentView(
                      comment: ItemComment(id: 10, parent: 0, content: "Dieser Kommentar ist weder favorisiert noch gevotet.", created: Int(Date().timeIntervalSince1970)-200, up: 10, down: 2, confidence: 0.9, name: "TestUser", mark: 1, itemId: 54321),
-                     uploaderName: uploader, // Uploader übergeben
-                     previewLinkTarget: $target,
-                     userProfileSheetTarget: $userProfileTarget,
+                     uploaderName: uploader,
+                     previewLinkTarget: $previewLinkTarget_Normal,
+                     userProfileSheetTarget: $userProfileSheetTarget_Normal,
                      hasChildren: false,
                      isCollapsed: false,
                      onToggleCollapse: { print("Toggle tapped") },
-                     onReply: { print("Reply Tapped") }
+                     onReply: { print("Reply Tapped") },
+                     targetCommentID: nil,
+                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
                  )
                   .listRowInsets(EdgeInsets())
                  CommentView(
                      comment: ItemComment(id: 11, parent: 0, content: "Kommentar mit nil name/mark.", created: Int(Date().timeIntervalSince1970)-250, up: 5, down: 1, confidence: 0.9, name: nil, mark: nil, itemId: 54321),
-                     uploaderName: uploader, // Uploader übergeben
-                     previewLinkTarget: $target,
-                     userProfileSheetTarget: $userProfileTarget,
+                     uploaderName: uploader,
+                     previewLinkTarget: $previewLinkTarget_Normal,
+                     userProfileSheetTarget: $userProfileSheetTarget_Normal,
                      hasChildren: false,
                      isCollapsed: false,
                      onToggleCollapse: { print("Toggle tapped") },
-                     onReply: { print("Reply Tapped") }
+                     onReply: { print("Reply Tapped") },
+                     targetCommentID: nil,
+                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
                  )
                   .listRowInsets(EdgeInsets())
             }
             .listStyle(.plain)
             .environmentObject(auth)
-             .sheet(item: $userProfileTarget) { targetUsername in
+             .sheet(item: $userProfileSheetTarget_Normal) { targetUsername in
                  Text("Preview: User Profile Sheet for \(targetUsername.username)")
              }
         }
     }
-    return PreviewWrapper()
+    return PreviewWrapperNormal()
 }
 
-// Andere Previews angepasst, um uploaderName zu übergeben
 #Preview("Collapsed") {
-    struct PreviewWrapper: View {
-        @State var target: PreviewLinkTarget? = nil
-        @State var userProfileTarget: UserProfileSheetTarget? = nil
+    struct PreviewWrapperCollapsed: View {
+        @State var previewLinkTarget_Collapsed: PreviewLinkTarget? = nil
+        @State var userProfileSheetTarget_Collapsed: UserProfileSheetTarget? = nil
         var body: some View {
             CommentView(
                 comment: ItemComment(id: 2, parent: 0, content: "Collapsed comment...", created: Int(Date().timeIntervalSince1970)-200, up: 5, down: 0, confidence: 0.9, name: "UserB", mark: 1, itemId: 54321),
-                uploaderName: "SomeOtherUser", // Beispiel-Uploader
-                previewLinkTarget: $target,
-                userProfileSheetTarget: $userProfileTarget,
+                uploaderName: "SomeOtherUser",
+                previewLinkTarget: $previewLinkTarget_Collapsed,
+                userProfileSheetTarget: $userProfileSheetTarget_Collapsed,
                 hasChildren: true,
                 isCollapsed: true,
                 onToggleCollapse: { print("Toggle tapped") },
-                onReply: { print("Reply Tapped") }
+                onReply: { print("Reply Tapped") },
+                targetCommentID: nil,
+                onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
             )
             .padding()
             .environmentObject(AuthService(appSettings: AppSettings()))
         }
     }
-    return PreviewWrapper()
+    return PreviewWrapperCollapsed()
 }
 
 #Preview("No Children") {
-    struct PreviewWrapper: View {
-        @State var target: PreviewLinkTarget? = nil
-        @State var userProfileTarget: UserProfileSheetTarget? = nil
+    struct PreviewWrapperNoChildren: View {
+        @State var previewLinkTarget_NoChildren: PreviewLinkTarget? = nil
+        @State var userProfileSheetTarget_NoChildren: UserProfileSheetTarget? = nil
         var body: some View {
              let auth = AuthService(appSettings: AppSettings())
              auth.isLoggedIn = true
 
             return CommentView(
                 comment: ItemComment(id: 3, parent: 1, content: "Reply without children...", created: Int(Date().timeIntervalSince1970)-50, up: 2, down: 0, confidence: 0.8, name: "UserC", mark: 7, itemId: 54321),
-                uploaderName: "SomeOtherUser", // Beispiel-Uploader
-                previewLinkTarget: $target,
-                userProfileSheetTarget: $userProfileTarget,
+                uploaderName: "SomeOtherUser",
+                previewLinkTarget: $previewLinkTarget_NoChildren,
+                userProfileSheetTarget: $userProfileSheetTarget_NoChildren,
                 hasChildren: false,
                 isCollapsed: false,
                 onToggleCollapse: { print("Toggle tapped") },
-                onReply: { print("Reply Tapped") }
+                onReply: { print("Reply Tapped") },
+                targetCommentID: nil,
+                onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
             )
             .padding()
             .environmentObject(auth)
         }
     }
-    return PreviewWrapper()
+    return PreviewWrapperNoChildren()
 }
 // --- END OF COMPLETE FILE ---

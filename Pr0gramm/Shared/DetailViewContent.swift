@@ -37,7 +37,6 @@ enum InfoLoadingStatus: Equatable { case idle; case loading; case loaded; case e
 struct ShareableItemWrapper: Identifiable {
     let id = UUID()
     let itemsToShare: [Any]
-    // --- NEW: Optional URL of a temporary file to be deleted after sharing ---
     let temporaryFileUrlToDelete: URL?
 
     init(itemsToShare: [Any], temporaryFileUrlToDelete: URL? = nil) {
@@ -81,6 +80,9 @@ struct DetailViewContent: View {
     let downvoteAction: () -> Void
     let showCommentInputAction: (Int, Int) -> Void
 
+    let targetCommentID: Int?
+    let onHighlightCompletedForCommentID: (Int) -> Void
+
 
     @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var authService: AuthService
@@ -92,6 +94,7 @@ struct DetailViewContent: View {
     @State private var itemToShare: ShareableItemWrapper? = nil
     @State private var isPreparingShare = false
     @State private var sharePreparationError: String? = nil
+    @State private var didAttemptScrollToTarget = false
 
     @ViewBuilder private var mediaContentInternal: some View {
         ZStack(alignment: .bottom) {
@@ -290,7 +293,63 @@ struct DetailViewContent: View {
         var body: some View { Text(displayText).font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.gray.opacity(0.2)).foregroundColor(.primary).clipShape(Capsule()) }
     }
 
-    @ViewBuilder private var commentsContent: some View {
+    @ViewBuilder
+    private var commentsWrapper: some View {
+        if horizontalSizeClass == .regular {
+            ScrollViewReader { proxy in
+                commentsContentSection(scrollViewProxy: proxy)
+                    .onChange(of: infoLoadingStatus) { _, newStatus in
+                        if newStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                             attemptScrollToComment(proxy: proxy, targetID: tid)
+                        }
+                    }
+                    .onChange(of: flatComments.count) { _, _ in
+                        if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                            attemptScrollToComment(proxy: proxy, targetID: tid)
+                        }
+                    }
+                    .onAppear {
+                        if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                            attemptScrollToComment(proxy: proxy, targetID: tid)
+                        }
+                    }
+            }
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        GeometryReader { geo in
+                            let aspect = guessAspectRatio() ?? 1.0
+                            mediaContentInternal
+                                .frame(width: geo.size.width, height: geo.size.width / aspect)
+                        }
+                        .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
+                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
+                        commentsContentSection(scrollViewProxy: proxy)
+                            .padding(.horizontal).padding(.bottom, 10)
+                    }
+                }
+                .onChange(of: infoLoadingStatus) { _, newStatus in
+                    if newStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                         attemptScrollToComment(proxy: proxy, targetID: tid)
+                    }
+                }
+                .onChange(of: flatComments.count) { _, _ in
+                    if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                        attemptScrollToComment(proxy: proxy, targetID: tid)
+                    }
+                }
+                .onAppear {
+                    if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                        attemptScrollToComment(proxy: proxy, targetID: tid)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func commentsContentSection(scrollViewProxy: ScrollViewProxy?) -> some View {
         CommentsSection(
             flatComments: flatComments,
             totalCommentCount: totalCommentCount,
@@ -300,9 +359,37 @@ struct DetailViewContent: View {
             userProfileSheetTarget: $userProfileSheetTarget,
             isCommentCollapsed: isCommentCollapsed,
             toggleCollapseAction: toggleCollapseAction,
-            showCommentInputAction: { parentId in showCommentInputAction(item.id, parentId) }
+            showCommentInputAction: { parentId in showCommentInputAction(item.id, parentId) },
+            targetCommentID: self.targetCommentID,
+            // --- MODIFIED: Pass new callback ---
+            onHighlightCompletedForCommentID: self.onHighlightCompletedForCommentID
+            // --- END MODIFICATION ---
         )
     }
+    
+    private func attemptScrollToComment(proxy: ScrollViewProxy?, targetID: Int) {
+        guard let proxy = proxy else {
+            DetailViewContent.logger.warning("AttemptScroll: ScrollViewProxy is nil.")
+            return
+        }
+        guard flatComments.contains(where: { $0.id == targetID }) else {
+            DetailViewContent.logger.info("AttemptScroll: Target comment ID \(targetID) not found in current flatComments. Scroll not attempted yet.")
+            return
+        }
+
+        DetailViewContent.logger.info("Attempting to scroll to comment ID: \(targetID)")
+        didAttemptScrollToTarget = true
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(200)) // Slightly longer delay to ensure layout pass
+            withAnimation {
+                proxy.scrollTo(targetID, anchor: .center)
+            }
+            DetailViewContent.logger.info("Scroll to comment ID \(targetID) requested.")
+            // onHighlightCompletedForCommentID wird jetzt von CommentView aufgerufen, nachdem dessen Highlight beendet ist.
+        }
+    }
+
 
     var body: some View {
         Group {
@@ -314,29 +401,24 @@ struct DetailViewContent: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 15) {
                             infoAndTagsContent.padding([.horizontal, .top]);
-                            commentsContent.padding([.horizontal, .bottom])
+                            commentsWrapper
+                                .padding([.horizontal, .bottom])
                         }
                     }
                     .frame(minWidth: 300, idealWidth: 450, maxWidth: 600).background(Color(.secondarySystemBackground))
                 }
             } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        GeometryReader { geo in
-                            let aspect = guessAspectRatio() ?? 1.0
-                            mediaContentInternal
-                                .frame(width: geo.size.width, height: geo.size.width / aspect)
-                        }
-                        .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
-                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
-                        commentsContent.padding(.horizontal).padding(.bottom, 10)
-                    }
-                }
+                commentsWrapper
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { DetailViewContent.logger.debug("DetailViewContent for item \(item.id) appearing.") }
-        .onDisappear { DetailViewContent.logger.debug("DetailViewContent for item \(item.id) disappearing.") }
+        .onAppear {
+            DetailViewContent.logger.debug("DetailViewContent for item \(item.id) appearing. TargetCommentID: \(targetCommentID ?? -1)")
+            didAttemptScrollToTarget = false
+        }
+        .onDisappear {
+            DetailViewContent.logger.debug("DetailViewContent for item \(item.id) disappearing.")
+        }
         .confirmationDialog(
             "Teilen & Kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
         ) {
@@ -346,12 +428,16 @@ struct DetailViewContent: View {
             Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)") }
             Button("Direkter Medien-Link") { if let urlString = item.imageUrl?.absoluteString { UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)") } else { DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)") } }
         } message: { Text("Wähle eine Aktion:") }
-        .sheet(item: $itemToShare, onDismiss: { // --- NEW: Cleanup on dismiss ---
+        .sheet(item: $itemToShare, onDismiss: {
             if let tempUrl = itemToShare?.temporaryFileUrlToDelete {
                 deleteTemporaryFile(at: tempUrl)
             }
         }) { shareableItemWrapper in
             ShareSheet(activityItems: shareableItemWrapper.itemsToShare)
+        }
+        .onChange(of: targetCommentID) { _, newTargetID in
+            DetailViewContent.logger.debug("targetCommentID in DetailViewContent changed to: \(newTargetID ?? -1). Resetting didAttemptScrollToTarget.")
+            didAttemptScrollToTarget = false
         }
     }
 
@@ -360,7 +446,6 @@ struct DetailViewContent: View {
         return CGFloat(item.width) / CGFloat(item.height)
     }
 
-    // --- MODIFIED: prepareAndShareMedia for Video Download ---
     private func prepareAndShareMedia() async {
         guard let mediaUrl = item.imageUrl else {
             DetailViewContent.logger.error("Cannot share media: URL is nil for item \(item.id)")
@@ -370,25 +455,20 @@ struct DetailViewContent: View {
 
         isPreparingShare = true
         sharePreparationError = nil
-        var temporaryFileToDelete: URL? = nil // To store URL of downloaded video
+        var temporaryFileToDelete: URL? = nil
 
         defer {
             isPreparingShare = false
-            // Important: Do not delete temporaryFileToDelete here.
-            // It needs to exist while the ShareSheet is presented.
-            // Deletion will be handled in the .onDismiss of the sheet.
         }
 
         if item.isVideo {
             DetailViewContent.logger.info("Attempting to download video for sharing from URL: \(mediaUrl.absoluteString)")
             do {
-                // Create a temporary file URL
                 let temporaryDirectory = FileManager.default.temporaryDirectory
                 let fileName = mediaUrl.lastPathComponent
                 let localUrl = temporaryDirectory.appendingPathComponent(fileName)
-                temporaryFileToDelete = localUrl // Store for later deletion
+                temporaryFileToDelete = localUrl
 
-                // Download the video file
                 let (downloadedUrl, response) = try await URLSession.shared.download(from: mediaUrl)
                 
                 guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
@@ -398,8 +478,6 @@ struct DetailViewContent: View {
                     return
                 }
                 
-                // Move the downloaded file from its temporary location to our desired localUrl
-                // Ensure previous file is removed if it exists
                 if FileManager.default.fileExists(atPath: localUrl.path) {
                     try FileManager.default.removeItem(at: localUrl)
                 }
@@ -411,10 +489,9 @@ struct DetailViewContent: View {
             } catch {
                 DetailViewContent.logger.error("Failed to download video for sharing (item \(item.id)): \(error.localizedDescription)")
                 sharePreparationError = "Video-Download fehlgeschlagen."
-                // Fallback to sharing the remote URL if download fails
                 itemToShare = ShareableItemWrapper(itemsToShare: [mediaUrl])
             }
-        } else { // Image
+        } else {
             DetailViewContent.logger.info("Attempting to download image for sharing from URL: \(mediaUrl.absoluteString)")
             do {
                 let result: Result<ImageLoadingResult, KingfisherError> = await withCheckedContinuation { continuation in
@@ -439,11 +516,9 @@ struct DetailViewContent: View {
             }
         }
     }
-    // --- END MODIFICATION ---
 
-    // --- NEW: Function to delete temporary file ---
     private func deleteTemporaryFile(at url: URL) {
-        Task(priority: .background) { // Perform deletion in background
+        Task(priority: .background) {
             do {
                 if FileManager.default.fileExists(atPath: url.path) {
                     try FileManager.default.removeItem(at: url)
@@ -454,51 +529,25 @@ struct DetailViewContent: View {
             }
         }
     }
-    // --- END NEW ---
 }
 
 struct ShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
     let applicationActivities: [UIActivity]? = nil
-    // --- NEW: Completion handler ---
     var completionHandler: ((UIActivity.ActivityType?, Bool, [Any]?, Error?) -> Void)? = nil
-    // --- END NEW ---
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
         let controller = UIActivityViewController(
             activityItems: activityItems,
             applicationActivities: applicationActivities
         )
-        // --- NEW: Set completion handler ---
         controller.completionWithItemsHandler = completionHandler
-        // --- END NEW ---
         return controller
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
-        // Nothing to update here
     }
 }
-
-fileprivate extension UIFont {
-    static func uiFont(from font: Font) -> UIFont {
-        switch font {
-            case .largeTitle: return UIFont.preferredFont(forTextStyle: .largeTitle)
-            case .title: return UIFont.preferredFont(forTextStyle: .title1)
-            case .title2: return UIFont.preferredFont(forTextStyle: .title2)
-            case .title3: return UIFont.preferredFont(forTextStyle: .title3)
-            case .headline: return UIFont.preferredFont(forTextStyle: .headline)
-            case .subheadline: return UIFont.preferredFont(forTextStyle: .subheadline)
-            case .body: return UIFont.preferredFont(forTextStyle: .body)
-            case .callout: return UIFont.preferredFont(forTextStyle: .callout)
-            case .footnote: return UIFont.preferredFont(forTextStyle: .footnote)
-            case .caption: return UIFont.preferredFont(forTextStyle: .caption1)
-            case .caption2: return UIFont.preferredFont(forTextStyle: .caption2)
-            default: return UIFont.preferredFont(forTextStyle: .body)
-        }
-    }
-}
-
 
 @MainActor
 struct PreviewWrapper: View {
@@ -512,7 +561,7 @@ struct PreviewWrapper: View {
     @StateObject var playerManager = VideoPlayerManager()
     @State private var commentReplyTarget: ReplyTarget? = nil
     @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
-
+    @State private var previewTargetCommentID: Int? = 2
 
     let sampleItem: Item
 
@@ -580,6 +629,13 @@ struct PreviewWrapper: View {
                 showCommentInputAction: { itemId, parentId in
                      print("Preview Show Comment Input Tapped for itemId: \(itemId), parentId: \(parentId)")
                      self.commentReplyTarget = ReplyTarget(itemId: itemId, parentId: parentId)
+                },
+                targetCommentID: previewTargetCommentID,
+                onHighlightCompletedForCommentID: { completedID in // Beachte den Namen des Callbacks
+                    print("Preview: Highlight completed for comment \(completedID), clearing previewTargetCommentID.")
+                    if previewTargetCommentID == completedID {
+                        previewTargetCommentID = nil
+                    }
                 }
             )
             .sheet(item: $commentReplyTarget) { target in CommentInputView(itemId: target.itemId, parentId: target.parentId, onSubmit: { _ in }) }

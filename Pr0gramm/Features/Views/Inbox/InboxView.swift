@@ -14,21 +14,30 @@ struct InboxView: View {
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
-    @State private var itemToNavigate: Item? = nil
+    // --- MODIFIED: Separate state for item and target comment ID ---
+    @State private var itemForNavigation: Item? = nil // Renamed from itemToNavigate
+    @State private var targetCommentIDForNavigation: Int? = nil
+    // --- END MODIFICATION ---
+
     @State private var profileToNavigate: String? = nil
     @State private var isLoadingNavigationTarget: Bool = false
-    @State private var navigationTargetId: Int? = nil
+    @State private var navigationTargetId: Int? = nil // This is the itemID being loaded
 
-    // --- NEW: State for previewing linked items from messages ---
     @State private var previewLinkTargetFromMessage: PreviewLinkTarget? = nil
-    // --- END NEW ---
 
     @StateObject private var playerManager = VideoPlayerManager()
 
     private let apiService = APIService()
-    // --- MODIFIED: logger to fileprivate ---
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "InboxView")
-    // --- END MODIFICATION ---
+
+    // --- NEW: NavigationLinkValue struct ---
+    struct ItemNavigationValue: Hashable, Identifiable {
+        let item: Item
+        let targetCommentID: Int?
+        var id: Int { item.id } // Main identifier for navigation is the item itself
+    }
+    @State private var itemNavigationValue: ItemNavigationValue? = nil
+    // --- END NEW ---
 
     var body: some View {
         NavigationStack {
@@ -46,26 +55,30 @@ struct InboxView: View {
                 playerManager.configure(settings: settings)
                 await refreshMessages()
             }
-            .navigationDestination(item: $itemToNavigate) { loadedItem in
-                 PagedDetailViewWrapperForItem(item: loadedItem, playerManager: playerManager)
-                     .environmentObject(settings)
-                     .environmentObject(authService)
+            // --- MODIFIED: Use ItemNavigationValue for navigation ---
+            .navigationDestination(item: $itemNavigationValue) { navValue in
+                 PagedDetailViewWrapperForItem(
+                     item: navValue.item,
+                     playerManager: playerManager,
+                     targetCommentID: navValue.targetCommentID
+                 )
+                 .environmentObject(settings)
+                 .environmentObject(authService)
             }
+            // --- END MODIFICATION ---
             .navigationDestination(for: String.self) { username in
-                 UserProfileSheetView(username: username) // Use UserProfileSheetView for profile navigation
+                 UserProfileSheetView(username: username)
                       .environmentObject(settings)
                       .environmentObject(authService)
             }
-            // --- NEW: Sheet for linked item preview ---
             .sheet(item: $previewLinkTargetFromMessage) { target in
                 LinkedItemPreviewView(itemID: target.id)
                     .environmentObject(settings)
                     .environmentObject(authService)
             }
-            // --- END NEW ---
             .overlay {
                 if isLoadingNavigationTarget {
-                    ProgressView("Lade Ziel...")
+                    ProgressView("Lade Post \(navigationTargetId ?? 0)...")
                         .padding().background(Material.regular).cornerRadius(10).shadow(radius: 5)
                 }
             }
@@ -92,7 +105,7 @@ struct InboxView: View {
     private var listContent: some View {
         List {
             ForEach(messages) { message in
-                InboxMessageRow(message: message) // Links within the message text are handled by .environment(\.openURL)
+                InboxMessageRow(message: message)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         guard !isLoadingNavigationTarget, message.type != "notification" else {
@@ -121,7 +134,6 @@ struct InboxView: View {
         }
         .listStyle(.plain)
         .refreshable { await refreshMessages() }
-        // --- NEW: Handle OpenURL for links within message text ---
         .environment(\.openURL, OpenURLAction { url in
             if let itemID = parsePr0grammLink(url: url) {
                 InboxView.logger.info("Pr0gramm link tapped in inbox message, attempting to preview item ID: \(itemID)")
@@ -132,10 +144,8 @@ struct InboxView: View {
                 return .systemAction
             }
         })
-        // --- END NEW ---
     }
 
-    // Helper function to parse pr0gramm links (copied for now)
     private func parsePr0grammLink(url: URL) -> Int? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
         let pathComponents = url.pathComponents
@@ -152,7 +162,6 @@ struct InboxView: View {
         InboxView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
         return nil
     }
-    // End copied helper
 
     @MainActor
     private func handleMessageTap(_ message: InboxMessage) async {
@@ -166,16 +175,16 @@ struct InboxView: View {
         switch message.type {
         case "comment":
             if let itemId = message.itemId {
-                InboxView.logger.info("Message type is 'comment', preparing navigation for item \(itemId)")
-                await prepareAndNavigateToItem(itemId)
+                InboxView.logger.info("Message type is 'comment', preparing navigation for item \(itemId), target comment ID: \(message.id)")
+                // --- MODIFIED: Set targetCommentIDForNavigation ---
+                await prepareAndNavigateToItem(itemId, targetCommentID: message.id)
+                // --- END MODIFICATION ---
             } else { InboxView.logger.warning("Comment message type tapped, but itemId is nil.") }
 
         case "message", "follow":
              if let senderName = message.name, !senderName.isEmpty {
                  InboxView.logger.info("Message type is '\(message.type)', navigating to profile: \(senderName)")
-                 // --- MODIFIED: Navigate to UserProfileSheetView ---
-                 self.profileToNavigate = senderName // This will trigger the navigationDestination
-                 // --- END MODIFICATION ---
+                 self.profileToNavigate = senderName
              } else { InboxView.logger.warning("\(message.type) message type tapped, but sender name is nil or empty.") }
 
         case "notification":
@@ -188,7 +197,9 @@ struct InboxView: View {
     }
 
     @MainActor
-    private func prepareAndNavigateToItem(_ itemId: Int?) async {
+    // --- MODIFIED: Add targetCommentID parameter ---
+    private func prepareAndNavigateToItem(_ itemId: Int?, targetCommentID: Int? = nil) async {
+    // --- END MODIFICATION ---
         guard let id = itemId else {
             InboxView.logger.warning("Attempted to navigate, but itemId was nil.")
             return
@@ -198,38 +209,51 @@ struct InboxView: View {
             return
         }
 
-        InboxView.logger.info("Preparing navigation for item ID: \(id)")
+        InboxView.logger.info("Preparing navigation for item ID: \(id), targetCommentID: \(targetCommentID ?? -1)")
         self.isLoadingNavigationTarget = true
-        self.navigationTargetId = id
+        self.navigationTargetId = id // This is the itemID being loaded
         self.errorMessage = nil
+        // --- NEW: Reset targetCommentIDForNavigation before setting itemNavigationValue ---
+        self.targetCommentIDForNavigation = targetCommentID
+        // --- END NEW ---
 
         do {
+            // For direct navigation to a post (e.g., from a comment notification),
+            // we should try to load it with broad flags, as the user's current global filters
+            // might hide it. flags=31 usually means SFW+NSFW+NSFL+NSFP+POL.
             let flagsToFetchWith = 31
-            InboxView.logger.debug("Fetching item \(id) for navigation using flags: \(flagsToFetchWith) (ignoring global settings)")
+            InboxView.logger.debug("Fetching item \(id) for navigation using flags: \(flagsToFetchWith)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
 
             guard self.navigationTargetId == id else {
                  InboxView.logger.info("Navigation target changed while item \(id) was loading. Discarding result.")
-                 self.isLoadingNavigationTarget = false; self.navigationTargetId = nil; return
+                 self.isLoadingNavigationTarget = false; self.navigationTargetId = nil; self.targetCommentIDForNavigation = nil; return
             }
             if let item = fetchedItem {
                  InboxView.logger.info("Successfully fetched item \(id) for navigation.")
-                 self.itemToNavigate = item
+                 // --- MODIFIED: Set itemNavigationValue ---
+                 self.itemNavigationValue = ItemNavigationValue(item: item, targetCommentID: self.targetCommentIDForNavigation)
+                 // --- END MODIFICATION ---
             } else {
-                 InboxView.logger.warning("Could not fetch item \(id) for navigation even with flags=31. Item might be deleted.")
-                 self.errorMessage = "Post \(id) konnte nicht gefunden werden (möglicherweise gelöscht)."
+                 InboxView.logger.warning("Could not fetch item \(id) for navigation (API returned nil or filter mismatch).")
+                 self.errorMessage = "Post \(id) konnte nicht geladen werden oder entspricht nicht den Filtern."
+                 self.targetCommentIDForNavigation = nil // Reset if fetch fails
             }
         } catch is CancellationError {
              InboxView.logger.info("Item fetch for navigation cancelled (ID: \(id)).")
+             self.targetCommentIDForNavigation = nil // Reset on cancellation
         } catch {
             InboxView.logger.error("Failed to fetch item \(id) for navigation: \(error.localizedDescription)")
-            if self.navigationTargetId == id {
+            if self.navigationTargetId == id { // Check if this error is still relevant
                 self.errorMessage = "Post \(id) konnte nicht geladen werden: \(error.localizedDescription)"
             }
+            self.targetCommentIDForNavigation = nil // Reset on error
         }
+        // Reset loading state only if this was the active target
         if self.navigationTargetId == id {
              self.isLoadingNavigationTarget = false
              self.navigationTargetId = nil
+             // Do NOT reset self.targetCommentIDForNavigation here, it's used by itemNavigationValue
         }
     }
 
@@ -244,6 +268,11 @@ struct InboxView: View {
 
           self.isLoadingNavigationTarget = false; self.navigationTargetId = nil
           self.isLoading = true; self.errorMessage = nil
+          // --- NEW: Reset navigation values on refresh ---
+          self.itemNavigationValue = nil
+          self.targetCommentIDForNavigation = nil
+          // --- END NEW ---
+
 
           defer { Task { @MainActor in self.isLoading = false } }
 
@@ -314,29 +343,6 @@ struct InboxView: View {
     }
 }
 
-// Helper extension (copied from CommentView for now, should be centralized)
-fileprivate extension UIFont {
-    static func uiFont(from font: Font) -> UIFont {
-        switch font {
-            case .largeTitle: return UIFont.preferredFont(forTextStyle: .largeTitle)
-            case .title: return UIFont.preferredFont(forTextStyle: .title1)
-            case .title2: return UIFont.preferredFont(forTextStyle: .title2)
-            case .title3: return UIFont.preferredFont(forTextStyle: .title3)
-            case .headline: return UIFont.preferredFont(forTextStyle: .headline)
-            case .subheadline: return UIFont.preferredFont(forTextStyle: .subheadline)
-            case .body: return UIFont.preferredFont(forTextStyle: .body)
-            case .callout: return UIFont.preferredFont(forTextStyle: .callout)
-            case .footnote: return UIFont.preferredFont(forTextStyle: .footnote)
-            case .caption: return UIFont.preferredFont(forTextStyle: .caption1)
-            case .caption2: return UIFont.preferredFont(forTextStyle: .caption2)
-            default:
-                InboxView.logger.warning("Warning: Could not precisely convert SwiftUI Font to UIFont. Using body style as fallback.")
-                return UIFont.preferredFont(forTextStyle: .body)
-        }
-    }
-}
-// End copied helper
-
 struct InboxMessageRow: View {
     let message: InboxMessage
 
@@ -368,10 +374,9 @@ struct InboxMessageRow: View {
         return .secondary
     }
 
-    // --- NEW: Attributed message content for links ---
     private var attributedMessageContent: AttributedString {
         var attributedString = AttributedString(message.message ?? "")
-        let baseUIFont = UIFont.uiFont(from: UIConstants.subheadlineFont) // Use UIConstants
+        let baseUIFont = UIFont.uiFont(from: UIConstants.subheadlineFont)
         attributedString.font = baseUIFont
 
         do {
@@ -381,14 +386,13 @@ struct InboxMessageRow: View {
                 guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
                 attributedString[range].link = url
                 attributedString[range].foregroundColor = .accentColor
-                attributedString[range].font = baseUIFont // Ensure links also use base font
+                attributedString[range].font = baseUIFont
             }
         } catch {
             InboxView.logger.error("Error creating NSDataDetector in InboxMessageRow: \(error.localizedDescription)")
         }
         return attributedString
     }
-    // --- END NEW ---
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -421,10 +425,8 @@ struct InboxMessageRow: View {
                          Circle().fill(Color.accentColor).frame(width: 8, height: 8).padding(.leading, 4)
                      }
                 }
-                // --- MODIFIED: Use attributedMessageContent ---
                 Text(attributedMessageContent)
-                // --- END MODIFICATION ---
-                    .font(.subheadline) // Base font, AttributedString handles link color/font
+                    .font(.subheadline)
                     .foregroundColor(.primary)
                     .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)

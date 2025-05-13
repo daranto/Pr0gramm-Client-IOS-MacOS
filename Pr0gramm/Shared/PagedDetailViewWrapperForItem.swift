@@ -10,12 +10,18 @@ import os
 struct PagedDetailViewWrapperForItem: View {
     @State var items: [Item] // State variable holding the array with the single item.
     @ObservedObject var playerManager: VideoPlayerManager // Pass down the player manager.
+    // --- NEW: Add targetCommentID ---
+    let targetCommentID: Int?
+    // --- END NEW ---
 
     /// Initializes the wrapper with the single item and the player manager.
-    init(item: Item, playerManager: VideoPlayerManager) {
+    // --- MODIFIED: Update initializer ---
+    init(item: Item, playerManager: VideoPlayerManager, targetCommentID: Int? = nil) {
         self._items = State(initialValue: [item]) // Initialize @State array
         self.playerManager = playerManager
+        self.targetCommentID = targetCommentID
     }
+    // --- END MODIFICATION ---
 
     /// Dummy load more action, not needed for a single item view.
     func dummyLoadMore() async {
@@ -32,7 +38,10 @@ struct PagedDetailViewWrapperForItem: View {
             items: $items, // Pass the binding to the state array
             selectedIndex: 0, // Always index 0 for the single item
             playerManager: playerManager,
-            loadMoreAction: dummyLoadMore // Pass the dummy action
+            loadMoreAction: dummyLoadMore, // Pass the dummy action
+            // --- NEW: Pass targetCommentID ---
+            initialTargetCommentID: targetCommentID
+            // --- END NEW ---
         )
         // Environment objects like settings and authService should be passed
         // by the parent view where this wrapper is used.
