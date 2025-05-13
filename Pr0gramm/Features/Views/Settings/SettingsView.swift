@@ -17,7 +17,6 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                // --- NEW: Section for Color Scheme ---
                 Section("Darstellung") {
                     Picker("Farbschema", selection: $settings.colorSchemeSetting) {
                         ForEach(ColorSchemeSetting.allCases) { scheme in
@@ -26,11 +25,21 @@ struct SettingsView: View {
                         }
                     }
                     .font(UIConstants.bodyFont)
+
+                    // --- NEW: Picker für Rastergröße ---
+                    Picker("Rastergröße (Posts pro Zeile)", selection: $settings.gridSize) {
+                        ForEach(GridSizeSetting.allCases) { size in
+                            Text(size.displayName).tag(size)
+                                .font(UIConstants.bodyFont)
+                        }
+                    }
+                    .font(UIConstants.bodyFont)
+                    // --- END NEW ---
+
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
-                // --- END NEW ---
 
-                // Section for Video & Audio Settings
+
                 Section {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
                         .font(UIConstants.bodyFont)
@@ -52,7 +61,6 @@ struct SettingsView: View {
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
 
-                // Section for Comment Settings
                 Section("Kommentare") {
                     Picker("Sortierung", selection: $settings.commentSortOrder) {
                         ForEach(CommentSortOrder.allCases) { order in
@@ -64,7 +72,6 @@ struct SettingsView: View {
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
-                // Section for Favorites Collection
                 if authService.isLoggedIn && !authService.userCollections.isEmpty {
                     Section("Favoriten-Standardordner") {
                         Picker("Als Favoriten verwenden", selection: $settings.selectedCollectionIdForFavorites) {
@@ -88,7 +95,6 @@ struct SettingsView: View {
                 }
 
 
-                // Section for Experimental Features
                 Section {
                     Toggle("Feature: 'Nur Frisches anzeigen' aktivieren", isOn: $settings.enableExperimentalHideSeen)
                         .font(UIConstants.bodyFont)
@@ -100,7 +106,6 @@ struct SettingsView: View {
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
-                // Section for Clearing Seen Items
                 Section {
                     Button("Gesehene Posts zurücksetzen", role: .destructive) {
                         showingClearSeenItemsAlert = true
@@ -116,7 +121,6 @@ struct SettingsView: View {
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
 
-                // Section for Cache Settings
                 Section {
                     HStack {
                         Text("Bild-Cache Größe")
@@ -157,7 +161,6 @@ struct SettingsView: View {
                 }
                  .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
-                // Section for Info & Project
                 Section {
                     NavigationLink(destination: LicenseAndDependenciesView()) {
                         Text("Lizenzen & Abhängigkeiten")
@@ -174,7 +177,7 @@ struct SettingsView: View {
                     Text("Info & Projekt")
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
-            } // End Form
+            }
             .navigationTitle("Einstellungen")
             .alert("Gesehene Posts zurücksetzen?", isPresented: $showingClearSeenItemsAlert) {
                 Button("Abbrechen", role: .cancel) { }
@@ -189,9 +192,9 @@ struct SettingsView: View {
                 Text("Möchtest du wirklich alle zwischengespeicherten Daten (Feeds, Favoriten, Bilder, Gesehen-Markierungen etc.) löschen? Dies kann nicht rückgängig gemacht werden.")
             }
             .onAppear { Task { await settings.updateCacheSizes() } }
-        } // End NavigationStack
-    } // End body
-} // End struct SettingsView
+        }
+    }
+}
 
 
 // MARK: - Preview

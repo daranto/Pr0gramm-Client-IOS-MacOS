@@ -25,10 +25,14 @@ struct UserUploadsView: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserUploadsView")
 
     private var gridColumns: [GridItem] {
-         let isRunningOnMac = ProcessInfo.processInfo.isiOSAppOnMac
-         let minWidth: CGFloat = isRunningOnMac ? 250 : 100
-         return [GridItem(.adaptive(minimum: minWidth), spacing: 3)]
-     }
+            let isMac = ProcessInfo.processInfo.isiOSAppOnMac
+            let currentHorizontalSizeClass: UserInterfaceSizeClass? = isMac ? .regular : .compact // Vereinfachte Annahme
+
+            let numberOfColumns = settings.gridSize.columns(for: currentHorizontalSizeClass, isMac: isMac)
+            let minItemWidth: CGFloat = isMac ? 150 : (numberOfColumns <= 3 ? 100 : 80)
+
+            return Array(repeating: GridItem(.adaptive(minimum: minItemWidth), spacing: 3), count: numberOfColumns)
+        }
 
     private var userUploadsCacheKey: String { return "uploads_\(username.lowercased())" }
 

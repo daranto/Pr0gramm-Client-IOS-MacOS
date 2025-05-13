@@ -72,6 +72,37 @@ enum ColorSchemeSetting: Int, CaseIterable, Identifiable {
     }
 }
 
+// --- MODIFIED: GridSizeSetting angepasst ---
+enum GridSizeSetting: Int, CaseIterable, Identifiable {
+    case small = 3  // 3 Items pro Zeile (iPhone Portrait)
+    case medium = 4 // 4 Items
+    case large = 5  // 5 Items
+    // case extraLarge = 6 // Entfernt
+
+    var id: Int { self.rawValue }
+
+    var displayName: String {
+        return "\(self.rawValue)" // Zeigt nur die Zahl an
+    }
+
+    func columns(for horizontalSizeClass: UserInterfaceSizeClass?, isMac: Bool) -> Int {
+        let baseCount = self.rawValue
+        if isMac {
+            // Auf dem Mac erlauben wir mehr Spalten, z.B. baseCount + 2 oder eine andere Logik
+            // Für 3, 4, 5 wird das zu 5, 6, 7
+            return baseCount + 2
+        } else {
+            if horizontalSizeClass == .regular { // iPad oder iPhone Landscape
+                // Hier könntest du auch eine andere Logik haben, z.B. baseCount + 1
+                return baseCount + 1 // Für 3, 4, 5 wird das zu 4, 5, 6
+            } else { // iPhone Portrait
+                return baseCount // Bleibt bei 3, 4, 5
+            }
+        }
+    }
+}
+// --- END MODIFICATION ---
+
 
 /// Manages application-wide settings, persists them to UserDefaults, and provides access to cache services.
 /// Also manages synchronization of 'seen' items via iCloud Key-Value Store.
@@ -84,13 +115,12 @@ class AppSettings: ObservableObject {
 
     // UserDefaults Keys
     private static let isVideoMutedPreferenceKey = "isVideoMutedPreference_v1"
-    private static let feedTypeKey = "feedTypePreference_v1" // Bleibt für Neu/Beliebt/Müll
+    private static let feedTypeKey = "feedTypePreference_v1"
     private static let showSFWKey = "showSFWPreference_v1"
     private static let showNSFWKey = "showNSFWPreference_v1"
     private static let showNSFLKey = "showNSFLPreference_v1"
     private static let showNSFPKey = "showNSFPPreference_v1"
     private static let showPOLKey = "showPOLPreference_v1"
-    // private static let showJunkKey = "showJunkPreference_v1" // Entfernt
     private static let maxImageCacheSizeMBKey = "maxImageCacheSizeMB_v1"
     private static let commentSortOrderKey = "commentSortOrder_v1"
     private static let hideSeenItemsKey = "hideSeenItems_v1"
@@ -98,6 +128,7 @@ class AppSettings: ObservableObject {
     private static let subtitleActivationModeKey = "subtitleActivationMode_v1"
     private static let selectedCollectionIdForFavoritesKey = "selectedCollectionIdForFavorites_v1"
     private static let colorSchemeSettingKey = "colorSchemeSetting_v1"
+    private static let gridSizeSettingKey = "gridSizeSetting_v1"
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
     private var keyValueStoreChangeObserver: NSObjectProtocol?
@@ -173,6 +204,13 @@ class AppSettings: ObservableObject {
             Self.logger.info("Color scheme setting changed to: \(self.colorSchemeSetting.displayName)")
         }
     }
+    @Published var gridSize: GridSizeSetting {
+        didSet {
+            UserDefaults.standard.set(gridSize.rawValue, forKey: Self.gridSizeSettingKey)
+            Self.logger.info("Grid size setting changed to: \(self.gridSize.displayName) (rawValue: \(self.gridSize.rawValue))")
+        }
+    }
+
 
     // MARK: - Published Session State (Not Persisted)
     @Published var transientSessionMuteState: Bool? = nil
@@ -187,7 +225,6 @@ class AppSettings: ObservableObject {
     private var saveSeenItemsTask: Task<Void, Never>?
     private let saveSeenItemsDebounceDelay: Duration = .seconds(2)
 
-    // --- MODIFIED: Publisher for relevant favorite settings changes ---
     var favoritesSettingsChangedPublisher: AnyPublisher<Void, Never> {
         let sfwPublisher = $showSFW.map { _ in () }.eraseToAnyPublisher()
         let nsfwPublisher = $showNSFW.map { _ in () }.eraseToAnyPublisher()
@@ -207,7 +244,6 @@ class AppSettings: ObservableObject {
         .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
         .eraseToAnyPublisher()
     }
-    // --- END MODIFICATION ---
 
 
     // MARK: - Computed Properties for API Usage
@@ -270,6 +306,14 @@ class AppSettings: ObservableObject {
             self.selectedCollectionIdForFavorites = nil
         }
         self.colorSchemeSetting = ColorSchemeSetting(rawValue: UserDefaults.standard.integer(forKey: Self.colorSchemeSettingKey)) ?? .system
+        let rawGridSize = UserDefaults.standard.integer(forKey: Self.gridSizeSettingKey)
+        // --- MODIFIED: Default auf .small, falls gespeicherter Wert ungültig (z.B. wenn 6 gespeichert war) ---
+        self.gridSize = GridSizeSetting(rawValue: rawGridSize) ?? .small
+        if self.gridSize.rawValue > 5 { // Sicherheitscheck, falls alter Wert 6 noch gespeichert ist
+            self.gridSize = .large // Setze auf den größten validen Wert
+        }
+        // --- END MODIFICATION ---
+
 
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
@@ -281,6 +325,8 @@ class AppSettings: ObservableObject {
         Self.logger.info("- subtitleActivationMode: \(self.subtitleActivationMode.displayName)")
         Self.logger.info("- selectedCollectionIdForFavorites: \(self.selectedCollectionIdForFavorites != nil ? String(self.selectedCollectionIdForFavorites!) : "nil")")
         Self.logger.info("- colorSchemeSetting: \(self.colorSchemeSetting.displayName)")
+        Self.logger.info("- gridSize: \(self.gridSize.displayName)")
+
 
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
@@ -288,6 +334,8 @@ class AppSettings: ObservableObject {
         if UserDefaults.standard.object(forKey: Self.enableExperimentalHideSeenKey) == nil { UserDefaults.standard.set(self.enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey) }
         if UserDefaults.standard.object(forKey: Self.subtitleActivationModeKey) == nil { UserDefaults.standard.set(self.subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey) }
         if UserDefaults.standard.object(forKey: Self.colorSchemeSettingKey) == nil { UserDefaults.standard.set(self.colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey) }
+        if UserDefaults.standard.object(forKey: Self.gridSizeSettingKey) == nil { UserDefaults.standard.set(self.gridSize.rawValue, forKey: Self.gridSizeSettingKey) }
+
 
         updateKingfisherCacheLimit()
         setupCloudKitKeyValueStoreObserver()
