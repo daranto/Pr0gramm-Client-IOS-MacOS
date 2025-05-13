@@ -33,11 +33,31 @@ struct SettingsView: View {
                         }
                     }
                     .font(UIConstants.bodyFont)
+                    
+                    // --- NEW: Picker für Akzentfarbe ---
+                    Picker("Akzentfarbe", selection: $settings.accentColorChoice) {
+                        ForEach(AccentColorChoice.allCases) { colorChoice in
+                            HStack {
+                                Text( colorChoice.displayName)
+                                Spacer()
+                                Circle()
+                                    .fill(colorChoice.swiftUIColor)
+                                    .frame(width: 20, height: 20)
+                                    .overlay(
+                                        Circle().stroke(Color.secondary, lineWidth: colorChoice == .blue ? 0 : 0.5) // Rand für helle Farben
+                                    )
+                            }
+                            .tag(colorChoice)
+                            .font(UIConstants.bodyFont)
+                        }
+                    }
+                    .font(UIConstants.bodyFont)
+                    // --- END NEW ---
+                    
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
                 Section {
-                    // --- MODIFIED: Toggle Text and Footer Text ---
                     Toggle("SFW bei App-Öffnung", isOn: $settings.resetFiltersOnAppOpen)
                         .font(UIConstants.bodyFont)
                 } header: {
@@ -47,7 +67,6 @@ struct SettingsView: View {
                         .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
-                // --- END MODIFICATION ---
 
                 Section {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
@@ -180,7 +199,7 @@ struct SettingsView: View {
                             Label("Projekt auf GitHub", systemImage: "link")
                                 .font(UIConstants.bodyFont)
                         }
-                        .tint(.accentColor)
+                        .tint(.accentColor) // Wird jetzt dynamisch sein
                     }
                 } header: {
                     Text("Info & Projekt")

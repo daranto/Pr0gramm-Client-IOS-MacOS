@@ -8,16 +8,10 @@ import os
 /// The main entry point for the Pr0gramm SwiftUI application.
 @main
 struct Pr0grammApp: App {
-    /// Manages global application settings and cache interactions.
     @StateObject private var appSettings: AppSettings
-    /// Handles user authentication state and API calls.
     @StateObject private var authService: AuthService
-    /// Manages the currently selected tab and navigation requests.
     @StateObject private var navigationService = NavigationService()
-
-    // --- NEW: Environment variable for scenePhase ---
-    @Environment(\.scenePhase) var scenePhase
-    // --- END NEW ---
+    @StateObject private var scenePhaseObserver: ScenePhaseObserver
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Pr0grammApp")
 
@@ -25,52 +19,25 @@ struct Pr0grammApp: App {
         let settings = AppSettings()
         _appSettings = StateObject(wrappedValue: settings)
         _authService = StateObject(wrappedValue: AuthService(appSettings: settings))
+        _scenePhaseObserver = StateObject(wrappedValue: ScenePhaseObserver(appSettings: settings))
 
         configureAudioSession()
+        Pr0grammApp.logger.info("Pr0grammApp init")
     }
 
     var body: some Scene {
         WindowGroup {
-            MainView()
+            AppRootView()
                 .environmentObject(appSettings)
                 .environmentObject(authService)
                 .environmentObject(navigationService)
-                .task { // Wird einmal beim Start der WindowGroup ausgeführt
-                    await authService.checkInitialLoginStatus()
-                    // --- NEW: Filter-Reset beim ersten Start (nach Login-Check) ---
-                    applyFilterResetIfNeeded()
-                    // --- END NEW ---
-                }
-                .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
-                // --- NEW: Beobachte scenePhase für Filter-Reset ---
-                .onChange(of: scenePhase) { oldPhase, newPhase in
-                    if newPhase == .active && oldPhase == .inactive { // Von inaktiv zu aktiv (z.B. Rückkehr aus Hintergrund)
-                        Pr0grammApp.logger.info("App became active from inactive state.")
-                        applyFilterResetIfNeeded()
-                    } else if newPhase == .active && oldPhase == .background { // Von Hintergrund zu aktiv
-                        Pr0grammApp.logger.info("App became active from background state.")
-                        applyFilterResetIfNeeded()
-                    }
-                }
-                // --- END NEW ---
+                .environmentObject(scenePhaseObserver)
         }
     }
     
-    // --- NEW: Methode zum Zurücksetzen der Filter ---
-    private func applyFilterResetIfNeeded() {
-        if appSettings.resetFiltersOnAppOpen {
-            Pr0grammApp.logger.info("Applying filter reset to SFW as per settings.")
-            appSettings.showSFW = true
-            appSettings.showNSFW = false
-            appSettings.showNSFL = false
-            appSettings.showNSFP = false
-            appSettings.showPOL = false
-            // Der FeedType (Neu/Beliebt/Müll) wird hier nicht geändert, nur die Inhaltsfilter.
-        } else {
-            Pr0grammApp.logger.info("Filter reset on app open is disabled.")
-        }
-    }
-    // --- END NEW ---
+    // applyInitialFilterResetIfNeeded() wird nicht mehr direkt in Pr0grammApp benötigt,
+    // da AppRootView und ScenePhaseObserver dies jetzt über appSettings.applyFilterResetOnAppOpenIfNeeded() handhaben.
+    // Man könnte es für absolute Klarheit entfernen, aber es schadet auch nicht, es vorerst zu belassen (es wird nur nicht mehr aufgerufen).
 
     private func configureAudioSession() {
         Self.logger.info("Configuring AVAudioSession...")
@@ -88,12 +55,36 @@ struct Pr0grammApp: App {
             } catch let error as NSError {
                 Self.logger.error("Failed to override output port to speaker: \(error.localizedDescription) (Code: \(error.code))")
             }
-
             Self.logger.info("AVAudioSession configuration complete.")
-
         } catch {
             Self.logger.error("Failed during AVAudioSession configuration (setCategory or setActive): \(error.localizedDescription)")
         }
+    }
+}
+
+// --- AppRootView ---
+struct AppRootView: View {
+    @EnvironmentObject var appSettings: AppSettings
+    @EnvironmentObject var authService: AuthService
+    @EnvironmentObject var scenePhaseObserver: ScenePhaseObserver
+
+    @Environment(\.scenePhase) var scenePhase
+
+    var body: some View {
+        MainView()
+            .accentColor(appSettings.accentColorChoice.swiftUIColor)
+            .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
+            .task {
+                await authService.checkInitialLoginStatus()
+                // Der initiale Filter-Reset wird jetzt durch .onChange(of: scenePhase, initial: true)
+                // und den ScenePhaseObserver beim ersten Aktivwerden der Szene gehandhabt.
+                // Ein expliziter Aufruf hier ist nicht mehr zwingend, da initial:true das abdeckt.
+                // appSettings.applyFilterResetOnAppOpenIfNeeded() // Kann entfernt oder für Debugging belassen werden
+            }
+            .onChange(of: scenePhase, initial: true) { oldPhase, newPhase in
+                // oldPhase ist nil beim ersten Aufruf wegen initial: true
+                scenePhaseObserver.handleScenePhaseChange(newPhase: newPhase, oldPhase: oldPhase)
+            }
     }
 }
 // --- END OF COMPLETE FILE ---

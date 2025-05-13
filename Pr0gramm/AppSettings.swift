@@ -6,7 +6,7 @@ import Combine // Needed for observer token
 import os
 import Kingfisher
 import CloudKit // Needed for NSUbiquitousKeyValueStore
-import SwiftUI // Needed for ColorScheme
+import SwiftUI // Needed for ColorScheme, Color
 
 // --- MODIFIED: FeedType Enum erweitert ---
 enum FeedType: Int, CaseIterable, Identifiable {
@@ -97,6 +97,27 @@ enum GridSizeSetting: Int, CaseIterable, Identifiable {
     }
 }
 
+enum AccentColorChoice: String, CaseIterable, Identifiable {
+    case orange = "Bewährtes Orange"
+    case green = "Angenehmes Grün"
+    case olive = "Olivgrün des Friedens"
+    case blue = "Episches Blau"
+    case pink = "Altes Pink"
+
+    var id: String { self.rawValue }
+    var displayName: String { self.rawValue }
+
+    var swiftUIColor: Color {
+        switch self {
+        case .orange: return Color(hex: 0xee4d2e)
+        case .green: return Color(hex: 0x64b944)
+        case .olive: return Color(hex: 0x827717)
+        case .blue: return Color(hex: 0x008FFF)
+        case .pink: return Color(hex: 0xc2185b)
+        }
+    }
+}
+
 
 /// Manages application-wide settings, persists them to UserDefaults, and provides access to cache services.
 /// Also manages synchronization of 'seen' items via iCloud Key-Value Store.
@@ -124,6 +145,7 @@ class AppSettings: ObservableObject {
     private static let colorSchemeSettingKey = "colorSchemeSetting_v1"
     private static let gridSizeSettingKey = "gridSizeSetting_v1"
     private static let resetFiltersOnAppOpenKey = "resetFiltersOnAppOpen_v1"
+    private static let accentColorChoiceKey = "accentColorChoice_v1"
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
     private var keyValueStoreChangeObserver: NSObjectProtocol?
@@ -201,7 +223,6 @@ class AppSettings: ObservableObject {
     }
     @Published var gridSize: GridSizeSetting {
         didSet {
-            // Nur schreiben, wenn der neue Wert sich vom alten unterscheidet, um unnötige didSet-Ketten zu vermeiden
             if oldValue != gridSize {
                 UserDefaults.standard.set(gridSize.rawValue, forKey: Self.gridSizeSettingKey)
                 Self.logger.info("Grid size setting changed to: \(self.gridSize.displayName) (rawValue: \(self.gridSize.rawValue))")
@@ -213,6 +234,14 @@ class AppSettings: ObservableObject {
             if oldValue != resetFiltersOnAppOpen {
                 UserDefaults.standard.set(resetFiltersOnAppOpen, forKey: Self.resetFiltersOnAppOpenKey)
                 Self.logger.info("Reset filters on app open setting changed to: \(self.resetFiltersOnAppOpen)")
+            }
+        }
+    }
+    @Published var accentColorChoice: AccentColorChoice {
+        didSet {
+            if oldValue != accentColorChoice {
+                UserDefaults.standard.set(accentColorChoice.rawValue, forKey: Self.accentColorChoiceKey)
+                Self.logger.info("Accent color choice changed to: \(self.accentColorChoice.displayName)")
             }
         }
     }
@@ -289,7 +318,6 @@ class AppSettings: ObservableObject {
 
     // MARK: - Initializer
     init() {
-        // 1. Lese alle Werte aus UserDefaults, ohne didSet auszulösen (oder stelle sicher, dass didSet sicher ist)
         let initialIsVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) as? Bool ?? true
         let initialRawFeedType = UserDefaults.standard.integer(forKey: Self.feedTypeKey)
         let initialFeedType = FeedType(rawValue: initialRawFeedType) ?? .promoted
@@ -313,14 +341,13 @@ class AppSettings: ObservableObject {
         let initialColorScheme = ColorSchemeSetting(rawValue: initialRawColorScheme) ?? .system
         let initialRawGridSize = UserDefaults.standard.integer(forKey: Self.gridSizeSettingKey)
         var initialGridSize = GridSizeSetting(rawValue: initialRawGridSize) ?? .small
-        if initialGridSize.rawValue > 5 { // Korrektur für alte gespeicherte Werte
+        if initialGridSize.rawValue > 5 {
             initialGridSize = .large
         }
         let initialResetFiltersOnAppOpen = UserDefaults.standard.bool(forKey: Self.resetFiltersOnAppOpenKey)
+        let initialRawAccentColor = UserDefaults.standard.string(forKey: Self.accentColorChoiceKey)
+        let initialAccentColor = AccentColorChoice(rawValue: initialRawAccentColor ?? AccentColorChoice.blue.rawValue) ?? .blue
 
-        // 2. Initialisiere alle @Published Properties. Dies löst didSet NICHT aus, wenn der Wert derselbe ist.
-        // Wenn wir jedoch einen Default-Wert hier setzen, der sich vom UserDefaults-Wert unterscheidet,
-        // würde didSet ausgelöst. Daher ist es wichtig, die Werte aus UserDefaults zuerst zu lesen.
         self.isVideoMuted = initialIsVideoMuted
         self.feedType = initialFeedType
         self.showSFW = initialShowSFW
@@ -331,36 +358,65 @@ class AppSettings: ObservableObject {
         self.maxImageCacheSizeMB = initialMaxImageCacheSizeMB
         self.commentSortOrder = initialCommentSortOrder
         self.enableExperimentalHideSeen = initialEnableExperimentalHideSeen
-        self.hideSeenItems = initialHideSeenItems // Wird korrekt behandelt, da enableExperimentalHideSeen schon gesetzt ist
+        self.hideSeenItems = initialHideSeenItems
         self.subtitleActivationMode = initialSubtitleActivationMode
         self.selectedCollectionIdForFavorites = initialSelectedCollectionId
         self.colorSchemeSetting = initialColorScheme
         self.gridSize = initialGridSize
         self.resetFiltersOnAppOpen = initialResetFiltersOnAppOpen
+        self.accentColorChoice = initialAccentColor
         
-        // Logging und UserDefaults-Initialisierung (falls Werte nicht vorhanden waren)
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
         Self.logger.info("- feedType: \(self.feedType.displayName)")
-        // ... (restliches Logging) ...
+        Self.logger.info("- showSFW: \(self.showSFW), showNSFW: \(self.showNSFW), showNSFL: \(self.showNSFL), showNSFP: \(self.showNSFP), showPOL: \(self.showPOL)")
+        Self.logger.info("- apiFlags computed: \(self.apiFlags), apiPromoted computed: \(String(describing: self.apiPromoted)), apiShowJunk computed: \(self.apiShowJunk)")
+        Self.logger.info("- enableExperimentalHideSeen: \(self.enableExperimentalHideSeen)")
+        Self.logger.info("- hideSeenItems (actual): \(self.hideSeenItems)")
+        Self.logger.info("- subtitleActivationMode: \(self.subtitleActivationMode.displayName)")
+        Self.logger.info("- selectedCollectionIdForFavorites: \(self.selectedCollectionIdForFavorites != nil ? String(self.selectedCollectionIdForFavorites!) : "nil")")
+        Self.logger.info("- colorSchemeSetting: \(self.colorSchemeSetting.displayName)")
         Self.logger.info("- gridSize: \(self.gridSize.displayName)")
         Self.logger.info("- resetFiltersOnAppOpen: \(self.resetFiltersOnAppOpen)")
+        Self.logger.info("- accentColorChoice: \(self.accentColorChoice.displayName)")
 
-        // Stelle sicher, dass UserDefaults geschrieben werden, falls sie vorher nicht existierten
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
-        // ... (restliche UserDefaults-Checks) ...
+        if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil && self.enableExperimentalHideSeen { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
+        if UserDefaults.standard.object(forKey: Self.enableExperimentalHideSeenKey) == nil { UserDefaults.standard.set(self.enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey) }
+        if UserDefaults.standard.object(forKey: Self.subtitleActivationModeKey) == nil { UserDefaults.standard.set(self.subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey) }
+        if UserDefaults.standard.object(forKey: Self.colorSchemeSettingKey) == nil { UserDefaults.standard.set(self.colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey) }
         if UserDefaults.standard.object(forKey: Self.gridSizeSettingKey) == nil { UserDefaults.standard.set(self.gridSize.rawValue, forKey: Self.gridSizeSettingKey) }
         if UserDefaults.standard.object(forKey: Self.resetFiltersOnAppOpenKey) == nil { UserDefaults.standard.set(self.resetFiltersOnAppOpen, forKey: Self.resetFiltersOnAppOpenKey) }
+        if UserDefaults.standard.object(forKey: Self.accentColorChoiceKey) == nil { UserDefaults.standard.set(self.accentColorChoice.rawValue, forKey: Self.accentColorChoiceKey) }
 
-        // Aktionen, die nach vollständiger Initialisierung sicher sind
-        updateKingfisherCacheLimit() // Hängt von maxImageCacheSizeMB ab
+
+        updateKingfisherCacheLimit()
         setupCloudKitKeyValueStoreObserver()
         Task {
             await loadSeenItemIDs()
             await updateCacheSizes()
         }
     }
+
+    // --- NEW: Methode zum Zurücksetzen der Filter (public) ---
+    public func applyFilterResetOnAppOpenIfNeeded() {
+        if self.resetFiltersOnAppOpen {
+            AppSettings.logger.info("Applying filter reset to SFW as per settings.")
+            self.showSFW = true
+            self.showNSFW = false
+            self.showNSFL = false
+            self.showNSFP = false
+            self.showPOL = false
+            // Der FeedType (Neu/Beliebt/Müll) wird hier nicht geändert, nur die Inhaltsfilter.
+            // Die didSet-Observer der einzelnen show... Properties werden hier ausgelöst
+            // und speichern die Änderungen in UserDefaults.
+        } else {
+            AppSettings.logger.info("Filter reset on app open is disabled.")
+        }
+    }
+    // --- END NEW ---
+
 
     // MARK: - Cache Management Methods
     func clearSeenItemsCache() async {
