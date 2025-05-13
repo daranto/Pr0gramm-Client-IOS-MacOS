@@ -157,9 +157,14 @@ struct PagedDetailView: View {
 
     @State private var isTogglingFavorite = false
     @State private var localFavoritedStatus: [Int: Bool] = [:]
-    @State private var newlyVisitedItemIDsThisSession: Set<Int> = []
+    // --- REMOVED: newlyVisitedItemIDsThisSession is not strictly needed for this specific logic ---
+    // @State private var newlyVisitedItemIDsThisSession: Set<Int> = []
     @State private var collapsedCommentIDs: Set<Int> = []
     @State private var commentReplyTarget: ReplyTarget? = nil
+
+    // --- NEW: Store the ID of the item that was active *before* a swipe ---
+    @State private var previouslySelectedItemForMarking: Item? = nil
+    // --- END NEW ---
 
 
     let loadMoreAction: () async -> Void
@@ -175,11 +180,16 @@ struct PagedDetailView: View {
         self._selectedIndex = State(initialValue: selectedIndex)
         self.playerManager = playerManager
         self.loadMoreAction = loadMoreAction
+        // --- NEW: Initialize previouslySelectedItemForMarking in init ---
+        if selectedIndex >= 0 && selectedIndex < items.wrappedValue.count {
+            self._previouslySelectedItemForMarking = State(initialValue: items.wrappedValue[selectedIndex])
+        }
+        // --- END NEW ---
         PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex)")
     }
 
     var body: some View {
-        tabViewContent // Removed AnyView wrapping, rely on @ViewBuilder for tabViewContent
+        tabViewContent
         .background(KeyCommandView(handler: keyboardActionHandler))
         .sheet(item: $previewLinkTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
              LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
@@ -226,7 +236,6 @@ struct PagedDetailView: View {
             if newValue != nil { pausePlayerForSheet() }
         }
         .onChange(of: collectionSelectionSheetTarget) { _, newValue in
-            // This onChange now works because CollectionSelectionSheetTarget is Equatable
             if newValue != nil { pausePlayerForSheet() }
         }
         .onChange(of: horizontalSizeClass) { oldValue, newValue in
@@ -259,14 +268,12 @@ struct PagedDetailView: View {
     private var tabViewPages: some View {
         ForEach(items.indices, id: \.self) { index in
              tabViewPage(for: index)
-                .tag(index) // Apply tag here, directly to the content of ForEach
+                .tag(index)
         }
     }
 
-    // --- MODIFIED: Use @ViewBuilder for tabViewContent ---
     @ViewBuilder
     private var tabViewContent: some View {
-    // --- END MODIFICATION ---
         TabView(selection: $selectedIndex) {
             tabViewPages
         }
@@ -283,16 +290,33 @@ struct PagedDetailView: View {
              }
         }
         .onChange(of: selectedIndex) { oldValue, newValue in
+            // --- MODIFIED: Mark the *previous* item as seen ---
+            if oldValue >= 0 && oldValue < items.count {
+                let previousItem = items[oldValue]
+                settings.markItemAsSeen(id: previousItem.id)
+                PagedDetailView.logger.info("Marked PREVIOUS item \(previousItem.id) as seen due to swipe.")
+            }
+            // Update the previouslySelectedItemForMarking to the new current item
+            if newValue >= 0 && newValue < items.count {
+                previouslySelectedItemForMarking = items[newValue]
+            } else {
+                previouslySelectedItemForMarking = nil
+            }
+            // --- END MODIFICATION ---
+            
             handleIndexChangeImmediate(oldValue: oldValue, newValue: newValue)
             Task {
                 try? await Task.sleep(for: swipeSettleDelay)
-                if self.selectedIndex == newValue { await handleIndexChangeDeferred(newValue: newValue) }
-                else { PagedDetailView.logger.debug("Deferred actions skipped for index \(newValue), selection changed again during settle delay.") }
+                if self.selectedIndex == newValue {
+                    await handleIndexChangeDeferred(newValue: newValue) // No longer pass markAsSeen here
+                } else {
+                    PagedDetailView.logger.debug("Deferred actions skipped for index \(newValue), selection changed again during settle delay.")
+                }
             }
             Task { await triggerLoadMoreIfNeeded(currentIndex: newValue) }
         }
         .onAppear { setupView() }
-        .onDisappear { cleanupViewAndMarkVisited() }
+        .onDisappear { cleanupViewAndMarkLastActiveItemVisited() } // Modified name
         .onChange(of: scenePhase) { oldPhase, newPhase in handleScenePhaseChange(oldPhase: oldPhase, newPhase: newPhase) }
         .onChange(of: settings.commentSortOrder) { oldOrder, newOrder in handleSortOrderChange(newOrder: newOrder) }
         .onChange(of: items.count) { _, newCount in PagedDetailView.logger.info("Detected change in items count from binding. New count: \(newCount)") }
@@ -491,8 +515,9 @@ struct PagedDetailView: View {
             if selectedIndex >= 0 && selectedIndex < items.count {
                  let initialItem = items[selectedIndex]
                  playerManager.setupPlayerIfNeeded(for: initialItem, isFullscreen: isFullscreen)
-                 newlyVisitedItemIDsThisSession.insert(initialItem.id)
-                 PagedDetailView.logger.debug("Added initial item \(initialItem.id) to visited set.")
+                 // Das initiale Item wird erst beim Verlassen oder Swipen als gesehen markiert.
+                 previouslySelectedItemForMarking = initialItem // Set for onDisappear
+                 PagedDetailView.logger.debug("Initial item \(initialItem.id) set for potential marking on disappear.")
                  await handleIndexChangeDeferred(newValue: selectedIndex)
             } else {
                  PagedDetailView.logger.warning("onAppear: Invalid selectedIndex \(selectedIndex) for items count \(items.count).")
@@ -500,7 +525,8 @@ struct PagedDetailView: View {
         }
     }
 
-    private func cleanupViewAndMarkVisited() {
+    // --- MODIFIED: cleanupViewAndMarkLastActiveItemVisited ---
+    private func cleanupViewAndMarkLastActiveItemVisited() {
         PagedDetailView.logger.info("PagedDetailView disappearing.")
         imagePrefetcher.stop()
         keyboardActionHandler.selectNextAction = nil
@@ -510,16 +536,15 @@ struct PagedDetailView: View {
         if !isFullscreen { playerManager.cleanupPlayer() }
         else { PagedDetailView.logger.info("Skipping player cleanup (fullscreen).") }
         showAllTagsForItem = []
-        let visitedIDs = self.newlyVisitedItemIDsThisSession
-        if !visitedIDs.isEmpty {
-            Task {
-                PagedDetailView.logger.info("Marking \(visitedIDs.count) visited items as seen (batch)...")
-                await settings.markItemsAsSeen(ids: visitedIDs)
-                PagedDetailView.logger.info("Finished marking visited items (batch).")
-            }
+        
+        // Mark the very last active item as seen when the view disappears
+        if let itemToMark = previouslySelectedItemForMarking {
+            settings.markItemAsSeen(id: itemToMark.id)
+            PagedDetailView.logger.info("Marked last active item \(itemToMark.id) as seen on disappear.")
+            previouslySelectedItemForMarking = nil // Reset
         }
-        newlyVisitedItemIDsThisSession = []
     }
+    // --- END MODIFICATION ---
 
     private func handleIndexChangeImmediate(oldValue: Int, newValue: Int) {
         PagedDetailView.logger.info("Selected index changed from \(oldValue) to \(newValue)")
@@ -528,20 +553,21 @@ struct PagedDetailView: View {
              return
         }
         let newItem = items[newValue]
-        PagedDetailView.logger.debug("Immediate actions for index change to \(newValue). Setting up player and marking visited.")
+        PagedDetailView.logger.debug("Immediate actions for index change to \(newValue). Setting up player.")
         playerManager.setupPlayerIfNeeded(for: newItem, isFullscreen: isFullscreen)
-        newlyVisitedItemIDsThisSession.insert(newItem.id)
+        
         isTogglingFavorite = false
         imagePrefetcher.stop()
     }
-
-    private func handleIndexChangeDeferred(newValue: Int) async {
+    
+    private func handleIndexChangeDeferred(newValue: Int) async { // Removed markAsSeen parameter
          PagedDetailView.logger.debug("Deferred actions executing for index \(newValue).")
          guard newValue >= 0 && newValue < items.count else {
              PagedDetailView.logger.warning("handleIndexChangeDeferred: Invalid index \(newValue) (items.count: \(items.count)).")
              return
          }
          let currentItem = items[newValue]
+
          await loadInfoIfNeededAndPrepareHierarchy(for: currentItem)
 
          Task {
@@ -586,8 +612,18 @@ struct PagedDetailView: View {
               } else {
                   PagedDetailView.logger.debug("Scene became inactive/background. NOT pausing player (is fullscreen or a sheet is active).")
               }
+              
+              PagedDetailView.logger.info("App going to background/inactive. Forcing save of seen items.")
+              handleAppBackgrounding()
           }
      }
+
+    private func handleAppBackgrounding() {
+        let currentSettings = self.settings
+        Task { @MainActor in
+            await currentSettings.forceSaveSeenItems()
+        }
+    }
 
     private func handleSortOrderChange(newOrder: CommentSortOrder) {
           PagedDetailView.logger.info("Sort order changed to \(newOrder.displayName). Recalculating cached flat lists.")
@@ -902,8 +938,7 @@ struct LinkedItemPreviewWrapperView: View {
              .environmentObject(previewSettings)
              .environmentObject(previewAuthService)
              .task {
-                 await previewSettings.markItemsAsSeen(ids: [1,3])
-                 print("Preview Task: Items marked as seen.")
+                 print("Preview Task: Initial setup done.")
              }
          }
     }

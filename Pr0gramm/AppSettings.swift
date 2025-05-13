@@ -190,12 +190,13 @@ class AppSettings: ObservableObject {
     // MARK: - Published Seen Items State (Synced via iCloud KVS, backed up locally)
     @Published private(set) var seenItemIDs: Set<Int> = []
 
+    private var saveSeenItemsTask: Task<Void, Never>?
+    private let saveSeenItemsDebounceDelay: Duration = .seconds(2)
+
     // MARK: - Computed Properties for API Usage
     var apiFlags: Int {
         get {
             if feedType == .junk {
-                // Für Müll-Feed: flags = 9 (SFW + NSFP) laut API-Beispiel.
-                // Andere Filter (showSFW etc.) sind hier irrelevant.
                 return 9
             } else {
                 var flags = 0
@@ -204,18 +205,17 @@ class AppSettings: ObservableObject {
                 if showNSFL { flags |= 4 }
                 if showNSFP { flags |= 8 }
                 if showPOL { flags |= 16 }
-                // Wenn kein normaler Filter aktiv ist, aber auch nicht Junk, dann SFW als Default.
                 return flags == 0 ? 1 : flags
             }
         }
     }
 
-    var apiPromoted: Int? { // Kann nil sein, wenn Junk ausgewählt ist
+    var apiPromoted: Int? {
         get {
             switch feedType {
             case .new: return 0
             case .promoted: return 1
-            case .junk: return nil // Junk-Feed hat keinen "promoted" Status in diesem Sinne
+            case .junk: return nil
             }
         }
     }
@@ -225,31 +225,21 @@ class AppSettings: ObservableObject {
     }
 
     var hasActiveContentFilter: Bool {
-        // Wenn Junk ausgewählt ist, ist der Filter aktiv.
-        // Ansonsten, wenn einer der Standardfilter aktiv ist.
         return feedType == .junk || showSFW || showNSFW || showNSFL || showNSFP || showPOL
     }
 
     // MARK: - Initializer
     init() {
         self.isVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil ? true : UserDefaults.standard.bool(forKey: Self.isVideoMutedPreferenceKey)
-        // --- MODIFIED: feedType Initialisierung ---
-        // Standardmäßig auf .promoted, wenn kein Wert gespeichert ist oder der gespeicherte Wert ungültig ist.
-        // .junk wird nur geladen, wenn es explizit gespeichert wurde.
         let rawFeedType = UserDefaults.standard.integer(forKey: Self.feedTypeKey)
         self.feedType = FeedType(rawValue: rawFeedType) ?? .promoted
-        // --- END MODIFICATION ---
-
         self.showSFW = UserDefaults.standard.object(forKey: Self.showSFWKey) == nil ? true : UserDefaults.standard.bool(forKey: Self.showSFWKey)
         self.showNSFW = UserDefaults.standard.bool(forKey: Self.showNSFWKey)
         self.showNSFL = UserDefaults.standard.bool(forKey: Self.showNSFLKey)
         self.showNSFP = UserDefaults.standard.bool(forKey: Self.showNSFPKey)
         self.showPOL = UserDefaults.standard.bool(forKey: Self.showPOLKey)
-        // showJunk wird nicht mehr separat geladen/initialisiert
-
         self.maxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) == nil ? 100 : UserDefaults.standard.integer(forKey: Self.maxImageCacheSizeMBKey)
         self.commentSortOrder = CommentSortOrder(rawValue: UserDefaults.standard.integer(forKey: Self.commentSortOrderKey)) ?? .date
-
         let initialExperimentalEnabled = UserDefaults.standard.bool(forKey: Self.enableExperimentalHideSeenKey)
         self.enableExperimentalHideSeen = initialExperimentalEnabled
         self.hideSeenItems = false
@@ -257,14 +247,12 @@ class AppSettings: ObservableObject {
             self.hideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
         }
         self.subtitleActivationMode = SubtitleActivationMode(rawValue: UserDefaults.standard.integer(forKey: Self.subtitleActivationModeKey)) ?? .automatic
-        
         if UserDefaults.standard.object(forKey: Self.selectedCollectionIdForFavoritesKey) != nil {
             self.selectedCollectionIdForFavorites = UserDefaults.standard.integer(forKey: Self.selectedCollectionIdForFavoritesKey)
         } else {
             self.selectedCollectionIdForFavorites = nil
         }
         self.colorSchemeSetting = ColorSchemeSetting(rawValue: UserDefaults.standard.integer(forKey: Self.colorSchemeSettingKey)) ?? .system
-
 
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
@@ -277,7 +265,6 @@ class AppSettings: ObservableObject {
         Self.logger.info("- selectedCollectionIdForFavorites: \(self.selectedCollectionIdForFavorites != nil ? String(self.selectedCollectionIdForFavorites!) : "nil")")
         Self.logger.info("- colorSchemeSetting: \(self.colorSchemeSetting.displayName)")
 
-
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
         if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil && self.enableExperimentalHideSeen { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
@@ -285,10 +272,8 @@ class AppSettings: ObservableObject {
         if UserDefaults.standard.object(forKey: Self.subtitleActivationModeKey) == nil { UserDefaults.standard.set(self.subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey) }
         if UserDefaults.standard.object(forKey: Self.colorSchemeSettingKey) == nil { UserDefaults.standard.set(self.colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey) }
 
-
         updateKingfisherCacheLimit()
         setupCloudKitKeyValueStoreObserver()
-
         Task {
             await loadSeenItemIDs()
             await updateCacheSizes()
@@ -348,7 +333,6 @@ class AppSettings: ObservableObject {
         Self.logger.info("Set Kingfisher (image) disk cache size limit to \(limitBytes) bytes (\(self.maxImageCacheSizeMB) MB).")
     }
 
-
     // MARK: - Data Cache Access Methods (Delegated to CacheService)
     func saveItemsToCache(_ items: [Item], forKey cacheKey: String) async {
         guard !cacheKey.isEmpty else { return }
@@ -371,31 +355,67 @@ class AppSettings: ObservableObject {
     }
 
     // MARK: - Seen Items Management Methods
-    func markItemAsSeen(id: Int) async {
+    func markItemAsSeen(id: Int) {
         if !seenItemIDs.contains(id) {
              var idsToUpdate = seenItemIDs
              idsToUpdate.insert(id)
              seenItemIDs = idsToUpdate
-             Self.logger.debug("Marked item \(id) as seen. Total seen: \(self.seenItemIDs.count)")
-             await saveSeenItemIDsToCloudAndLocal()
+             Self.logger.debug("Marked item \(id) as seen (in-memory). Total seen: \(self.seenItemIDs.count)")
+             saveSeenItemsTask?.cancel()
+             saveSeenItemsTask = Task {
+                 do {
+                     try await Task.sleep(for: saveSeenItemsDebounceDelay)
+                     guard !Task.isCancelled else {
+                         Self.logger.info("Debounced save task for seen items cancelled during sleep.")
+                         return
+                     }
+                     await self.saveSeenItemIDsToCloudAndLocal()
+                 } catch is CancellationError {
+                      Self.logger.info("Debounced save task for seen items cancelled.")
+                 } catch {
+                     Self.logger.error("Error in debounced save task for seen items: \(error.localizedDescription)")
+                 }
+             }
         } else {
              Self.logger.trace("Item \(id) was already marked as seen.")
         }
     }
-    func markItemsAsSeen(ids: Set<Int>) async {
+
+    func markItemsAsSeen(ids: Set<Int>) {
          let newIDs = ids.subtracting(seenItemIDs)
          if !newIDs.isEmpty {
-             Self.logger.debug("Marking \(newIDs.count) new items as seen.")
+             Self.logger.debug("Marking \(newIDs.count) new items as seen (in-memory).")
              var idsToUpdate = seenItemIDs
              idsToUpdate.formUnion(newIDs)
              seenItemIDs = idsToUpdate
-             Self.logger.info("Marked \(newIDs.count) items as seen. Total seen: \(self.seenItemIDs.count)")
-             await saveSeenItemIDsToCloudAndLocal()
+             Self.logger.info("Marked \(newIDs.count) items as seen (in-memory). Total seen: \(self.seenItemIDs.count)")
+             saveSeenItemsTask?.cancel()
+             saveSeenItemsTask = Task {
+                 do {
+                     try await Task.sleep(for: saveSeenItemsDebounceDelay)
+                     guard !Task.isCancelled else {
+                         Self.logger.info("Debounced save task for multiple seen items cancelled during sleep.")
+                         return
+                     }
+                     await self.saveSeenItemIDsToCloudAndLocal()
+                 } catch is CancellationError {
+                     Self.logger.info("Debounced save task for multiple seen items cancelled.")
+                 } catch {
+                     Self.logger.error("Error in debounced save task for multiple seen items: \(error.localizedDescription)")
+                 }
+             }
          } else {
              Self.logger.trace("No new items to mark as seen from the provided batch.")
          }
     }
-    private func saveSeenItemIDsToCloudAndLocal() async {
+
+    public func forceSaveSeenItems() async { // Ist public
+        saveSeenItemsTask?.cancel()
+        Self.logger.info("Force save seen items requested. Current debounced task (if any) cancelled.")
+        await saveSeenItemIDsToCloudAndLocal()
+    }
+
+    private func saveSeenItemIDsToCloudAndLocal() async { // Ist private
         let idsToSave = self.seenItemIDs
         Self.logger.debug("Saving \(idsToSave.count) seen item IDs to iCloud KVS (Key: \(Self.iCloudSeenItemsKey))...")
         do {
@@ -438,7 +458,6 @@ class AppSettings: ObservableObject {
         }
     }
 
-
     // MARK: - iCloud KVS Synchronization Handling
     private func setupCloudKitKeyValueStoreObserver() {
         if keyValueStoreChangeObserver != nil { NotificationCenter.default.removeObserver(keyValueStoreChangeObserver!); keyValueStoreChangeObserver = nil }
@@ -480,6 +499,13 @@ class AppSettings: ObservableObject {
         }
     }
 
-    deinit { if let observer = keyValueStoreChangeObserver { NotificationCenter.default.removeObserver(observer); AppSettings.logger.debug("Removed iCloud KVS observer in deinit.") } }
+    deinit {
+        if let observer = keyValueStoreChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            AppSettings.logger.debug("Removed iCloud KVS observer in deinit.")
+        }
+        saveSeenItemsTask?.cancel()
+        AppSettings.logger.debug("Cancelled pending saveSeenItemsTask in deinit.")
+    }
 }
 // --- END OF COMPLETE FILE ---
