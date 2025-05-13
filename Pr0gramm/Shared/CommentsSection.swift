@@ -7,25 +7,22 @@ struct CommentsSection: View {
     let flatComments: [FlatCommentDisplayItem]
     let totalCommentCount: Int
     let status: InfoLoadingStatus
-    // --- NEW: Add uploader name ---
     let uploaderName: String
-    // --- END NEW ---
     @Binding var previewLinkTarget: PreviewLinkTarget?
     @Binding var userProfileSheetTarget: UserProfileSheetTarget?
     let isCommentCollapsed: (Int) -> Bool
     let toggleCollapseAction: (Int) -> Void
     let showCommentInputAction: (Int) -> Void // parentId
 
-    @State private var showAllComments = false
-    private let initialCommentLimit = 50
+    // --- MODIFIED: Entferne showAllComments und initialCommentLimit ---
+    // @State private var showAllComments = false
+    // private let initialCommentLimit = 50
 
     private var commentsToDisplay: [FlatCommentDisplayItem] {
-        if showAllComments {
-            return flatComments
-        } else {
-            return Array(flatComments.prefix(initialCommentLimit))
-        }
+        // --- MODIFIED: Zeige immer alle flatComments an ---
+        return flatComments
     }
+    // --- END MODIFICATION ---
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -57,11 +54,11 @@ struct CommentsSection: View {
                        .foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .center).padding()
              } else {
                  LazyVStack(alignment: .leading, spacing: 0) {
-                     ForEach(commentsToDisplay) { flatItem in
+                     ForEach(commentsToDisplay) { flatItem in // commentsToDisplay gibt jetzt immer alle flatComments zurück
                          VStack(alignment: .leading, spacing: 0) {
                              CommentView(
                                  comment: flatItem.comment,
-                                 uploaderName: uploaderName, // Pass uploader name
+                                 uploaderName: uploaderName,
                                  previewLinkTarget: $previewLinkTarget,
                                  userProfileSheetTarget: $userProfileSheetTarget,
                                  hasChildren: flatItem.hasChildren,
@@ -81,13 +78,15 @@ struct CommentsSection: View {
                  }
                  .padding(.vertical, 5)
 
-                 if !showAllComments && flatComments.count > initialCommentLimit {
-                     Button { withAnimation { showAllComments = true } } label: {
-                         Text("Alle \(flatComments.count) sichtbaren Kommentare anzeigen (von \(totalCommentCount))").font(.footnote.weight(.medium)).frame(maxWidth: .infinity).padding(.vertical, 8)
-                     }
-                     .buttonStyle(.bordered).padding(.horizontal).padding(.top, 10)
-                     Divider().padding(.top, 5)
-                 }
+                 // --- MODIFIED: Entferne den "Alle Kommentare anzeigen" Button ---
+                 // if !showAllComments && flatComments.count > initialCommentLimit {
+                 //     Button { withAnimation { showAllComments = true } } label: {
+                 //         Text("Alle \(flatComments.count) sichtbaren Kommentare anzeigen (von \(totalCommentCount))").font(.footnote.weight(.medium)).frame(maxWidth: .infinity).padding(.vertical, 8)
+                 //     }
+                 //     .buttonStyle(.bordered).padding(.horizontal).padding(.top, 10)
+                 //     Divider().padding(.top, 5)
+                 // }
+                 // --- END MODIFICATION ---
              }
         }
     }
@@ -131,16 +130,16 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
 }
 
 
-#Preview("Loaded Limited") {
+#Preview("Loaded Limited") { // Name der Preview könnte angepasst werden, da es kein "Limited" mehr gibt
     CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput in
         ScrollView {
              let comments = createPreviewFlatCommentsHelper()
-             let previewUploader = "UserA" // Beispiel-Uploader
+             let previewUploader = "UserA"
             CommentsSection(
                 flatComments: comments,
                 totalCommentCount: comments.count,
                 status: .loaded,
-                uploaderName: previewUploader, // Pass uploader name
+                uploaderName: previewUploader,
                 previewLinkTarget: $linkTarget,
                 userProfileSheetTarget: $userTarget,
                 isCommentCollapsed: isCollapsed,
