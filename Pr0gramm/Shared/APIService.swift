@@ -327,16 +327,10 @@ class APIService {
         }
     }
 
-    // --- MODIFIED: fetchItem ---
     func fetchItem(id: Int, flags: Int) async throws -> Item? {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else {
             throw URLError(.badURL)
         }
-        // For fetching a single item by ID, we generally don't want to add `show_junk=1` automatically based on flags,
-        // as `flags=9` (SFW+NSFP) can be a valid user filter for non-junk content.
-        // The API should return the item if its `flags` match the requested `flags`.
-        // If an item is *only* visible with `show_junk=1` AND specific flags, that's a different scenario
-        // typically handled when browsing a "junk" feed, not usually when directly fetching a known ID.
         let queryItemsList = [
             URLQueryItem(name: "id", value: String(id)),
             URLQueryItem(name: "flags", value: String(flags))
@@ -351,9 +345,6 @@ class APIService {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "/items/get (single item ID: \(id), flags: \(flags))")
 
-            // The API *might* still return a list if the ID also matches broader criteria when flags are very open,
-            // or if the 'id' parameter is treated as a filter rather than a unique lookup in some API edge cases.
-            // So, we explicitly find the item matching the requested ID from the response.
             let foundItem = apiResponse.items.first { $0.id == id }
 
             if apiResponse.items.count > 1 && foundItem == nil {
@@ -369,7 +360,6 @@ class APIService {
             throw error
         }
     }
-    // --- END MODIFICATION ---
 
 
     func fetchFavorites(username: String, collectionKeyword: String, flags: Int, olderThanId: Int? = nil) async throws -> [Item] {
@@ -532,6 +522,28 @@ class APIService {
             throw error
         }
     }
+
+    // --- NEW: voteTag method ---
+    func voteTag(tagId: Int, vote: Int, nonce: String) async throws {
+        let endpoint = "/tags/vote"
+        Self.logger.info("Attempting to vote \(vote) on tag \(tagId).")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let parameters = [ "id": String(tagId), "vote": String(vote), "_nonce": nonce ]
+        request.httpBody = formURLEncode(parameters: parameters)
+        logRequestDetails(request, for: endpoint)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            try handleApiResponseVoid(response: response, endpoint: endpoint + " (tag: \(tagId), vote: \(vote))")
+            Self.logger.info("Successfully sent vote (\(vote)) for tag \(tagId).")
+        } catch {
+            Self.logger.error("Failed to vote (\(vote)) for tag \(tagId): \(error.localizedDescription)")
+            throw error
+        }
+    }
+    // --- END NEW ---
 
     func voteComment(commentId: Int, vote: Int, nonce: String) async throws {
         let endpoint = "/comments/vote"

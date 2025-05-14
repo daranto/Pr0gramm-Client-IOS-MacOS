@@ -71,6 +71,10 @@ struct PagedDetailTabViewItem: View {
     let downvoteAction: () -> Void
     let showCommentInputAction: (Int, Int) -> Void
     let onHighlightCompletedForCommentID: (Int) -> Void
+    // --- NEW: Callbacks für Tag-Voting ---
+    let upvoteTagAction: (Int) -> Void // tagId
+    let downvoteTagAction: (Int) -> Void // tagId
+    // --- END NEW ---
 
 
     @Binding var previewLinkTarget: PreviewLinkTarget?
@@ -109,7 +113,11 @@ struct PagedDetailTabViewItem: View {
             downvoteAction: downvoteAction,
             showCommentInputAction: showCommentInputAction,
             targetCommentID: dataModel.targetCommentID,
-            onHighlightCompletedForCommentID: onHighlightCompletedForCommentID
+            onHighlightCompletedForCommentID: onHighlightCompletedForCommentID,
+            // --- NEW: Pass tag vote actions ---
+            upvoteTagAction: upvoteTagAction,
+            downvoteTagAction: downvoteTagAction
+            // --- END NEW ---
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -328,6 +336,11 @@ struct PagedDetailView: View {
         .onChange(of: authService.votedItemStates) { _, _ in
             PagedDetailView.logger.trace("Detected change in authService.votedItemStates")
         }
+        // --- NEW: Observe votedTagStates for UI updates ---
+        .onChange(of: authService.votedTagStates) { _, _ in
+            PagedDetailView.logger.trace("Detected change in authService.votedTagStates (PagedDetailView)")
+        }
+        // --- END NEW ---
     }
 
     private func preparePageData(for index: Int) -> PagedDetailTabViewItem.DataModel? {
@@ -399,12 +412,15 @@ struct PagedDetailView: View {
                      PagedDetailView.logger.debug("Setting comment reply target: itemId=\(itemId), parentId=\(parentId)")
                  },
                  onHighlightCompletedForCommentID: { completedCommentID in
-                     // Check if the completed highlight matches the current target
                      if self.currentItemTargetCommentID == completedCommentID {
-                         self.currentItemTargetCommentID = nil // Reset the target
+                         self.currentItemTargetCommentID = nil
                          PagedDetailView.logger.info("Highlight completed for comment \(completedCommentID), resetting currentItemTargetCommentID in PagedDetailView.")
                      }
                  },
+                 // --- NEW: Pass tag vote actions ---
+                 upvoteTagAction: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: 1) } },
+                 downvoteTagAction: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: -1) } },
+                 // --- END NEW ---
                  previewLinkTarget: $previewLinkTarget,
                  userProfileSheetTarget: $userProfileSheetTarget,
                  fullscreenImageTarget: $fullscreenImageTarget
@@ -861,6 +877,18 @@ struct PagedDetailView: View {
             PagedDetailView.logger.info("Vote state for item \(itemId) did not effectively change after API call and potential revert. No local score update needed.")
         }
     }
+    
+    // --- NEW: handleTagVoteTap method ---
+    private func handleTagVoteTap(tagId: Int, voteType: Int) async {
+        guard authService.isLoggedIn else {
+            PagedDetailView.logger.warning("Tag vote skipped: User not logged in.")
+            return
+        }
+        PagedDetailView.logger.debug("Tag vote tapped: tagId=\(tagId), voteType=\(voteType)")
+        await authService.performTagVote(tagId: tagId, voteType: voteType)
+        // Die UI aktualisiert sich automatisch durch @Published votedTagStates in AuthService
+    }
+    // --- END NEW ---
 
     private func submitComment(text: String, itemId: Int, parentId: Int) async throws {
         guard authService.isLoggedIn, let nonce = authService.userNonce else {

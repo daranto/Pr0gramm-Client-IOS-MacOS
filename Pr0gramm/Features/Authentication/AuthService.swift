@@ -21,6 +21,9 @@ class AuthService: ObservableObject {
     private let userVotesKey = "pr0grammUserVotes_v1"
     private let favoritedCommentsKey = "pr0grammFavoritedComments_v1"
     private let userCommentVotesKey = "pr0grammUserCommentVotes_v1"
+    // --- NEW: UserDefaults Key for Tag Votes ---
+    private let userTagVotesKey = "pr0grammUserTagVotes_v1"
+    // --- END NEW ---
 
     // MARK: - Published Properties
     @Published var isLoggedIn: Bool = false
@@ -42,9 +45,11 @@ class AuthService: ObservableObject {
     @Published var votedCommentStates: [Int: Int] = [:]
     @Published private(set) var isVotingComment: [Int: Bool] = [:]
     
-    // --- REMOVED: unreadMessageCount ---
-    // @Published var unreadMessageCount: Int = 0
-    // --- END REMOVAL ---
+    // --- NEW: Published Properties for Tag Votes ---
+    @Published var votedTagStates: [Int: Int] = [:] // [TagID: VoteState (1=up, -1=down, 0=none)]
+    @Published private(set) var isVotingTag: [Int: Bool] = [:] // [TagID: Bool]
+    // --- END NEW ---
+    
     @Published private(set) var userCollections: [ApiCollection] = []
 
     nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AuthService")
@@ -54,7 +59,10 @@ class AuthService: ObservableObject {
         loadVotedStates()
         loadFavoritedCommentIDs()
         loadVotedCommentStates()
-        AuthService.logger.info("AuthService initialized. Loaded \(self.votedItemStates.count) item vote states, \(self.votedCommentStates.count) comment vote states, and \(self.favoritedCommentIDs.count) favorited comment IDs.")
+        // --- NEW: Load Tag Vote States ---
+        loadVotedTagStates()
+        // --- END NEW ---
+        AuthService.logger.info("AuthService initialized. Loaded \(self.votedItemStates.count) item vote states, \(self.votedCommentStates.count) comment vote states, \(self.favoritedCommentIDs.count) favorited comment IDs, and \(self.votedTagStates.count) tag vote states.")
     }
 
     #if DEBUG
@@ -77,7 +85,9 @@ class AuthService: ObservableObject {
             isLoading = true; loginError = nil; self.userNonce = nil; self.favoritedItemIDs = []; self.votedItemStates = [:]; self.isVoting = [:]
             self.favoritedCommentIDs = []; self.isFavoritingComment = [:]
             self.votedCommentStates = [:]; self.isVotingComment = [:]
-            // self.unreadMessageCount = 0 // Removed
+            // --- NEW: Reset Tag Vote States ---
+            self.votedTagStates = [:]; self.isVotingTag = [:]
+            // --- END NEW ---
             self.userCollections = []
             AuthService.logger.debug("Resetting user-specific states for login.")
         }
@@ -108,7 +118,6 @@ class AuthService: ObservableObject {
                 AuthService.logger.info("Login successful via API for user: \(username)")
                 let profileAndCollectionsLoaded = await loadProfileInfoAndCollections(username: username, setLoadingState: false)
                 var favoritesLoaded = false
-                // var countLoaded = false // Removed
 
                 if profileAndCollectionsLoaded {
                     if let defaultCollection = self.userCollections.first(where: { $0.isActuallyDefault }) {
@@ -132,12 +141,12 @@ class AuthService: ObservableObject {
                     loadVotedStates()
                     loadFavoritedCommentIDs()
                     loadVotedCommentStates()
-                    // countLoaded = await updateUnreadCount() // Removed
-                    // Log modified
-                    AuthService.logger.info("Loaded states after successful login. Votes: \(self.votedItemStates.count), Comment Favs: \(self.favoritedCommentIDs.count), Comment Votes: \(self.votedCommentStates.count), Collections: \(self.userCollections.count)")
+                    // --- NEW: Load Tag Vote States ---
+                    loadVotedTagStates()
+                    // --- END NEW ---
+                    AuthService.logger.info("Loaded states after successful login. ItemVotes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), TagVotes: \(self.votedTagStates.count), Collections: \(self.userCollections.count)")
                 }
 
-                // Modified condition
                 let finalLoginSuccess = profileAndCollectionsLoaded && favoritesLoaded && self.userNonce != nil
                 await MainActor.run { self.isLoggedIn = finalLoginSuccess }
 
@@ -151,16 +160,13 @@ class AuthService: ObservableObject {
                         if cookieSaved && usernameSaved { AuthService.logger.info("Session cookie and username saved to keychain.") }
                         else { AuthService.logger.warning("Failed to save session cookie (\(cookieSaved)) or username (\(usernameSaved)) to keychain.") }
                         self.needsCaptcha = false; self.captchaToken = nil; self.captchaImage = nil
-                        // Log modified
-                        AuthService.logger.info("User \(self.currentUser!.name) is now logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), Collections: \(self.userCollections.count)")
+                        AuthService.logger.info("User \(self.currentUser!.name) is now logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), TagVotes: \(self.votedTagStates.count), Collections: \(self.userCollections.count)")
                     }
                 } else {
                     await MainActor.run {
                         if !profileAndCollectionsLoaded { self.loginError = "Login erfolgreich, aber Profildaten/Sammlungen konnten nicht geladen werden." }
                         else if !favoritesLoaded { self.loginError = "Login erfolgreich, aber Favoriten konnten nicht initial geladen werden." }
-                        // else if !countLoaded { self.loginError = "Login erfolgreich, aber Nachrichtenzähler konnte nicht geladen werden." } // Removed
                         else { self.loginError = "Login erfolgreich, aber Session-Daten (Nonce) konnten nicht gelesen werden." }
-                        // Log modified
                         AuthService.logger.error("Login sequence failed. Profile/Collections: \(profileAndCollectionsLoaded), Favorites: \(favoritesLoaded), Nonce: \(self.userNonce != nil)")
                     }
                     await performLogoutCleanup()
@@ -222,7 +228,6 @@ class AuthService: ObservableObject {
         var profileAndCollectionsLoaded = false
         var nonceAvailable = false
         var favoritesLoaded = false
-        // var countLoaded = false // Removed
         var finalIsLoggedIn = false
 
         AuthService.logger.debug("[SESSION RESTORE START] Cookies BEFORE restoring from Keychain:")
@@ -260,9 +265,7 @@ class AuthService: ObservableObject {
                      favoritesLoaded = true
                      AuthService.logger.info("Skipping initial favorites load as no collection ID is selected during initial check.")
                  }
-                 // countLoaded = await updateUnreadCount() // Removed
                  
-                 // Modified condition
                  finalIsLoggedIn = profileAndCollectionsLoaded && favoritesLoaded && nonceAvailable
              }
         }
@@ -275,8 +278,7 @@ class AuthService: ObservableObject {
          await MainActor.run {
              self.isLoggedIn = finalIsLoggedIn
              if self.isLoggedIn {
-                  // Log modified
-                  AuthService.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), Collections: \(self.userCollections.count)")
+                  AuthService.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), TagVotes: \(self.votedTagStates.count), Collections: \(self.userCollections.count)")
              } else {
                  AuthService.logger.info("Initial check: User is not logged in (final determination).")
              }
@@ -324,6 +326,59 @@ class AuthService: ObservableObject {
             saveVotedStates()
         }
     }
+
+    // --- NEW: performTagVote method ---
+    func performTagVote(tagId: Int, voteType: Int) async {
+        guard isLoggedIn, let nonce = userNonce else {
+            AuthService.logger.warning("Tag voting skipped: User not logged in or nonce missing.")
+            return
+        }
+        guard !(isVotingTag[tagId] ?? false) else {
+            AuthService.logger.debug("Tag voting skipped for tag \(tagId): Already processing a vote.")
+            return
+        }
+
+        let currentVote = votedTagStates[tagId] ?? 0 // 0 = no vote, 1 = up, -1 = down
+        let targetVote: Int
+
+        if voteType == 1 { // Upvote
+            targetVote = (currentVote == 1) ? 0 : 1 // If already upvoted, unvote; otherwise upvote
+        } else if voteType == -1 { // Downvote
+            targetVote = (currentVote == -1) ? 0 : -1 // If already downvoted, unvote; otherwise downvote
+        } else {
+            AuthService.logger.error("Invalid voteType \(voteType) passed to performTagVote.")
+            return
+        }
+
+        let previousVoteState = votedTagStates[tagId] // Capture for potential revert
+        AuthService.logger.debug("Setting isVotingTag=true for tag \(tagId)")
+        isVotingTag[tagId] = true
+        votedTagStates[tagId] = targetVote // Optimistic UI update
+        AuthService.logger.debug("Optimistic UI: Set vote state for tag \(tagId) to \(targetVote).")
+
+        defer {
+            Task { @MainActor in
+                AuthService.logger.debug("Setting isVotingTag=false for tag \(tagId) in defer block")
+                self.isVotingTag[tagId] = false
+            }
+        }
+
+        do {
+            try await apiService.voteTag(tagId: tagId, vote: targetVote, nonce: nonce)
+            AuthService.logger.info("Successfully voted \(targetVote) for tag \(tagId).")
+            saveVotedTagStates() // Persist the successful vote
+        } catch let error as URLError where error.code == .userAuthenticationRequired {
+            AuthService.logger.error("Tag voting failed for tag \(tagId): Authentication required. Session might be invalid.")
+            votedTagStates[tagId] = previousVoteState // Revert optimistic UI
+            saveVotedTagStates()
+            await logout()
+        } catch {
+            AuthService.logger.error("Tag voting failed for tag \(tagId): \(error.localizedDescription)")
+            votedTagStates[tagId] = previousVoteState // Revert optimistic UI
+            saveVotedTagStates()
+        }
+    }
+    // --- END NEW ---
 
     func performCommentFavToggle(commentId: Int) async {
         guard isLoggedIn, let nonce = userNonce else {
@@ -424,16 +479,6 @@ class AuthService: ObservableObject {
         }
     }
 
-    // --- REMOVED: updateUnreadCount method ---
-    /*
-    @discardableResult
-    func updateUnreadCount() async -> Bool {
-        // ... entire method removed ...
-    }
-    */
-    // --- END REMOVAL ---
-
-
     private func loadVotedStates() {
         if let savedVotes = UserDefaults.standard.dictionary(forKey: userVotesKey) as? [String: Int] {
             let loadedStates = Dictionary(uniqueKeysWithValues: savedVotes.compactMap { (key: String, value: Int) -> (Int, Int)? in
@@ -453,6 +498,28 @@ class AuthService: ObservableObject {
         UserDefaults.standard.set(stringKeyedVotes, forKey: userVotesKey)
         AuthService.logger.trace("Saved \(stringKeyedVotes.count) vote states to UserDefaults.")
     }
+
+    // --- NEW: Load/Save for Tag Votes ---
+    private func loadVotedTagStates() {
+        if let savedVotes = UserDefaults.standard.dictionary(forKey: userTagVotesKey) as? [String: Int] {
+            let loadedStates = Dictionary(uniqueKeysWithValues: savedVotes.compactMap { (key: String, value: Int) -> (Int, Int)? in
+                guard let intKey = Int(key) else { return nil }
+                return (intKey, value)
+            })
+            self.votedTagStates = loadedStates
+            AuthService.logger.debug("Loaded \(loadedStates.count) tag vote states from UserDefaults.")
+        } else {
+            AuthService.logger.debug("No tag vote states found in UserDefaults or failed to load.")
+            self.votedTagStates = [:]
+        }
+    }
+
+    private func saveVotedTagStates() {
+        let stringKeyedVotes = Dictionary(uniqueKeysWithValues: votedTagStates.map { (String($0.key), $0.value) })
+        UserDefaults.standard.set(stringKeyedVotes, forKey: userTagVotesKey)
+        AuthService.logger.trace("Saved \(stringKeyedVotes.count) tag vote states to UserDefaults.")
+    }
+    // --- END NEW ---
 
     private func loadVotedCommentStates() {
         if let savedVotes = UserDefaults.standard.dictionary(forKey: userCommentVotesKey) as? [String: Int] {
@@ -638,7 +705,9 @@ class AuthService: ObservableObject {
             self.votedItemStates = [:]; self.isVoting = [:]
             self.favoritedCommentIDs = []; self.isFavoritingComment = [:]
             self.votedCommentStates = [:]; self.isVotingComment = [:]
-            // self.unreadMessageCount = 0; // Removed
+            // --- NEW: Reset Tag Vote States ---
+            self.votedTagStates = [:]; self.isVotingTag = [:]
+            // --- END NEW ---
             self.userCollections = []
             self.appSettings.selectedCollectionIdForFavorites = nil
             self.appSettings.showSFW = true; self.appSettings.showNSFW = false; self.appSettings.showNSFL = false;
@@ -650,9 +719,12 @@ class AuthService: ObservableObject {
         UserDefaults.standard.removeObject(forKey: userVotesKey)
         UserDefaults.standard.removeObject(forKey: favoritedCommentsKey)
         UserDefaults.standard.removeObject(forKey: userCommentVotesKey)
+        // --- NEW: Remove Tag Vote States from UserDefaults ---
+        UserDefaults.standard.removeObject(forKey: userTagVotesKey)
+        // --- END NEW ---
         
         await self.appSettings.clearFavoritesCache(username: usernameToClearCache, collectionId: collectionIdToClearCache)
-        AuthService.logger.info("Reset content filters to SFW-only and cleared persisted item votes, comment favorites, and comment votes. Cleared collections data and favorites cache.")
+        AuthService.logger.info("Reset content filters to SFW-only and cleared persisted item votes, comment favorites, comment votes, and tag votes. Cleared collections data and favorites cache.")
     }
 
     private func clearCookies() async {
