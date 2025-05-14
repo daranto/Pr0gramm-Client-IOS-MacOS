@@ -116,6 +116,13 @@ struct ProfileView: View {
                         .font(UIConstants.bodyFont)
                 }
 
+                // --- NEW: NavigationLink für eigene Kommentare ---
+                NavigationLink(value: ProfileNavigationTarget.allUserComments(username: user.name)) {
+                    Text("Meine Kommentare")
+                        .font(UIConstants.bodyFont)
+                }
+                // --- END NEW ---
+
                 if !authService.userCollections.isEmpty {
                     NavigationLink(value: ProfileNavigationTarget.allCollections(username: user.name)) {
                         Text("Meine Sammlungen (\(authService.userCollections.count))")
