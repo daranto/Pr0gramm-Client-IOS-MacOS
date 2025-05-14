@@ -24,8 +24,10 @@ struct ItemComment: Codable, Identifiable, Hashable {
     let parent: Int?
     let content: String
     let created: Int
-    let up: Int
-    let down: Int
+    // --- MODIFIED: Make up/down mutable ---
+    var up: Int
+    var down: Int
+    // --- END MODIFICATION ---
     let confidence: Double?
     let name: String?
     let mark: Int?
@@ -543,7 +545,6 @@ class APIService {
         }
     }
 
-    // --- NEW: addTags method ---
     func addTags(itemId: Int, tags: String, nonce: String) async throws {
         let endpoint = "/tags/add"
         Self.logger.info("Attempting to add tags '\(tags)' to item \(itemId).")
@@ -553,7 +554,7 @@ class APIService {
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         let parameters = [
             "itemId": String(itemId),
-            "tags": tags, // API erwartet kommaseparierte Tags
+            "tags": tags,
             "_nonce": nonce
         ]
         request.httpBody = formURLEncode(parameters: parameters)
@@ -571,7 +572,7 @@ class APIService {
             } else {
                 let errorBody = String(data: data, encoding: .utf8) ?? "Unbekannter Fehlerbody"
                 Self.logger.error("Failed to add tags. Status: \(httpResponse.statusCode). Body: \(errorBody)")
-                if let errorResponse = try? decoder.decode(CommentsPostErrorResponse.self, from: data) { // Wiederverwendung der Error-Struktur
+                if let errorResponse = try? decoder.decode(CommentsPostErrorResponse.self, from: data) {
                     throw NSError(domain: "APIService.addTags", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.error])
                 }
                 throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Fehler beim Hinzufügen der Tags (Status: \(httpResponse.statusCode)). Body: \(errorBody)"])
@@ -581,7 +582,6 @@ class APIService {
             throw error
         }
     }
-    // --- END NEW ---
 
     func voteComment(commentId: Int, vote: Int, nonce: String) async throws {
         let endpoint = "/comments/vote"

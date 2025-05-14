@@ -74,6 +74,10 @@ struct PagedDetailTabViewItem: View {
     let upvoteTagAction: (Int) -> Void
     let downvoteTagAction: (Int) -> Void
     let addTagsAction: (String) async -> String?
+    // --- NEW: Callbacks für Comment Votes ---
+    let upvoteCommentAction: (Int) -> Void
+    let downvoteCommentAction: (Int) -> Void
+    // --- END NEW ---
 
 
     @Binding var previewLinkTarget: PreviewLinkTarget?
@@ -115,7 +119,11 @@ struct PagedDetailTabViewItem: View {
             onHighlightCompletedForCommentID: onHighlightCompletedForCommentID,
             upvoteTagAction: upvoteTagAction,
             downvoteTagAction: downvoteTagAction,
-            addTagsAction: addTagsAction
+            addTagsAction: addTagsAction,
+            // --- NEW: Pass comment vote actions ---
+            upvoteCommentAction: upvoteCommentAction,
+            downvoteCommentAction: downvoteCommentAction
+            // --- END NEW ---
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -418,6 +426,10 @@ struct PagedDetailView: View {
                  addTagsAction: { tagsToAdd in
                      return await handleAddTags(tags: tagsToAdd)
                  },
+                 // --- NEW: Pass comment vote actions ---
+                 upvoteCommentAction: { commentId in Task { await handleCommentVoteTap(commentId: commentId, voteType: 1) } },
+                 downvoteCommentAction: { commentId in Task { await handleCommentVoteTap(commentId: commentId, voteType: -1) } },
+                 // --- END NEW ---
                  previewLinkTarget: $previewLinkTarget,
                  userProfileSheetTarget: $userProfileSheetTarget,
                  fullscreenImageTarget: $fullscreenImageTarget
@@ -884,6 +896,68 @@ struct PagedDetailView: View {
         await authService.performTagVote(tagId: tagId, voteType: voteType)
     }
 
+    // --- NEW: Method to handle comment votes ---
+    private func handleCommentVoteTap(commentId: Int, voteType: Int) async {
+        guard selectedIndex >= 0 && selectedIndex < items.count else {
+            PagedDetailView.logger.warning("Comment vote skipped: Invalid selectedIndex.")
+            return
+        }
+        let currentItemId = items[selectedIndex].id
+
+        guard authService.isLoggedIn, let _ = authService.userNonce else {
+            PagedDetailView.logger.warning("Comment vote skipped: User not logged in or nonce missing.")
+            return
+        }
+
+        let previousVoteStateForRevert = authService.votedCommentStates[commentId] ?? 0
+        
+        // Perform the vote via AuthService (this updates authService.votedCommentStates)
+        await authService.performCommentVote(commentId: commentId, voteType: voteType)
+
+        // After the API call, get the new confirmed vote state
+        let newVoteState = authService.votedCommentStates[commentId] ?? 0
+
+        // Update the local ItemComment object if the vote state actually changed
+        if previousVoteStateForRevert != newVoteState {
+            if var cachedItemDetail = cachedDetails[currentItemId] { // Make a mutable copy
+                var mutableComments = cachedItemDetail.info.comments // Make a mutable copy of comments
+                if let commentIndex = mutableComments.firstIndex(where: { $0.id == commentId }) {
+                    var mutableComment = mutableComments[commentIndex] // Make a mutable copy of the specific comment
+
+                    var deltaUp = 0
+                    var deltaDown = 0
+
+                    if newVoteState == 1 && previousVoteStateForRevert == 0 { deltaUp = 1 }
+                    else if newVoteState == 1 && previousVoteStateForRevert == -1 { deltaUp = 1; deltaDown = -1 }
+                    else if newVoteState == 0 && previousVoteStateForRevert == 1 { deltaUp = -1 }
+                    else if newVoteState == 0 && previousVoteStateForRevert == -1 { deltaDown = -1 }
+                    else if newVoteState == -1 && previousVoteStateForRevert == 0 { deltaDown = 1 }
+                    else if newVoteState == -1 && previousVoteStateForRevert == 1 { deltaUp = -1; deltaDown = 1 }
+                    
+                    mutableComment.up += deltaUp
+                    mutableComment.down += deltaDown
+                    
+                    mutableComments[commentIndex] = mutableComment // Update the comment in the mutable array
+                    
+                    // Create new ItemsInfoResponse and CachedItemDetails with the updated comments
+                    let updatedInfo = ItemsInfoResponse(tags: cachedItemDetail.info.tags, comments: mutableComments)
+                    let newFlatList = prepareFlatDisplayComments(from: updatedInfo.comments, sortedBy: cachedItemDetail.sortedBy, maxDepth: commentMaxDepth)
+                    
+                    cachedDetails[currentItemId] = CachedItemDetails(info: updatedInfo, sortedBy: cachedItemDetail.sortedBy, flatDisplayComments: newFlatList, totalCommentCount: updatedInfo.comments.count)
+                    
+                    PagedDetailView.logger.info("Updated local comment \(commentId) score for item \(currentItemId). New up: \(mutableComment.up), new down: \(mutableComment.down). Regenerated flat list.")
+                } else {
+                    PagedDetailView.logger.warning("Could not find comment \(commentId) in cached details for item \(currentItemId) to update score.")
+                }
+            } else {
+                PagedDetailView.logger.warning("No cached details found for item \(currentItemId) to update comment score.")
+            }
+        } else {
+            PagedDetailView.logger.info("Comment vote state for \(commentId) did not effectively change. No local score update needed.")
+        }
+    }
+    // --- END NEW ---
+
     private func handleAddTags(tags: String) async -> String? {
         guard selectedIndex >= 0 && selectedIndex < items.count else {
             return "Interner Fehler: Item nicht ausgewählt."
@@ -907,12 +981,10 @@ struct PagedDetailView: View {
             try await apiService.addTags(itemId: itemId, tags: sanitizedTags, nonce: nonce)
             PagedDetailView.logger.info("Tags erfolgreich zu Item \(itemId) hinzugefügt. Lade Item-Infos neu.")
             
-            // Item-Infos neu laden, um die aktualisierten Tags anzuzeigen
             infoLoadingStatus[itemId] = .idle
-            // Entferne gecachte Details, damit sie neu geladen werden
             cachedDetails.removeValue(forKey: itemId)
             await loadInfoIfNeededAndPrepareHierarchy(for: currentItem)
-            return nil // Erfolg
+            return nil
         } catch let error as URLError where error.code == .userAuthenticationRequired {
             PagedDetailView.logger.error("Fehler beim Hinzufügen von Tags zu Item \(itemId): Authentifizierung erforderlich.")
             await authService.logout()

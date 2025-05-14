@@ -15,6 +15,10 @@ struct CommentsSection: View {
     let showCommentInputAction: (Int) -> Void // parentId
     let targetCommentID: Int?
     let onHighlightCompletedForCommentID: (Int) -> Void
+    // --- NEW: Callbacks für Comment Votes ---
+    let onUpvoteComment: (Int) -> Void
+    let onDownvoteComment: (Int) -> Void
+    // --- END NEW ---
 
 
     private var commentsToDisplay: [FlatCommentDisplayItem] {
@@ -63,7 +67,11 @@ struct CommentsSection: View {
                                  onToggleCollapse: { toggleCollapseAction(flatItem.id) },
                                  onReply: { showCommentInputAction(flatItem.id) },
                                  targetCommentID: targetCommentID,
-                                 onHighlightCompleted: onHighlightCompletedForCommentID
+                                 onHighlightCompleted: onHighlightCompletedForCommentID,
+                                 // --- NEW: Pass new callbacks ---
+                                 onUpvoteComment: { onUpvoteComment(flatItem.id) },
+                                 onDownvoteComment: { onDownvoteComment(flatItem.id) }
+                                 // --- END NEW ---
                              )
                              .padding(.leading, CGFloat(flatItem.level * 15))
                              .padding(.horizontal)
@@ -103,9 +111,9 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
     @State private var collapsedIDs: Set<Int> = []
     let initialTargetCommentIDForPreview: Int?
 
-    let content: (Binding<PreviewLinkTarget?>, Binding<UserProfileSheetTarget?>, @escaping (Int) -> Bool, @escaping (Int) -> Void, @escaping (Int) -> Void, Int?, @escaping (Int) -> Void) -> Content
+    let content: (Binding<PreviewLinkTarget?>, Binding<UserProfileSheetTarget?>, @escaping (Int) -> Bool, @escaping (Int) -> Void, @escaping (Int) -> Void, Int?, @escaping (Int) -> Void, @escaping (Int) -> Void, @escaping (Int) -> Void) -> Content
 
-    init(previewTargetCommentID: Int? = nil, @ViewBuilder content: @escaping (Binding<PreviewLinkTarget?>, Binding<UserProfileSheetTarget?>, @escaping (Int) -> Bool, @escaping (Int) -> Void, @escaping (Int) -> Void, Int?, @escaping (Int) -> Void) -> Content) {
+    init(previewTargetCommentID: Int? = nil, @ViewBuilder content: @escaping (Binding<PreviewLinkTarget?>, Binding<UserProfileSheetTarget?>, @escaping (Int) -> Bool, @escaping (Int) -> Void, @escaping (Int) -> Void, Int?, @escaping (Int) -> Void, @escaping (Int) -> Void, @escaping (Int) -> Void) -> Content) {
         self.initialTargetCommentIDForPreview = previewTargetCommentID
         self.content = content
     }
@@ -114,9 +122,13 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
     private func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
     private func showCommentInput(_ parentId: Int) { print("Preview: Show Comment Input for parentId: \(parentId)") }
     private func highlightCompletedLog(_ id: Int) { print("Preview: Highlight completed for comment ID \(id)")}
+    // --- NEW: Dummy actions for preview ---
+    private func upvoteCommentLog(_ id: Int) { print("Preview: Upvote comment ID \(id)")}
+    private func downvoteCommentLog(_ id: Int) { print("Preview: Downvote comment ID \(id)")}
+    // --- END NEW ---
 
     var body: some View {
-        content($previewTargetLink, $userProfileTargetLink, isCollapsed, toggleCollapse, showCommentInput, initialTargetCommentIDForPreview, highlightCompletedLog)
+        content($previewTargetLink, $userProfileTargetLink, isCollapsed, toggleCollapse, showCommentInput, initialTargetCommentIDForPreview, highlightCompletedLog, upvoteCommentLog, downvoteCommentLog)
             .environmentObject(AppSettings())
             .environmentObject(AuthService(appSettings: AppSettings()))
     }
@@ -124,7 +136,7 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
 
 
 #Preview("Loaded All Comments") {
-    CommentsSectionPreviewWrapper(previewTargetCommentID: 2) { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb in
+    CommentsSectionPreviewWrapper(previewTargetCommentID: 2) { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb, upvoteCommentCb, downvoteCommentCb in
         ScrollView {
              let comments = createPreviewFlatCommentsHelper()
              let previewUploader = "UserA"
@@ -139,14 +151,18 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
                 toggleCollapseAction: toggleCollapse,
                 showCommentInputAction: showCommentInput,
                 targetCommentID: actualTargetCommentIDInContent,
-                onHighlightCompletedForCommentID: highlightCompletedCb
+                onHighlightCompletedForCommentID: highlightCompletedCb,
+                // --- NEW: Pass dummy actions ---
+                onUpvoteComment: upvoteCommentCb,
+                onDownvoteComment: downvoteCommentCb
+                // --- END NEW ---
             )
         }
     }
 }
 
-#Preview("Loading") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loading, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput, targetCommentID: actualTargetCommentIDInContent, onHighlightCompletedForCommentID: highlightCompletedCb) } }
-#Preview("Error") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb in CommentsSection(flatComments: [], totalCommentCount: 0, status: .error("Netzwerkfehler."), uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput, targetCommentID: actualTargetCommentIDInContent, onHighlightCompletedForCommentID: highlightCompletedCb) } }
-#Preview("Empty") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loaded, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput, targetCommentID: actualTargetCommentIDInContent, onHighlightCompletedForCommentID: highlightCompletedCb) } }
+#Preview("Loading") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb, upvoteCommentCb, downvoteCommentCb in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loading, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput, targetCommentID: actualTargetCommentIDInContent, onHighlightCompletedForCommentID: highlightCompletedCb, onUpvoteComment: upvoteCommentCb, onDownvoteComment: downvoteCommentCb) } }
+#Preview("Error") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb, upvoteCommentCb, downvoteCommentCb in CommentsSection(flatComments: [], totalCommentCount: 0, status: .error("Netzwerkfehler."), uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput, targetCommentID: actualTargetCommentIDInContent, onHighlightCompletedForCommentID: highlightCompletedCb, onUpvoteComment: upvoteCommentCb, onDownvoteComment: downvoteCommentCb) } }
+#Preview("Empty") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb, upvoteCommentCb, downvoteCommentCb in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loaded, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput, targetCommentID: actualTargetCommentIDInContent, onHighlightCompletedForCommentID: highlightCompletedCb, onUpvoteComment: upvoteCommentCb, onDownvoteComment: downvoteCommentCb) } }
 
 // --- END OF COMPLETE FILE ---

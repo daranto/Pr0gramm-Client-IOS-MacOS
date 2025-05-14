@@ -17,6 +17,10 @@ struct CommentView: View {
     let onReply: () -> Void
     let targetCommentID: Int?
     let onHighlightCompleted: (Int) -> Void
+    // --- NEW: Callbacks für Up/Downvote ---
+    let onUpvoteComment: () -> Void
+    let onDownvoteComment: () -> Void
+    // --- END NEW ---
 
     @EnvironmentObject var authService: AuthService
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CommentView")
@@ -116,9 +120,7 @@ struct CommentView: View {
         }
         .padding(.vertical, 6)
         .background(isHighlighted ? Color.accentColor.opacity(0.3) : Color.clear)
-        // --- MODIFIED: Animationsdauer für den Hintergrund ---
-        .animation(.easeInOut(duration: 0.35), value: isHighlighted) // Dauer leicht erhöht
-        // --- END MODIFICATION ---
+        .animation(.easeInOut(duration: 0.35), value: isHighlighted)
         .opacity(isCollapsed ? 0.7 : 1.0)
         .environment(\.openURL, OpenURLAction { url in
             if let itemID = parsePr0grammLink(url: url) {
@@ -149,23 +151,17 @@ struct CommentView: View {
                 return
             }
             
-            // --- MODIFIED: Explizite Animation für das Setzen von isHighlighted ---
-            withAnimation(.easeInOut(duration: 0.35)) { // Dauer passend zur .animation oben
+            withAnimation(.easeInOut(duration: 0.35)) {
                 isHighlighted = true
             }
-            // --- END MODIFICATION ---
             CommentView.logger.info("Highlight triggered for comment ID: \(comment.id)")
             
             Task {
-                // --- MODIFIED: Dauer der Hervorhebung ---
-                try? await Task.sleep(for: .milliseconds(700)) // z.B. 0.7 Sekunden sichtbar
-                // --- END MODIFICATION ---
+                try? await Task.sleep(for: .milliseconds(700))
                 await MainActor.run {
-                    // --- MODIFIED: Explizite Animation für das Zurücksetzen ---
-                    withAnimation(.easeInOut(duration: 0.4)) { // Dauer leicht erhöht für sanfteres Ausblenden
+                    withAnimation(.easeInOut(duration: 0.4)) {
                         isHighlighted = false
                     }
-                    // --- END MODIFICATION ---
                     CommentView.logger.info("Highlight removed for comment ID: \(comment.id)")
                     onHighlightCompleted(comment.id)
                 }
@@ -194,25 +190,23 @@ struct CommentView: View {
 
             Divider()
 
+            // --- MODIFIED: Use new callbacks ---
             Button {
-                Task {
-                    CommentView.logger.debug("Context Menu: Upvote button tapped for comment \(comment.id)")
-                    await authService.performCommentVote(commentId: comment.id, voteType: 1)
-                }
+                CommentView.logger.debug("Context Menu: Upvote button tapped for comment \(comment.id)")
+                onUpvoteComment()
             } label: {
                 Label("Upvote", systemImage: currentVote == 1 ? "plus.circle.fill" : "plus.circle")
             }
             .disabled(isVoting)
 
             Button {
-                Task {
-                    CommentView.logger.debug("Context Menu: Downvote button tapped for comment \(comment.id)")
-                    await authService.performCommentVote(commentId: comment.id, voteType: -1)
-                }
+                CommentView.logger.debug("Context Menu: Downvote button tapped for comment \(comment.id)")
+                onDownvoteComment()
             } label: {
                 Label("Downvote", systemImage: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
             }
             .disabled(isVoting)
+            // --- END MODIFICATION ---
 
             Divider()
             if let commenterName = comment.name, !commenterName.isEmpty {
@@ -272,7 +266,11 @@ extension String: Identifiable {
                      onToggleCollapse: { print("Toggle tapped") },
                      onReply: { print("Reply Tapped") },
                      targetCommentID: 1,
-                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
+                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
+                     // --- NEW: Dummy actions for preview ---
+                     onUpvoteComment: { print("Preview: Upvote comment 1") },
+                     onDownvoteComment: { print("Preview: Downvote comment 1") }
+                     // --- END NEW ---
                  )
                  .listRowInsets(EdgeInsets())
 
@@ -286,7 +284,11 @@ extension String: Identifiable {
                      onToggleCollapse: { print("Toggle tapped") },
                      onReply: { print("Reply Tapped") },
                      targetCommentID: nil,
-                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
+                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
+                     // --- NEW: Dummy actions for preview ---
+                     onUpvoteComment: { print("Preview: Upvote comment 4") },
+                     onDownvoteComment: { print("Preview: Downvote comment 4") }
+                     // --- END NEW ---
                  )
                   .listRowInsets(EdgeInsets())
 
@@ -300,7 +302,11 @@ extension String: Identifiable {
                      onToggleCollapse: { print("Toggle tapped") },
                      onReply: { print("Reply Tapped") },
                      targetCommentID: nil,
-                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
+                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
+                     // --- NEW: Dummy actions for preview ---
+                     onUpvoteComment: { print("Preview: Upvote comment 10") },
+                     onDownvoteComment: { print("Preview: Downvote comment 10") }
+                     // --- END NEW ---
                  )
                   .listRowInsets(EdgeInsets())
                  CommentView(
@@ -313,7 +319,11 @@ extension String: Identifiable {
                      onToggleCollapse: { print("Toggle tapped") },
                      onReply: { print("Reply Tapped") },
                      targetCommentID: nil,
-                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
+                     onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
+                     // --- NEW: Dummy actions for preview ---
+                     onUpvoteComment: { print("Preview: Upvote comment 11") },
+                     onDownvoteComment: { print("Preview: Downvote comment 11") }
+                     // --- END NEW ---
                  )
                   .listRowInsets(EdgeInsets())
             }
@@ -342,7 +352,11 @@ extension String: Identifiable {
                 onToggleCollapse: { print("Toggle tapped") },
                 onReply: { print("Reply Tapped") },
                 targetCommentID: nil,
-                onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
+                onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
+                // --- NEW: Dummy actions for preview ---
+                onUpvoteComment: { print("Preview: Upvote comment 2") },
+                onDownvoteComment: { print("Preview: Downvote comment 2") }
+                // --- END NEW ---
             )
             .padding()
             .environmentObject(AuthService(appSettings: AppSettings()))
@@ -369,7 +383,11 @@ extension String: Identifiable {
                 onToggleCollapse: { print("Toggle tapped") },
                 onReply: { print("Reply Tapped") },
                 targetCommentID: nil,
-                onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") }
+                onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
+                // --- NEW: Dummy actions for preview ---
+                onUpvoteComment: { print("Preview: Upvote comment 3") },
+                onDownvoteComment: { print("Preview: Downvote comment 3") }
+                // --- END NEW ---
             )
             .padding()
             .environmentObject(auth)

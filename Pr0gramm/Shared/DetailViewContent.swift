@@ -45,6 +45,26 @@ struct ShareableItemWrapper: Identifiable {
     }
 }
 
+// --- NEW: Moved ShareSheet to top level ---
+struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    let applicationActivities: [UIActivity]? = nil
+    var completionHandler: ((UIActivity.ActivityType?, Bool, [Any]?, Error?) -> Void)? = nil
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: applicationActivities
+        )
+        controller.completionWithItemsHandler = completionHandler
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+    }
+}
+// --- END NEW ---
+
 
 /// The main content area for the item detail view, arranging media, info, tags, and comments.
 @MainActor
@@ -86,6 +106,8 @@ struct DetailViewContent: View {
     let upvoteTagAction: (Int) -> Void
     let downvoteTagAction: (Int) -> Void
     let addTagsAction: (String) async -> String?
+    let upvoteCommentAction: (Int) -> Void
+    let downvoteCommentAction: (Int) -> Void
 
 
     @EnvironmentObject var navigationService: NavigationService
@@ -292,7 +314,6 @@ struct DetailViewContent: View {
                             Button { showAllTagsAction() } label: { Text("+\(remainingCount) mehr").font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.accentColor.opacity(0.15)).foregroundColor(.accentColor).clipShape(Capsule()).contentShape(Capsule()).lineLimit(1) }
                             .buttonStyle(.plain)
                         }
-                        // --- MODIFIED: Add "+" Icon to add tags ---
                         if authService.isLoggedIn && infoLoadingStatus == .loaded {
                             Button {
                                 newTagText = ""
@@ -301,18 +322,16 @@ struct DetailViewContent: View {
                                 showingAddTagSheet = true
                             } label: {
                                 Image(systemName: "plus")
-                                    .font(.caption.weight(.bold)) // Etwas kleiner als die Tags selbst
+                                    .font(.caption.weight(.bold))
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 4)
                                     .background(Color.gray.opacity(0.2))
-                                    .foregroundColor(.secondary) // Weniger dominant
+                                    .foregroundColor(.secondary)
                                     .clipShape(Capsule())
                             }
                             .buttonStyle(.plain)
                         }
-                        // --- END MODIFICATION ---
                     }
-                    // Der explizite "Tags hinzufügen"-Button wurde entfernt
                 case .loading: ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .error: Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
@@ -431,19 +450,23 @@ struct DetailViewContent: View {
 
     @ViewBuilder
     private func commentsContentSection(scrollViewProxy: ScrollViewProxy?) -> some View {
+        // --- MODIFIED: Explicitly name parameters for clarity ---
         CommentsSection(
-            flatComments: flatComments,
-            totalCommentCount: totalCommentCount,
-            status: infoLoadingStatus,
-            uploaderName: item.user,
-            previewLinkTarget: $previewLinkTarget,
-            userProfileSheetTarget: $userProfileSheetTarget,
-            isCommentCollapsed: isCommentCollapsed,
-            toggleCollapseAction: toggleCollapseAction,
-            showCommentInputAction: { parentId in showCommentInputAction(item.id, parentId) },
+            flatComments: self.flatComments,
+            totalCommentCount: self.totalCommentCount,
+            status: self.infoLoadingStatus,
+            uploaderName: self.item.user,
+            previewLinkTarget: self.$previewLinkTarget,
+            userProfileSheetTarget: self.$userProfileSheetTarget,
+            isCommentCollapsed: self.isCommentCollapsed,
+            toggleCollapseAction: self.toggleCollapseAction,
+            showCommentInputAction: { parentId in self.showCommentInputAction(self.item.id, parentId) },
             targetCommentID: self.targetCommentID,
-            onHighlightCompletedForCommentID: self.onHighlightCompletedForCommentID
+            onHighlightCompletedForCommentID: self.onHighlightCompletedForCommentID,
+            onUpvoteComment: { commentId in self.upvoteCommentAction(commentId) },
+            onDownvoteComment: { commentId in self.downvoteCommentAction(commentId) }
         )
+        // --- END MODIFICATION ---
     }
     
     private func attemptScrollToComment(proxy: ScrollViewProxy?, targetID: Int) {
@@ -540,12 +563,10 @@ struct DetailViewContent: View {
                     .textInputAutocapitalization(.never)
                     .accessibilityLabel("Neue Tags")
                 
-                // --- MODIFIED: Hinweistext hinzugefügt ---
                 Text("Es kann etwas dauern, bis die neuen Tags angezeigt werden und von anderen Nutzern bewertet werden können.")
                     .font(UIConstants.captionFont)
                     .foregroundColor(.secondary)
                     .padding(.horizontal)
-                // --- END MODIFICATION ---
                 
                 if let error = addTagError {
                     Text("Fehler: \(error)")
@@ -681,24 +702,6 @@ struct DetailViewContent: View {
     }
 }
 
-struct ShareSheet: UIViewControllerRepresentable {
-    let activityItems: [Any]
-    let applicationActivities: [UIActivity]? = nil
-    var completionHandler: ((UIActivity.ActivityType?, Bool, [Any]?, Error?) -> Void)? = nil
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(
-            activityItems: activityItems,
-            applicationActivities: applicationActivities
-        )
-        controller.completionWithItemsHandler = completionHandler
-        return controller
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
-    }
-}
-
 @MainActor
 struct PreviewWrapper: View {
     @State var previewLinkTarget: PreviewLinkTarget? = nil
@@ -794,7 +797,9 @@ struct PreviewWrapper: View {
                     print("Preview: Add tags action called with: \(tagsToAdd)")
                     try? await Task.sleep(for: .seconds(1))
                     return nil
-                }
+                },
+                upvoteCommentAction: { commentId in print("Preview: Upvote comment \(commentId)") },
+                downvoteCommentAction: { commentId in print("Preview: Downvote comment \(commentId)") }
             )
             .sheet(item: $commentReplyTarget) { target in CommentInputView(itemId: target.itemId, parentId: target.parentId, onSubmit: { _ in }) }
             .sheet(item: $userProfileSheetTarget) { target in Text("Preview: User Profile Sheet for \(target.username)") }
