@@ -523,7 +523,6 @@ class APIService {
         }
     }
 
-    // --- NEW: voteTag method ---
     func voteTag(tagId: Int, vote: Int, nonce: String) async throws {
         let endpoint = "/tags/vote"
         Self.logger.info("Attempting to vote \(vote) on tag \(tagId).")
@@ -540,6 +539,45 @@ class APIService {
             Self.logger.info("Successfully sent vote (\(vote)) for tag \(tagId).")
         } catch {
             Self.logger.error("Failed to vote (\(vote)) for tag \(tagId): \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    // --- NEW: addTags method ---
+    func addTags(itemId: Int, tags: String, nonce: String) async throws {
+        let endpoint = "/tags/add"
+        Self.logger.info("Attempting to add tags '\(tags)' to item \(itemId).")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let parameters = [
+            "itemId": String(itemId),
+            "tags": tags, // API erwartet kommaseparierte Tags
+            "_nonce": nonce
+        ]
+        request.httpBody = formURLEncode(parameters: parameters)
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Keine gültige HTTP-Antwort vom Server."])
+            }
+
+            if (200..<300).contains(httpResponse.statusCode) {
+                Self.logger.info("Successfully added tags '\(tags)' to item \(itemId).")
+                return
+            } else {
+                let errorBody = String(data: data, encoding: .utf8) ?? "Unbekannter Fehlerbody"
+                Self.logger.error("Failed to add tags. Status: \(httpResponse.statusCode). Body: \(errorBody)")
+                if let errorResponse = try? decoder.decode(CommentsPostErrorResponse.self, from: data) { // Wiederverwendung der Error-Struktur
+                    throw NSError(domain: "APIService.addTags", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse.error])
+                }
+                throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Fehler beim Hinzufügen der Tags (Status: \(httpResponse.statusCode)). Body: \(errorBody)"])
+            }
+        } catch {
+            Self.logger.error("Failed to add tags '\(tags)' to item \(itemId): \(error.localizedDescription)")
             throw error
         }
     }

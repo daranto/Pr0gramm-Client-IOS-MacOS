@@ -83,10 +83,9 @@ struct DetailViewContent: View {
     let targetCommentID: Int?
     let onHighlightCompletedForCommentID: (Int) -> Void
     
-    // --- NEW: Callbacks für Tag-Voting ---
-    let upvoteTagAction: (Int) -> Void // tagId
-    let downvoteTagAction: (Int) -> Void // tagId
-    // --- END NEW ---
+    let upvoteTagAction: (Int) -> Void
+    let downvoteTagAction: (Int) -> Void
+    let addTagsAction: (String) async -> String?
 
 
     @EnvironmentObject var navigationService: NavigationService
@@ -100,6 +99,12 @@ struct DetailViewContent: View {
     @State private var isPreparingShare = false
     @State private var sharePreparationError: String? = nil
     @State private var didAttemptScrollToTarget = false
+    
+    @State private var showingAddTagSheet = false
+    @State private var newTagText = ""
+    @State private var addTagError: String? = nil
+    @State private var isAddingTags: Bool = false
+
 
     @ViewBuilder private var mediaContentInternal: some View {
         ZStack(alignment: .bottom) {
@@ -271,29 +276,43 @@ struct DetailViewContent: View {
             Group {
                 switch infoLoadingStatus {
                 case .loaded:
-                    if !displayedTags.isEmpty {
-                        FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
-                            // --- MODIFIED: Pass vote actions and state to VotableTagView ---
-                            ForEach(displayedTags) { tag in
-                                VotableTagView(
-                                    tag: tag,
-                                    currentVote: authService.votedTagStates[tag.id] ?? 0,
-                                    isVoting: authService.isVotingTag[tag.id] ?? false,
-                                    onUpvote: { upvoteTagAction(tag.id) },
-                                    onDownvote: { downvoteTagAction(tag.id) },
-                                    onTapTag: { navigationService.requestSearch(tag: tag.tag) }
-                                )
-                            }
-                            // --- END MODIFICATION ---
-                            if !showingAllTags && totalTagCount > displayedTags.count {
-                                let remainingCount = totalTagCount - displayedTags.count
-                                Button { showAllTagsAction() } label: { Text("+\(remainingCount) mehr").font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.accentColor.opacity(0.15)).foregroundColor(.accentColor).clipShape(Capsule()).contentShape(Capsule()).lineLimit(1) }
-                                .buttonStyle(.plain)
-                            }
+                    FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+                        ForEach(displayedTags) { tag in
+                            VotableTagView(
+                                tag: tag,
+                                currentVote: authService.votedTagStates[tag.id] ?? 0,
+                                isVoting: authService.isVotingTag[tag.id] ?? false,
+                                onUpvote: { upvoteTagAction(tag.id) },
+                                onDownvote: { downvoteTagAction(tag.id) },
+                                onTapTag: { navigationService.requestSearch(tag: tag.tag) }
+                            )
                         }
-                    } else {
-                        Text("Keine Tags vorhanden").font(.caption).foregroundColor(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                        if !showingAllTags && totalTagCount > displayedTags.count {
+                            let remainingCount = totalTagCount - displayedTags.count
+                            Button { showAllTagsAction() } label: { Text("+\(remainingCount) mehr").font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.accentColor.opacity(0.15)).foregroundColor(.accentColor).clipShape(Capsule()).contentShape(Capsule()).lineLimit(1) }
+                            .buttonStyle(.plain)
+                        }
+                        // --- MODIFIED: Add "+" Icon to add tags ---
+                        if authService.isLoggedIn && infoLoadingStatus == .loaded {
+                            Button {
+                                newTagText = ""
+                                addTagError = nil
+                                isAddingTags = false
+                                showingAddTagSheet = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.caption.weight(.bold)) // Etwas kleiner als die Tags selbst
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.gray.opacity(0.2))
+                                    .foregroundColor(.secondary) // Weniger dominant
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        // --- END MODIFICATION ---
                     }
+                    // Der explizite "Tags hinzufügen"-Button wurde entfernt
                 case .loading: ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .error: Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
@@ -303,20 +322,19 @@ struct DetailViewContent: View {
         }
     }
 
-    // --- MODIFIED: Renamed TagView to VotableTagView and added voting ---
     struct VotableTagView: View {
         let tag: ItemTag
-        let currentVote: Int // 0, 1 (up), -1 (down)
+        let currentVote: Int
         let isVoting: Bool
         let onUpvote: () -> Void
         let onDownvote: () -> Void
         let onTapTag: () -> Void
 
-        @EnvironmentObject var authService: AuthService // To check if logged in
+        @EnvironmentObject var authService: AuthService
 
         private let characterLimit = 25
         private var displayText: String { tag.tag.count > characterLimit ? String(tag.tag.prefix(characterLimit - 1)) + "…" : tag.tag }
-        private let tagVoteButtonFont: Font = .caption // Smaller font for vote buttons
+        private let tagVoteButtonFont: Font = .caption
 
         var body: some View {
             HStack(spacing: 4) {
@@ -332,7 +350,7 @@ struct DetailViewContent: View {
 
                 Text(displayText)
                     .font(.caption)
-                    .padding(.horizontal, authService.isLoggedIn ? 2 : 8) // Adjust padding based on login state
+                    .padding(.horizontal, authService.isLoggedIn ? 2 : 8)
                     .padding(.vertical, 4)
                     .contentShape(Capsule())
                     .onTapGesture(perform: onTapTag)
@@ -348,13 +366,12 @@ struct DetailViewContent: View {
                     .disabled(isVoting)
                 }
             }
-            .padding(.horizontal, authService.isLoggedIn ? 6 : 0) // Outer padding if logged in
+            .padding(.horizontal, authService.isLoggedIn ? 6 : 0)
             .background(Color.gray.opacity(0.2))
             .foregroundColor(.primary)
             .clipShape(Capsule())
         }
     }
-    // --- END MODIFICATION ---
 
 
     @ViewBuilder
@@ -367,20 +384,20 @@ struct DetailViewContent: View {
                              attemptScrollToComment(proxy: proxy, targetID: tid)
                         }
                     }
-                    .onChange(of: flatComments.count) { _, _ in // Re-check if comments list changes
+                    .onChange(of: flatComments.count) { _, _ in
                         if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
                             attemptScrollToComment(proxy: proxy, targetID: tid)
                         }
                     }
-                    .onAppear { // Also attempt on appear if data is already loaded
+                    .onAppear {
                         if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
                             attemptScrollToComment(proxy: proxy, targetID: tid)
                         }
                     }
             }
-        } else { // Compact
+        } else {
             ScrollViewReader { proxy in
-                ScrollView { // This is the main ScrollView for compact layout
+                ScrollView {
                     VStack(spacing: 0) {
                         GeometryReader { geo in
                             let aspect = guessAspectRatio() ?? 1.0
@@ -389,7 +406,7 @@ struct DetailViewContent: View {
                         }
                         .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
                         infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
-                        commentsContentSection(scrollViewProxy: proxy) // Pass proxy
+                        commentsContentSection(scrollViewProxy: proxy)
                             .padding(.horizontal).padding(.bottom, 10)
                     }
                 }
@@ -398,12 +415,12 @@ struct DetailViewContent: View {
                          attemptScrollToComment(proxy: proxy, targetID: tid)
                     }
                 }
-                .onChange(of: flatComments.count) { _, _ in // Re-check if comments list changes
+                .onChange(of: flatComments.count) { _, _ in
                     if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
                         attemptScrollToComment(proxy: proxy, targetID: tid)
                     }
                 }
-                .onAppear { // Also attempt on appear
+                .onAppear {
                     if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
                         attemptScrollToComment(proxy: proxy, targetID: tid)
                     }
@@ -500,12 +517,79 @@ struct DetailViewContent: View {
             DetailViewContent.logger.debug("targetCommentID in DetailViewContent changed to: \(newTargetID ?? -1). Resetting didAttemptScrollToTarget.")
             didAttemptScrollToTarget = false
         }
-        // --- NEW: Observe votedTagStates for UI updates ---
         .onChange(of: authService.votedTagStates) { _, _ in
             DetailViewContent.logger.trace("Detected change in authService.votedTagStates")
         }
-        // --- END NEW ---
+        .sheet(isPresented: $showingAddTagSheet) {
+            addTagSheetContent()
+        }
     }
+
+    @ViewBuilder
+    private func addTagSheetContent() -> some View {
+        NavigationStack {
+            VStack(spacing: 15) {
+                Text("Neue Tags eingeben (kommasepariert):")
+                    .font(UIConstants.headlineFont)
+                    .padding(.top)
+
+                TextEditor(text: $newTagText)
+                    .frame(minHeight: 80, maxHeight: 150)
+                    .border(Color.gray.opacity(0.3))
+                    .autocorrectionDisabled(true)
+                    .textInputAutocapitalization(.never)
+                    .accessibilityLabel("Neue Tags")
+                
+                // --- MODIFIED: Hinweistext hinzugefügt ---
+                Text("Es kann etwas dauern, bis die neuen Tags angezeigt werden und von anderen Nutzern bewertet werden können.")
+                    .font(UIConstants.captionFont)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+                // --- END MODIFICATION ---
+                
+                if let error = addTagError {
+                    Text("Fehler: \(error)")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .padding(.horizontal)
+                }
+
+                Spacer()
+                
+                if isAddingTags {
+                    ProgressView("Speichere Tags...")
+                        .padding(.bottom)
+                }
+            }
+            .padding()
+            .navigationTitle("Tags hinzufügen")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Abbrechen") { showingAddTagSheet = false }
+                        .disabled(isAddingTags)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Speichern") {
+                        Task {
+                            isAddingTags = true
+                            addTagError = nil
+                            if let errorMsg = await addTagsAction(newTagText) {
+                                addTagError = errorMsg
+                                DetailViewContent.logger.error("Fehler beim Hinzufügen von Tags: \(errorMsg)")
+                            } else {
+                                showingAddTagSheet = false
+                            }
+                            isAddingTags = false
+                        }
+                    }
+                    .disabled(newTagText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isAddingTags)
+                }
+            }
+        }
+        .interactiveDismissDisabled(isAddingTags)
+    }
+
 
     private func guessAspectRatio() -> CGFloat? {
         guard item.width > 0, item.height > 0 else { return 1.0 }
@@ -649,7 +733,7 @@ struct PreviewWrapper: View {
             tempAuthService.userNonce = "preview_nonce"
             tempAuthService.favoritedItemIDs = [2]
             tempAuthService.votedItemStates = [1: 1]
-            tempAuthService.votedTagStates = [1:1, 3:-1] // Preview tag votes
+            tempAuthService.votedTagStates = [1:1, 3:-1]
             tempSettings.selectedCollectionIdForFavorites = 1
         }
          _authService = StateObject(wrappedValue: tempAuthService)
@@ -704,10 +788,13 @@ struct PreviewWrapper: View {
                         previewTargetCommentID = nil
                     }
                 },
-                // --- NEW: Pass tag vote actions ---
                 upvoteTagAction: { tagId in print("Preview: Upvote Tag \(tagId)") },
-                downvoteTagAction: { tagId in print("Preview: Downvote Tag \(tagId)") }
-                // --- END NEW ---
+                downvoteTagAction: { tagId in print("Preview: Downvote Tag \(tagId)") },
+                addTagsAction: { tagsToAdd in
+                    print("Preview: Add tags action called with: \(tagsToAdd)")
+                    try? await Task.sleep(for: .seconds(1))
+                    return nil
+                }
             )
             .sheet(item: $commentReplyTarget) { target in CommentInputView(itemId: target.itemId, parentId: target.parentId, onSubmit: { _ in }) }
             .sheet(item: $userProfileSheetTarget) { target in Text("Preview: User Profile Sheet for \(target.username)") }

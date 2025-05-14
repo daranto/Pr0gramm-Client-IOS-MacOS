@@ -71,10 +71,9 @@ struct PagedDetailTabViewItem: View {
     let downvoteAction: () -> Void
     let showCommentInputAction: (Int, Int) -> Void
     let onHighlightCompletedForCommentID: (Int) -> Void
-    // --- NEW: Callbacks für Tag-Voting ---
-    let upvoteTagAction: (Int) -> Void // tagId
-    let downvoteTagAction: (Int) -> Void // tagId
-    // --- END NEW ---
+    let upvoteTagAction: (Int) -> Void
+    let downvoteTagAction: (Int) -> Void
+    let addTagsAction: (String) async -> String?
 
 
     @Binding var previewLinkTarget: PreviewLinkTarget?
@@ -114,10 +113,9 @@ struct PagedDetailTabViewItem: View {
             showCommentInputAction: showCommentInputAction,
             targetCommentID: dataModel.targetCommentID,
             onHighlightCompletedForCommentID: onHighlightCompletedForCommentID,
-            // --- NEW: Pass tag vote actions ---
             upvoteTagAction: upvoteTagAction,
-            downvoteTagAction: downvoteTagAction
-            // --- END NEW ---
+            downvoteTagAction: downvoteTagAction,
+            addTagsAction: addTagsAction
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -336,11 +334,9 @@ struct PagedDetailView: View {
         .onChange(of: authService.votedItemStates) { _, _ in
             PagedDetailView.logger.trace("Detected change in authService.votedItemStates")
         }
-        // --- NEW: Observe votedTagStates for UI updates ---
         .onChange(of: authService.votedTagStates) { _, _ in
             PagedDetailView.logger.trace("Detected change in authService.votedTagStates (PagedDetailView)")
         }
-        // --- END NEW ---
     }
 
     private func preparePageData(for index: Int) -> PagedDetailTabViewItem.DataModel? {
@@ -417,10 +413,11 @@ struct PagedDetailView: View {
                          PagedDetailView.logger.info("Highlight completed for comment \(completedCommentID), resetting currentItemTargetCommentID in PagedDetailView.")
                      }
                  },
-                 // --- NEW: Pass tag vote actions ---
                  upvoteTagAction: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: 1) } },
                  downvoteTagAction: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: -1) } },
-                 // --- END NEW ---
+                 addTagsAction: { tagsToAdd in
+                     return await handleAddTags(tags: tagsToAdd)
+                 },
                  previewLinkTarget: $previewLinkTarget,
                  userProfileSheetTarget: $userProfileSheetTarget,
                  fullscreenImageTarget: $fullscreenImageTarget
@@ -878,7 +875,6 @@ struct PagedDetailView: View {
         }
     }
     
-    // --- NEW: handleTagVoteTap method ---
     private func handleTagVoteTap(tagId: Int, voteType: Int) async {
         guard authService.isLoggedIn else {
             PagedDetailView.logger.warning("Tag vote skipped: User not logged in.")
@@ -886,9 +882,49 @@ struct PagedDetailView: View {
         }
         PagedDetailView.logger.debug("Tag vote tapped: tagId=\(tagId), voteType=\(voteType)")
         await authService.performTagVote(tagId: tagId, voteType: voteType)
-        // Die UI aktualisiert sich automatisch durch @Published votedTagStates in AuthService
     }
-    // --- END NEW ---
+
+    private func handleAddTags(tags: String) async -> String? {
+        guard selectedIndex >= 0 && selectedIndex < items.count else {
+            return "Interner Fehler: Item nicht ausgewählt."
+        }
+        let currentItem = items[selectedIndex]
+        let itemId = currentItem.id
+
+        guard authService.isLoggedIn, let nonce = authService.userNonce else {
+            PagedDetailView.logger.warning("Tags hinzufügen übersprungen: Benutzer nicht eingeloggt oder Nonce fehlt.")
+            return "Nicht eingeloggt."
+        }
+
+        let sanitizedTags = tags.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sanitizedTags.isEmpty else {
+            return "Bitte Tags eingeben."
+        }
+
+        PagedDetailView.logger.info("Versuche, Tags '\(sanitizedTags)' zu Item \(itemId) hinzuzufügen.")
+
+        do {
+            try await apiService.addTags(itemId: itemId, tags: sanitizedTags, nonce: nonce)
+            PagedDetailView.logger.info("Tags erfolgreich zu Item \(itemId) hinzugefügt. Lade Item-Infos neu.")
+            
+            // Item-Infos neu laden, um die aktualisierten Tags anzuzeigen
+            infoLoadingStatus[itemId] = .idle
+            // Entferne gecachte Details, damit sie neu geladen werden
+            cachedDetails.removeValue(forKey: itemId)
+            await loadInfoIfNeededAndPrepareHierarchy(for: currentItem)
+            return nil // Erfolg
+        } catch let error as URLError where error.code == .userAuthenticationRequired {
+            PagedDetailView.logger.error("Fehler beim Hinzufügen von Tags zu Item \(itemId): Authentifizierung erforderlich.")
+            await authService.logout()
+            return "Sitzung abgelaufen. Bitte erneut anmelden."
+        } catch {
+            PagedDetailView.logger.error("Fehler beim Hinzufügen von Tags zu Item \(itemId): \(error.localizedDescription)")
+            if let nsError = error as NSError?, nsError.domain == "APIService.addTags" {
+                return nsError.localizedDescription
+            }
+            return "Ein unbekannter Fehler ist aufgetreten."
+        }
+    }
 
     private func submitComment(text: String, itemId: Int, parentId: Int) async throws {
         guard authService.isLoggedIn, let nonce = authService.userNonce else {
