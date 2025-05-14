@@ -5,6 +5,34 @@ import SwiftUI
 import os
 import Kingfisher
 
+enum InboxViewMessageType: Int, CaseIterable, Identifiable {
+    case all = 0
+    case comments = 1
+    case notifications = 2
+    case privateMessages = 3
+
+    var id: Int { self.rawValue }
+
+    var displayName: String {
+        switch self {
+        case .all: return "Alle"
+        case .comments: return "Kommentare"
+        case .notifications: return "System"
+        case .privateMessages: return "Privat"
+        }
+    }
+
+    var apiTypeString: String? {
+        switch self {
+        case .all: return nil
+        case .comments: return "comment"
+        case .notifications: return "notification"
+        case .privateMessages: return nil
+        }
+    }
+}
+
+
 struct InboxView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
@@ -14,48 +42,116 @@ struct InboxView: View {
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
-    // --- MODIFIED: Separate state for item and target comment ID ---
-    @State private var itemForNavigation: Item? = nil // Renamed from itemToNavigate
     @State private var targetCommentIDForNavigation: Int? = nil
+    // --- MODIFIED: profileToNavigate wird zu profileNavigationValue ---
+    // @State private var profileToNavigate: String? = nil
     // --- END MODIFICATION ---
-
-    @State private var profileToNavigate: String? = nil
     @State private var isLoadingNavigationTarget: Bool = false
-    @State private var navigationTargetId: Int? = nil // This is the itemID being loaded
+    @State private var navigationTargetId: Int? = nil
 
     @State private var previewLinkTargetFromMessage: PreviewLinkTarget? = nil
 
     @StateObject private var playerManager = VideoPlayerManager()
 
+    @State private var selectedMessageType: InboxViewMessageType = .all
+    
+    @State private var conversations: [InboxConversation] = []
+    @State private var isLoadingConversations = false
+    @State private var conversationsError: String? = nil
+
+
     private let apiService = APIService()
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "InboxView")
 
-    // --- NEW: NavigationLinkValue struct ---
     struct ItemNavigationValue: Hashable, Identifiable {
         let item: Item
         let targetCommentID: Int?
-        var id: Int { item.id } // Main identifier for navigation is the item itself
+        var id: Int { item.id }
     }
     @State private var itemNavigationValue: ItemNavigationValue? = nil
+    
+    struct ConversationNavigationValue: Hashable, Identifiable {
+        let conversationPartnerName: String
+        var id: String { conversationPartnerName }
+    }
+    @State private var conversationNavigationValue: ConversationNavigationValue? = nil
+
+    // --- NEW: Wrapper struct for Profile Navigation ---
+    struct ProfileNavigationValue: Hashable, Identifiable {
+        let username: String
+        var id: String { username }
+    }
+    @State private var profileNavigationValue: ProfileNavigationValue? = nil
     // --- END NEW ---
+
+
+    init(
+        initialMessagesForPreview: [InboxMessage]? = nil,
+        initialConversationsForPreview: [InboxConversation]? = nil
+    ) {
+        if let messages = initialMessagesForPreview {
+            _messages = State(initialValue: messages)
+        }
+        if let conversations = initialConversationsForPreview {
+            _conversations = State(initialValue: conversations)
+        }
+    }
+
 
     var body: some View {
         NavigationStack {
-            Group {
+            VStack(spacing: 0) {
+                Picker("Nachrichten Typ", selection: $selectedMessageType) {
+                    ForEach(InboxViewMessageType.allCases) { type in
+                        Text(type.displayName).tag(type)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
                 contentView
             }
             .navigationTitle("Nachrichten")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
-                Button("OK") { errorMessage = nil; isLoadingNavigationTarget = false; navigationTargetId = nil }
-            } message: { Text(errorMessage ?? "Unbekannter Fehler") }
+            .alert("Fehler", isPresented: .constant(alertErrorMessage != nil && !isLoading && !isLoadingConversations)) {
+                Button("OK") { clearErrors() }
+            } message: { Text(alertErrorMessage ?? "Unbekannter Fehler") }
             .task {
                 playerManager.configure(settings: settings)
-                await refreshMessages()
             }
-            // --- MODIFIED: Use ItemNavigationValue for navigation ---
+            .onChange(of: selectedMessageType) { _, newType in
+                Task {
+                    // Reset navigation states when changing tabs to avoid accidental navigation
+                    itemNavigationValue = nil
+                    conversationNavigationValue = nil
+                    profileNavigationValue = nil
+                    
+                    if newType == .privateMessages {
+                        if conversations.isEmpty || messages.isEmpty { // Load if either is empty for safety
+                            await refreshConversations()
+                        }
+                    } else {
+                        if messages.isEmpty { await refreshMessages() }
+                    }
+                }
+            }
+            .task(id: authService.isLoggedIn) {
+                 if authService.isLoggedIn {
+                     if selectedMessageType == .privateMessages {
+                         await refreshConversations()
+                     } else {
+                         await refreshMessages()
+                     }
+                 } else {
+                     messages = []
+                     conversations = []
+                     errorMessage = "Bitte anmelden."
+                     conversationsError = nil
+                 }
+            }
             .navigationDestination(item: $itemNavigationValue) { navValue in
                  PagedDetailViewWrapperForItem(
                      item: navValue.item,
@@ -65,11 +161,18 @@ struct InboxView: View {
                  .environmentObject(settings)
                  .environmentObject(authService)
             }
-            // --- END MODIFICATION ---
-            .navigationDestination(for: String.self) { username in
-                 UserProfileSheetView(username: username)
+            // --- MODIFIED: Use ProfileNavigationValue for profile destination ---
+            .navigationDestination(item: $profileNavigationValue) { navValue in
+                 UserProfileSheetView(username: navValue.username)
                       .environmentObject(settings)
                       .environmentObject(authService)
+            }
+            // --- END MODIFICATION ---
+            .navigationDestination(item: $conversationNavigationValue) { navValue in
+                ConversationDetailView(partnerUsername: navValue.conversationPartnerName)
+                    .environmentObject(settings)
+                    .environmentObject(authService)
+                    .environmentObject(playerManager)
             }
             .sheet(item: $previewLinkTargetFromMessage) { target in
                 LinkedItemPreviewView(itemID: target.id)
@@ -84,56 +187,106 @@ struct InboxView: View {
             }
         }
     }
+    
+    private var alertErrorMessage: String? {
+        if selectedMessageType == .privateMessages {
+            return conversationsError
+        }
+        return errorMessage
+    }
+
+    private func clearErrors() {
+        errorMessage = nil
+        conversationsError = nil
+        isLoadingNavigationTarget = false
+        navigationTargetId = nil
+    }
+
 
     @ViewBuilder private var contentView: some View {
-        Group {
-            if isLoading && messages.isEmpty {
-                ProgressView("Lade Nachrichten...").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = errorMessage, messages.isEmpty {
-                 ContentUnavailableView { Label("Fehler", systemImage: "exclamationmark.triangle") }
-                 description: { Text(error) } actions: { Button("Erneut versuchen") { Task { await refreshMessages() } } }
-                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if messages.isEmpty && !isLoading && errorMessage == nil {
-                Text("Keine Nachrichten vorhanden.")
-                    .foregroundColor(.secondary).padding().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                listContent
-            }
+        switch selectedMessageType {
+        case .privateMessages:
+            ConversationsListView(
+                conversations: $conversations,
+                isLoading: $isLoadingConversations,
+                errorMessage: $conversationsError,
+                onRefresh: refreshConversations,
+                onSelectConversation: { username in
+                    self.conversationNavigationValue = ConversationNavigationValue(conversationPartnerName: username)
+                }
+            )
+        default:
+            generalMessagesListView
         }
     }
 
-    private var listContent: some View {
-        List {
-            ForEach(messages) { message in
-                InboxMessageRow(message: message)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        guard !isLoadingNavigationTarget, message.type != "notification" else {
-                            InboxView.logger.debug("Tap ignored for message \(message.id): isLoadingNavigationTarget=\(isLoadingNavigationTarget) or type=\(message.type)")
-                            return
-                        }
-                        Task { await handleMessageTap(message) }
-                    }
-                .listRowInsets(EdgeInsets(top: 10, leading: 15, bottom: 10, trailing: 15))
-                .id(message.id)
-                .onAppear {
-                     if messages.count >= 2 && message.id == messages[messages.count - 2].id && canLoadMore && !isLoadingMore {
-                         InboxView.logger.info("End trigger appeared for message \(message.id).")
-                         Task { await loadMoreMessages() }
-                     } else if messages.count == 1 && message.id == messages.first?.id && canLoadMore && !isLoadingMore {
-                         InboxView.logger.info("End trigger appeared for the only message \(message.id).")
-                         Task { await loadMoreMessages() }
-                     }
-                }
+    private var filteredMessages: [InboxMessage] {
+        if selectedMessageType == .all {
+            return messages.filter { msg in
+                let type = msg.type
+                return type == "comment" || type == "notification" || type == "follow"
             }
+        } else if let apiType = selectedMessageType.apiTypeString {
+            return messages.filter { $0.type == apiType }
+        }
+        return []
+    }
 
-            if isLoadingMore {
-                HStack { Spacer(); ProgressView("Lade mehr..."); Spacer() }
-                    .listRowSeparator(.hidden).listRowInsets(EdgeInsets())
+    private var generalMessagesListView: some View {
+        Group {
+            if isLoading && messages.isEmpty {
+                ProgressView("Lade Nachrichten...").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = errorMessage, filteredMessages.isEmpty {
+                 ContentUnavailableView {
+                     Label("Fehler", systemImage: "exclamationmark.triangle")
+                 } description: {
+                     Text(error)
+                 } actions: {
+                     Button("Erneut versuchen") { Task { await refreshMessages() } }
+                 }
+                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if filteredMessages.isEmpty && !isLoading && errorMessage == nil {
+                Text("Keine Nachrichten für Filter '\(selectedMessageType.displayName)' vorhanden.")
+                    .foregroundColor(.secondary).padding().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(filteredMessages) { message in
+                        InboxMessageRow(message: message)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                guard !isLoadingNavigationTarget else {
+                                    InboxView.logger.debug("Tap ignored for message \(message.id): isLoadingNavigationTarget=\(isLoadingNavigationTarget)")
+                                    return
+                                }
+                                if message.type == "notification" {
+                                    InboxView.logger.debug("Notification message tapped, no navigation action.")
+                                    return
+                                }
+                                Task { await handleMessageTap(message) }
+                            }
+                        .listRowInsets(EdgeInsets(top: 10, leading: 15, bottom: 10, trailing: 15))
+                        .id(message.id)
+                        .onAppear {
+                            let currentList = filteredMessages
+                            if currentList.count >= 2 && message.id == currentList[currentList.count - 2].id && canLoadMore && !isLoadingMore {
+                                InboxView.logger.info("End trigger appeared for message ID: \(message.id).")
+                                Task { await loadMoreMessages() }
+                            } else if currentList.count == 1 && message.id == currentList.first?.id && canLoadMore && !isLoadingMore {
+                                InboxView.logger.info("End trigger appeared for the only message ID: \(message.id).")
+                                Task { await loadMoreMessages() }
+                            }
+                        }
+                    }
+
+                    if isLoadingMore {
+                        HStack { Spacer(); ProgressView("Lade mehr..."); Spacer() }
+                            .listRowSeparator(.hidden).listRowInsets(EdgeInsets())
+                    }
+                }
+                .listStyle(.plain)
+                .refreshable { await refreshMessages() }
             }
         }
-        .listStyle(.plain)
-        .refreshable { await refreshMessages() }
         .environment(\.openURL, OpenURLAction { url in
             if let itemID = parsePr0grammLink(url: url) {
                 InboxView.logger.info("Pr0gramm link tapped in inbox message, attempting to preview item ID: \(itemID)")
@@ -145,6 +298,7 @@ struct InboxView: View {
             }
         })
     }
+    
 
     private func parsePr0grammLink(url: URL) -> Int? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
@@ -169,37 +323,29 @@ struct InboxView: View {
             InboxView.logger.debug("handleMessageTap skipped for \(message.id): Already loading target.")
             return
         }
-        errorMessage = nil
-        InboxView.logger.info("Handling tap for message ID: \(message.id), Type: \(message.type)")
+        clearErrors()
+        InboxView.logger.info("Handling tap for message ID: \(message.id), Type: \(message.type ?? "nil")")
 
         switch message.type {
         case "comment":
             if let itemId = message.itemId {
                 InboxView.logger.info("Message type is 'comment', preparing navigation for item \(itemId), target comment ID: \(message.id)")
-                // --- MODIFIED: Set targetCommentIDForNavigation ---
                 await prepareAndNavigateToItem(itemId, targetCommentID: message.id)
-                // --- END MODIFICATION ---
             } else { InboxView.logger.warning("Comment message type tapped, but itemId is nil.") }
-
-        case "message", "follow":
+        case "follow":
              if let senderName = message.name, !senderName.isEmpty {
-                 InboxView.logger.info("Message type is '\(message.type)', navigating to profile: \(senderName)")
-                 self.profileToNavigate = senderName
-             } else { InboxView.logger.warning("\(message.type) message type tapped, but sender name is nil or empty.") }
-
-        case "notification":
-             InboxView.logger.debug("Notification message tapped - no navigation action defined.")
-             break
-
+                 InboxView.logger.info("Message type is 'follow', setting profileNavigationValue: \(senderName)")
+                 // --- MODIFIED: Use ProfileNavigationValue ---
+                 self.profileNavigationValue = ProfileNavigationValue(username: senderName)
+                 // --- END MODIFICATION ---
+             } else { InboxView.logger.warning("Follow message type tapped, but sender name is nil or empty.") }
         default:
-            InboxView.logger.warning("Unhandled message type tapped: \(message.type)")
+            InboxView.logger.warning("Unhandled message type tapped in handleMessageTap: \(message.type ?? "nil")")
         }
     }
 
     @MainActor
-    // --- MODIFIED: Add targetCommentID parameter ---
     private func prepareAndNavigateToItem(_ itemId: Int?, targetCommentID: Int? = nil) async {
-    // --- END MODIFICATION ---
         guard let id = itemId else {
             InboxView.logger.warning("Attempted to navigate, but itemId was nil.")
             return
@@ -211,68 +357,55 @@ struct InboxView: View {
 
         InboxView.logger.info("Preparing navigation for item ID: \(id), targetCommentID: \(targetCommentID ?? -1)")
         self.isLoadingNavigationTarget = true
-        self.navigationTargetId = id // This is the itemID being loaded
+        self.navigationTargetId = id
         self.errorMessage = nil
-        // --- NEW: Reset targetCommentIDForNavigation before setting itemNavigationValue ---
         self.targetCommentIDForNavigation = targetCommentID
-        // --- END NEW ---
 
         do {
-            // For direct navigation to a post (e.g., from a comment notification),
-            // we should try to load it with broad flags, as the user's current global filters
-            // might hide it. flags=31 usually means SFW+NSFW+NSFL+NSFP+POL.
             let flagsToFetchWith = 31
             InboxView.logger.debug("Fetching item \(id) for navigation using flags: \(flagsToFetchWith)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
 
             guard self.navigationTargetId == id else {
-                 InboxView.logger.info("Navigation target changed while item \(id) was loading. Discarding result.")
+                 InboxView.logger.info("Navigation target changed while item \(id) was loading (current target: \(String(describing: self.navigationTargetId))). Discarding result.")
                  self.isLoadingNavigationTarget = false; self.navigationTargetId = nil; self.targetCommentIDForNavigation = nil; return
             }
             if let item = fetchedItem {
                  InboxView.logger.info("Successfully fetched item \(id) for navigation.")
-                 // --- MODIFIED: Set itemNavigationValue ---
                  self.itemNavigationValue = ItemNavigationValue(item: item, targetCommentID: self.targetCommentIDForNavigation)
-                 // --- END MODIFICATION ---
             } else {
                  InboxView.logger.warning("Could not fetch item \(id) for navigation (API returned nil or filter mismatch).")
                  self.errorMessage = "Post \(id) konnte nicht geladen werden oder entspricht nicht den Filtern."
-                 self.targetCommentIDForNavigation = nil // Reset if fetch fails
+                 self.targetCommentIDForNavigation = nil
             }
         } catch is CancellationError {
              InboxView.logger.info("Item fetch for navigation cancelled (ID: \(id)).")
-             self.targetCommentIDForNavigation = nil // Reset on cancellation
+             self.targetCommentIDForNavigation = nil
         } catch {
             InboxView.logger.error("Failed to fetch item \(id) for navigation: \(error.localizedDescription)")
-            if self.navigationTargetId == id { // Check if this error is still relevant
+            if self.navigationTargetId == id {
                 self.errorMessage = "Post \(id) konnte nicht geladen werden: \(error.localizedDescription)"
             }
-            self.targetCommentIDForNavigation = nil // Reset on error
+            self.targetCommentIDForNavigation = nil
         }
-        // Reset loading state only if this was the active target
         if self.navigationTargetId == id {
              self.isLoadingNavigationTarget = false
              self.navigationTargetId = nil
-             // Do NOT reset self.targetCommentIDForNavigation here, it's used by itemNavigationValue
         }
     }
 
       @MainActor
       func refreshMessages() async {
-          InboxView.logger.info("Refreshing inbox messages...")
+          InboxView.logger.info("Refreshing general inbox messages (/inbox/all)...")
           guard authService.isLoggedIn else {
-              InboxView.logger.warning("Cannot refresh inbox: User not logged in.")
-              self.messages = []; self.errorMessage = "Bitte anmelden."
+              InboxView.logger.warning("Cannot refresh general inbox: User not logged in.")
+              self.messages = []; self.errorMessage = "Bitte anmelden."; self.canLoadMore = true
               return
           }
 
           self.isLoadingNavigationTarget = false; self.navigationTargetId = nil
+          self.itemNavigationValue = nil; self.targetCommentIDForNavigation = nil
           self.isLoading = true; self.errorMessage = nil
-          // --- NEW: Reset navigation values on refresh ---
-          self.itemNavigationValue = nil
-          self.targetCommentIDForNavigation = nil
-          // --- END NEW ---
-
 
           defer { Task { @MainActor in self.isLoading = false } }
 
@@ -282,14 +415,14 @@ struct InboxView: View {
 
               self.messages = response.messages.sorted { $0.created > $1.created }
               self.canLoadMore = !response.atEnd
-              InboxView.logger.info("Fetched \(response.messages.count) initial inbox messages. AtEnd: \(response.atEnd)")
+              InboxView.logger.info("Fetched \(response.messages.count) initial general inbox messages. AtEnd: \(response.atEnd)")
 
           } catch let error as URLError where error.code == .userAuthenticationRequired {
-              InboxView.logger.error("Inbox API fetch failed: Authentication required.")
+              InboxView.logger.error("General inbox API fetch failed: Authentication required.")
               self.errorMessage = "Sitzung abgelaufen."; self.messages = []; self.canLoadMore = false
               await authService.logout()
           } catch {
-              InboxView.logger.error("Inbox API fetch failed: \(error.localizedDescription)")
+              InboxView.logger.error("General inbox API fetch failed: \(error.localizedDescription)")
               self.errorMessage = "Fehler: \(error.localizedDescription)"; self.messages = []; self.canLoadMore = false
           }
       }
@@ -299,14 +432,14 @@ struct InboxView: View {
         guard authService.isLoggedIn else { return }
         guard !isLoadingMore && canLoadMore && !isLoading else { return }
         guard let oldestMessageTimestamp = messages.last?.created else {
-             InboxView.logger.warning("Cannot load more inbox messages: No last message found.")
+             InboxView.logger.warning("Cannot load more general messages: No last message found.")
              self.canLoadMore = false; return
         }
 
-        InboxView.logger.info("--- Starting loadMoreMessages older than timestamp \(oldestMessageTimestamp) ---")
+        InboxView.logger.info("--- Starting loadMoreMessages (general) older than timestamp \(oldestMessageTimestamp) ---")
         self.isLoadingMore = true
 
-        defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; InboxView.logger.info("--- Finished loadMoreMessages ---") } } }
+        defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; InboxView.logger.info("--- Finished loadMoreMessages (general) ---") } } }
 
         do {
             let response = try await apiService.fetchInboxMessages(older: oldestMessageTimestamp)
@@ -314,34 +447,111 @@ struct InboxView: View {
             guard self.isLoadingMore else { return }
 
             if response.messages.isEmpty {
-                InboxView.logger.info("Reached end of inbox feed.")
+                InboxView.logger.info("Reached end of general inbox feed.")
                 self.canLoadMore = false
             } else {
                 let currentIDs = Set(self.messages.map { $0.id })
                 let uniqueNewMessages = response.messages.filter { !currentIDs.contains($0.id) }
 
                 if uniqueNewMessages.isEmpty {
-                    InboxView.logger.warning("All loaded inbox messages were duplicates.")
+                    InboxView.logger.warning("All loaded general inbox messages were duplicates.")
                     self.canLoadMore = !response.atEnd
                 } else {
                     self.messages.append(contentsOf: uniqueNewMessages)
                     self.messages.sort { $0.created > $1.created }
-                    InboxView.logger.info("Appended \(uniqueNewMessages.count) unique inbox messages. Total: \(self.messages.count)")
+                    InboxView.logger.info("Appended \(uniqueNewMessages.count) unique general inbox messages. Total: \(self.messages.count)")
                     self.canLoadMore = !response.atEnd
                 }
             }
         } catch let error as URLError where error.code == .userAuthenticationRequired {
-            InboxView.logger.error("Inbox API fetch failed during loadMore: Authentication required.")
+            InboxView.logger.error("General inbox API fetch failed during loadMore: Authentication required.")
             self.errorMessage = "Sitzung abgelaufen."; self.canLoadMore = false
             await authService.logout()
         } catch {
-            InboxView.logger.error("Inbox API fetch failed during loadMore: \(error.localizedDescription)")
+            InboxView.logger.error("General inbox API fetch failed during loadMore: \(error.localizedDescription)")
             guard self.isLoadingMore else { return }
             if self.messages.isEmpty { self.errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" }
             self.canLoadMore = false
         }
     }
+    
+    @MainActor
+    func refreshConversations() async {
+        InboxView.logger.info("Refreshing inbox conversations...")
+        guard authService.isLoggedIn else {
+            InboxView.logger.warning("Cannot refresh conversations: User not logged in.")
+            self.conversations = []; self.conversationsError = "Bitte anmelden."
+            return
+        }
+        self.isLoadingConversations = true
+        self.conversationsError = nil
+        defer { Task { @MainActor in self.isLoadingConversations = false } }
+
+        do {
+            let response = try await apiService.fetchInboxConversations()
+            guard !Task.isCancelled else { return }
+            self.conversations = response.conversations.sorted { $0.lastMessage > $1.lastMessage }
+            InboxView.logger.info("Fetched \(response.conversations.count) conversations.")
+        } catch let error as URLError where error.code == .userAuthenticationRequired {
+            InboxView.logger.error("Conversations API fetch failed: Authentication required.")
+            self.conversationsError = "Sitzung abgelaufen."
+            self.conversations = []
+            await authService.logout()
+        } catch {
+            InboxView.logger.error("Conversations API fetch failed: \(error.localizedDescription)")
+            self.conversationsError = "Fehler: \(error.localizedDescription)"
+            self.conversations = []
+        }
+    }
 }
+
+
+struct InboxConversationRow: View {
+    let conversation: InboxConversation
+
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    private var relativeTime: String {
+        let date = Date(timeIntervalSince1970: TimeInterval(conversation.lastMessage))
+        return Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date())
+    }
+    
+    private var userMarkColor: Color { Mark(rawValue: conversation.mark).displayColor }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Circle().fill(userMarkColor)
+                .frame(width: 10, height: 10)
+                .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
+
+            Text(conversation.name)
+                .font(.headline)
+                .lineLimit(1)
+
+            Spacer()
+
+            if conversation.unreadCount > 0 {
+                Text("\(conversation.unreadCount)")
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.red)
+                    .clipShape(Capsule())
+            }
+            
+            Text(relativeTime)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
 
 struct InboxMessageRow: View {
     let message: InboxMessage
@@ -363,7 +573,7 @@ struct InboxMessageRow: View {
         case "notification": return "Systemnachricht"
         case "message": return message.name ?? "Nachricht"
         case "follow": return "\(message.name ?? "Jemand") folgt dir"
-        default: return "Unbekannt"
+        default: return "Unbekannt (\(message.type ?? "N/A"))"
         }
     }
 
@@ -425,11 +635,13 @@ struct InboxMessageRow: View {
                          Circle().fill(Color.accentColor).frame(width: 8, height: 8).padding(.leading, 4)
                      }
                 }
-                Text(attributedMessageContent)
-                    .font(.subheadline)
-                    .foregroundColor(.primary)
-                    .lineLimit(nil)
-                    .fixedSize(horizontal: false, vertical: true)
+                if message.type != "follow" || !(message.message?.isEmpty ?? true) {
+                    Text(attributedMessageContent)
+                        .font(.subheadline)
+                        .foregroundColor(.primary)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(.vertical, 5)
@@ -450,23 +662,25 @@ private struct InboxPreviewWrapper: View {
         authService.isLoggedIn = true
         authService.currentUser = UserInfo(id: 1, name: "PreviewUser", registered: 1, score: 1, mark: 1, badges: [])
         _authService = StateObject(wrappedValue: authService)
+        _settings = StateObject(wrappedValue: settings)
     }
 
     var body: some View {
-        let msg1 = InboxMessage(id: 1, type: "comment", itemId: 123, thumb: "thumb1.jpg", flags: 1, name: "UserA", mark: 2, senderId: 101, score: 5, created: Int(Date().timeIntervalSince1970 - 600), message: "Das ist ein Kommentar http://pr0gramm.com/new/543210 zur Benachrichtigung. Und noch ein Link https://example.com", read: 0, blocked: 0)
-        let msg2 = InboxMessage(id: 2, type: "notification", itemId: nil, thumb: nil, flags: nil, name: nil, mark: nil, senderId: 0, score: 0, created: Int(Date().timeIntervalSince1970 - 3600), message: "Systemnachricht: Dein pr0mium läuft bald ab!", read: 1, blocked: 0)
-        let msg3 = InboxMessage(id: 3, type: "follow", itemId: nil, thumb: nil, flags: nil, name: "FollowerDude", mark: 1, senderId: 102, score: 0, created: Int(Date().timeIntervalSince1970 - 7200), message: nil, read: 0, blocked: 0)
-        let msg4 = InboxMessage(id: 4, type: "message", itemId: nil, thumb: nil, flags: nil, name: "ChattyCathy", mark: 7, senderId: 103, score: 0, created: Int(Date().timeIntervalSince1970 - 86400), message: "Hallo! Wie geht es dir? Schau mal hier: www.pr0gramm.com/new/112233 .", read: 0, blocked: 0)
+        let sampleConversations = [
+            InboxConversation(name: "UserAlpha", mark: 2, lastMessage: Int(Date().timeIntervalSince1970 - 300), unreadCount: 2, blocked: 0, canReceiveMessages: 1),
+            InboxConversation(name: "UserBeta", mark: 10, lastMessage: Int(Date().timeIntervalSince1970 - 36000), unreadCount: 0, blocked: 0, canReceiveMessages: 1)
+        ]
+        
+        let msg1 = InboxMessage(id: 1, type: "comment", itemId: 123, thumb: "thumb1.jpg", flags: 1, name: "UserA", mark: 2, senderId: 101, score: 5, created: Int(Date().timeIntervalSince1970 - 600), message: "Das ist ein Kommentar http://pr0gramm.com/new/543210 zur Benachrichtigung.", read: 0, blocked: 0, sent: 0)
+        let msg2 = InboxMessage(id: 2, type: "notification", itemId: nil, thumb: nil, flags: nil, name: nil, mark: nil, senderId: 0, score: 0, created: Int(Date().timeIntervalSince1970 - 3600), message: "Systemnachricht: Dein pr0mium läuft bald ab!", read: 1, blocked: 0, sent: nil)
 
 
-        let view = InboxView()
-        view.messages = [msg1, msg2, msg3, msg4].sorted { $0.created > $1.created }
-
-        return NavigationStack {
-            view
-                .environmentObject(settings)
-                .environmentObject(authService)
-        }
+        return InboxView(
+            initialMessagesForPreview: [msg1, msg2],
+            initialConversationsForPreview: sampleConversations
+        )
+            .environmentObject(settings)
+            .environmentObject(authService)
     }
 }
 // --- END OF COMPLETE FILE ---

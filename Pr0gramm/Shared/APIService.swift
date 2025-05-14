@@ -24,10 +24,8 @@ struct ItemComment: Codable, Identifiable, Hashable {
     let parent: Int?
     let content: String
     let created: Int
-    // --- MODIFIED: Make up/down mutable ---
     var up: Int
     var down: Int
-    // --- END MODIFICATION ---
     let confidence: Double?
     let name: String?
     let mark: Int?
@@ -197,26 +195,106 @@ struct InboxQueueInfo: Codable {
     let total: Int?
 }
 
-struct InboxMessage: Codable, Identifiable {
+struct InboxMessage: Codable, Identifiable, Equatable {
     let id: Int
-    let type: String
+    let type: String?
     let itemId: Int?
     let thumb: String?
     let flags: Int?
     let name: String?
     let mark: Int?
-    let senderId: Int
-    let score: Int
+    let senderId: Int?
+    let score: Int?
     let created: Int
     let message: String?
     let read: Int
-    let blocked: Int
+    let blocked: Int?
+    let sent: Int?
 
     var itemThumbnailUrl: URL? {
         guard let thumb = thumb, !thumb.isEmpty else { return nil }
         return URL(string: "https://thumb.pr0gramm.com/")?.appendingPathComponent(thumb)
     }
+    
+    static func == (lhs: InboxMessage, rhs: InboxMessage) -> Bool {
+        return lhs.id == rhs.id &&
+               lhs.type == rhs.type &&
+               lhs.itemId == rhs.itemId &&
+               lhs.thumb == rhs.thumb &&
+               lhs.flags == rhs.flags &&
+               lhs.name == rhs.name &&
+               lhs.mark == rhs.mark &&
+               lhs.senderId == rhs.senderId &&
+               lhs.score == rhs.score &&
+               lhs.created == rhs.created &&
+               lhs.message == rhs.message &&
+               lhs.read == rhs.read &&
+               lhs.blocked == rhs.blocked &&
+               lhs.sent == rhs.sent
+    }
 }
+
+struct PrivateMessage: Codable, Identifiable, Equatable {
+    let id: Int
+    let created: Int
+    let mark: Int
+    let message: String?
+    let name: String
+    let read: Int
+    let sent: Int
+
+    static func == (lhs: PrivateMessage, rhs: PrivateMessage) -> Bool {
+        return lhs.id == rhs.id &&
+               lhs.created == rhs.created &&
+               lhs.mark == rhs.mark &&
+               lhs.message == rhs.message &&
+               lhs.name == rhs.name &&
+               lhs.read == rhs.read &&
+               lhs.sent == rhs.sent
+    }
+}
+
+struct InboxConversationsResponse: Codable {
+    let conversations: [InboxConversation]
+    let atEnd: Bool
+    let ts: Int?
+}
+
+struct InboxConversation: Codable, Identifiable {
+    var id: String { name }
+    let name: String
+    let mark: Int
+    let lastMessage: Int
+    let unreadCount: Int
+    let blocked: Int
+    let canReceiveMessages: Int
+}
+
+struct InboxMessagesWithUserResponse: Codable {
+    let with: InboxConversationUser
+    let messages: [PrivateMessage]
+    let atEnd: Bool
+    let ts: Int?
+}
+
+struct InboxConversationUser: Codable {
+    let name: String
+    let mark: Int
+    let blocked: Bool
+    let canReceiveMessages: Bool
+}
+
+// --- MODIFIED: Renamed PostPrivateMessageResponse to PostPrivateMessageAPIResponse ---
+// and adjusted its structure to match the actual API JSON
+struct PostPrivateMessageAPIResponse: Codable {
+    let messages: [PrivateMessage] // The API returns the updated list of messages
+    let atEnd: Bool? // Usually true after posting, as it returns the whole conversation
+    let success: Bool
+    let ts: Int?
+    // 'error' and 'messageId' (for the single sent message) are not top-level here
+}
+// --- END MODIFICATION ---
+
 
 extension Array where Element == URLQueryItem {
     func removingDuplicatesByName() -> [URLQueryItem] {
@@ -783,9 +861,9 @@ class APIService {
 
         if let olderTimestamp = older {
             urlComponents.queryItems = [URLQueryItem(name: "older", value: String(olderTimestamp))]
-            Self.logger.info("Fetching inbox messages older than timestamp: \(olderTimestamp)")
+            Self.logger.info("Fetching general inbox messages ('/inbox/all') older than timestamp: \(olderTimestamp)")
         } else {
-            Self.logger.info("Fetching initial inbox messages.")
+            Self.logger.info("Fetching initial general inbox messages ('/inbox/all').")
         }
 
         guard let url = urlComponents.url else { throw URLError(.badURL) }
@@ -795,16 +873,114 @@ class APIService {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: InboxResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint + (older == nil ? " (initial)" : " (older: \(older!))"))
-            Self.logger.info("Successfully fetched \(apiResponse.messages.count) inbox messages. AtEnd: \(apiResponse.atEnd)")
+            Self.logger.info("Successfully fetched \(apiResponse.messages.count) general inbox messages. AtEnd: \(apiResponse.atEnd)")
             return apiResponse
         } catch {
-            Self.logger.error("Error fetching inbox messages: \(error.localizedDescription)")
+            Self.logger.error("Error fetching general inbox messages: \(error.localizedDescription)")
             if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
-                 Self.logger.warning("Fetching inbox messages failed: User authentication required.")
+                 Self.logger.warning("Fetching general inbox messages failed: User authentication required.")
             }
             throw error
         }
     }
+
+    func fetchInboxConversations() async throws -> InboxConversationsResponse {
+        let endpoint = "/inbox/conversations"
+        Self.logger.info("Fetching inbox conversations from \(endpoint)...")
+        let url = baseURL.appendingPathComponent(endpoint)
+        let request = URLRequest(url: url)
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: InboxConversationsResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint)
+            Self.logger.info("Successfully fetched \(apiResponse.conversations.count) inbox conversations.")
+            return apiResponse
+        } catch {
+            Self.logger.error("Error fetching inbox conversations: \(error.localizedDescription)")
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                Self.logger.warning("Fetching inbox conversations failed: User authentication required.")
+            }
+            throw error
+        }
+    }
+
+    func fetchInboxMessagesWithUser(username: String, older: Int? = nil) async throws -> InboxMessagesWithUserResponse {
+        let endpoint = "/inbox/messages"
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        var queryItems = [URLQueryItem(name: "with", value: username)]
+        if let olderTimestamp = older {
+            queryItems.append(URLQueryItem(name: "older", value: String(olderTimestamp)))
+            Self.logger.info("Fetching messages with user '\(username)' older than timestamp: \(olderTimestamp)")
+        } else {
+            Self.logger.info("Fetching initial messages with user '\(username)'.")
+        }
+        urlComponents.queryItems = queryItems
+
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        let request = URLRequest(url: url)
+        logRequestDetails(request, for: endpoint + "?with=\(username)")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: InboxMessagesWithUserResponse = try handleApiResponse(data: data, response: response, endpoint: "\(endpoint)?with=\(username)")
+            Self.logger.info("Successfully fetched \(apiResponse.messages.count) messages with user '\(username)'. AtEnd: \(apiResponse.atEnd)")
+            return apiResponse
+        } catch {
+            Self.logger.error("Error fetching messages with user '\(username)': \(error.localizedDescription)")
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                Self.logger.warning("Fetching messages with user '\(username)' failed: User authentication required.")
+            }
+            throw error
+        }
+    }
+    
+    // --- MODIFIED: postPrivateMessage now expects PostPrivateMessageAPIResponse ---
+    func postPrivateMessage(to recipientName: String, messageText: String, nonce: String) async throws -> PostPrivateMessageAPIResponse {
+        let endpoint = "/inbox/post"
+        Self.logger.info("Attempting to post private message to '\(recipientName)'.")
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        let parameters: [String: String] = [
+            "recipientName": recipientName,
+            "comment": messageText,
+            "_nonce": nonce
+        ]
+        request.httpBody = formURLEncode(parameters: parameters)
+        logRequestDetails(request, for: endpoint)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            // --- NEW LOGGING FOR RAW JSON ---
+            if let jsonString = String(data: data, encoding: .utf8) {
+                Self.logger.info("Raw JSON response from /inbox/post: \(jsonString)")
+            }
+            // --- END NEW LOGGING ---
+            let apiResponse: PostPrivateMessageAPIResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint)
+            
+            // The success check is now based on the 'success' field in PostPrivateMessageAPIResponse
+            if apiResponse.success {
+                Self.logger.info("Successfully posted private message to '\(recipientName)'. API returned \(apiResponse.messages.count) messages.")
+            } else {
+                // If there's a success:false, we might not have an error message from the API in this structure.
+                // This part of the API might be inconsistent.
+                Self.logger.warning("Failed to post private message to '\(recipientName)': API success was false.")
+                throw NSError(domain: "APIService.postPrivateMessage", code: 1, userInfo: [NSLocalizedDescriptionKey: "Fehler beim Senden (API success:false)."])
+            }
+            return apiResponse
+        } catch {
+            Self.logger.error("Error posting private message to '\(recipientName)': \(error.localizedDescription)")
+            // Re-throw to be caught by the calling view
+            throw error
+        }
+    }
+    // --- END MODIFICATION ---
+
 
     private func handleApiResponse<T: Decodable>(data: Data, response: URLResponse, endpoint: String) throws -> T {
         guard let httpResponse = response as? HTTPURLResponse else { Self.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }
