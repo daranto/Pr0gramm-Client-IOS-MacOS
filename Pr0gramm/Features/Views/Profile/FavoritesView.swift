@@ -26,13 +26,8 @@ struct FavoritesView: View {
     @State private var isReturningFromFullscreen = false
 
     @StateObject private var playerManager = VideoPlayerManager()
-
-    @State private var needsRefreshForTabChange = false
-    @State private var needsRefreshForLoginChange = false
-    @State private var needsRefreshForCollectionChange = false
-    @State private var needsRefreshForFilterChange = false
     
-    @State private var didPerformInitialLoadForCurrentContext = false
+    @State private var needsDataRefresh = true
 
 
     private let apiService = APIService()
@@ -59,6 +54,18 @@ struct FavoritesView: View {
         return "favorites_\(username)_collection_\(keyword.replacingOccurrences(of: " ", with: "_"))"
     }
 
+    // Helper to get a display name for logging
+    private func tabDisplayName(for tab: Tab) -> String {
+        switch tab {
+        case .feed: return "Feed"
+        case .favorites: return "Favorites"
+        case .search: return "Search"
+        case .inbox: return "Inbox"
+        case .profile: return "Profile"
+        case .settings: return "Settings"
+        }
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             favoritesContentView
@@ -70,18 +77,6 @@ struct FavoritesView: View {
                             playerManager: playerManager,
                             loadMoreAction: { Task { await loadMoreFavorites() } }
                         )
-                        .onDisappear {
-                            if isReturningFromFullscreen {
-                                isReturningFromFullscreen = false
-                            }
-                        }
-                        .onAppear {
-                            isReturningFromFullscreen = false
-                        }
-                        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                            isReturningFromFullscreen = true
-                            FavoritesView.logger.info("Detected return from fullscreen, preventing navigation reset")
-                        }
                     } else {
                         Text("Fehler: Item nicht in Favoriten gefunden.")
                              .onAppear { FavoritesView.logger.warning("Navigation destination item \(destinationItem.id) not found.") }
@@ -109,68 +104,76 @@ struct FavoritesView: View {
         }
         .onAppear {
             playerManager.configure(settings: settings)
-        }
-        .task(id: triggerKey) {
-            FavoritesView.logger.info("Main task running. Trigger Key: \(triggerKey). didPerformInitialLoad: \(didPerformInitialLoadForCurrentContext)")
-            await loadDataIfNeeded()
-        }
-        .onChange(of: navigationService.selectedTab) { oldValue, newTab in
-            if newTab == .favorites && oldValue != .favorites {
-                FavoritesView.logger.info("FavoritesView: Tab switched to favorites.")
-                needsRefreshForTabChange = true
-                didPerformInitialLoadForCurrentContext = false
-            } else if newTab != .favorites && oldValue == .favorites {
-                FavoritesView.logger.info("FavoritesView: Tab changed away from favorites.")
-                didPerformInitialLoadForCurrentContext = false
+            // --- MODIFIED: Logging mit helper ---
+            FavoritesView.logger.info("FavoritesView onAppear. Current tab: \(tabDisplayName(for: navigationService.selectedTab)). needsDataRefresh: \(needsDataRefresh)")
+            // --- END MODIFICATION ---
+            if navigationService.selectedTab == .favorites && needsDataRefresh {
+                Task {
+                    FavoritesView.logger.info("FavoritesView onAppear: Triggering initial data load because tab is active and needs refresh.")
+                    await performActualDataRefresh()
+                    needsDataRefresh = false
+                }
             }
         }
-        .onChange(of: authService.isLoggedIn) { _, _ in
-            FavoritesView.logger.info("FavoritesView: Login status changed.")
-            needsRefreshForLoginChange = true
-            didPerformInitialLoadForCurrentContext = false
+        .task(id: navigationService.selectedTab) {
+            await handleTabChange(newTab: navigationService.selectedTab)
         }
-        .onChange(of: settings.selectedCollectionIdForFavorites) { _, _ in
-            FavoritesView.logger.info("FavoritesView: Selected collection ID changed.")
-            needsRefreshForCollectionChange = true
-            didPerformInitialLoadForCurrentContext = false
+        .task(id: authService.isLoggedIn) {
+             await handleLoginStatusChange()
         }
-        .onChange(of: settings.apiFlags) { _, _ in
-            FavoritesView.logger.info("FavoritesView: API flags changed.")
-            needsRefreshForFilterChange = true
-            didPerformInitialLoadForCurrentContext = false
+        .task(id: settings.selectedCollectionIdForFavorites) {
+            await handleCollectionChange()
         }
-    }
-
-    private var triggerKey: String {
-        let tabActive = navigationService.selectedTab == .favorites
-        let loginStatus = authService.isLoggedIn
-        let collectionId = settings.selectedCollectionIdForFavorites ?? -1
-        let flags = settings.apiFlags
-        
-        return "\(tabActive)-\(loginStatus)-\(collectionId)-\(flags)-\(needsRefreshForTabChange)-\(needsRefreshForLoginChange)-\(needsRefreshForCollectionChange)-\(needsRefreshForFilterChange)"
+        .task(id: settings.apiFlags) {
+            await handleApiFlagsChange()
+        }
     }
     
-    private func loadDataIfNeeded() async {
-        guard navigationService.selectedTab == .favorites else {
-            FavoritesView.logger.info("loadDataIfNeeded: Skipped, Favorites tab not active.")
-            if didPerformInitialLoadForCurrentContext {
-                didPerformInitialLoadForCurrentContext = false
+    private func handleTabChange(newTab: Tab) async {
+        // --- MODIFIED: Logging mit helper ---
+        FavoritesView.logger.info("FavoritesView: selectedTab changed to \(tabDisplayName(for: newTab)).")
+        // --- END MODIFICATION ---
+        if newTab == .favorites {
+            if needsDataRefresh {
+                FavoritesView.logger.info("Tab changed to Favorites and refresh needed. Calling performActualDataRefresh.")
+                await performActualDataRefresh()
+                needsDataRefresh = false
+            } else {
+                FavoritesView.logger.info("Tab changed to Favorites, but no refresh needed currently.")
             }
-            return
-        }
-
-        if !didPerformInitialLoadForCurrentContext || needsRefreshForTabChange || needsRefreshForLoginChange || needsRefreshForCollectionChange || needsRefreshForFilterChange {
-            FavoritesView.logger.info("loadDataIfNeeded: Proceeding with data refresh. Initial: \(!didPerformInitialLoadForCurrentContext), TabChange: \(needsRefreshForTabChange), LoginChange: \(needsRefreshForLoginChange), CollectionChange: \(needsRefreshForCollectionChange), FilterChange: \(needsRefreshForFilterChange)")
-            
-            needsRefreshForTabChange = false
-            needsRefreshForLoginChange = false
-            needsRefreshForCollectionChange = false
-            needsRefreshForFilterChange = false
-
-            await performActualDataRefresh()
-            didPerformInitialLoadForCurrentContext = true
         } else {
-            FavoritesView.logger.info("loadDataIfNeeded: Skipped refresh, no relevant changes or already loaded for current context.")
+            needsDataRefresh = true
+            FavoritesView.logger.info("Tab changed away from Favorites. Setting needsDataRefresh to true.")
+        }
+    }
+
+    private func handleLoginStatusChange() async {
+        FavoritesView.logger.info("FavoritesView: isLoggedIn changed. Setting needsDataRefresh to true.")
+        needsDataRefresh = true
+        if navigationService.selectedTab == .favorites {
+            FavoritesView.logger.info("Login status changed while Favorites tab is active. Calling performActualDataRefresh.")
+            await performActualDataRefresh()
+            needsDataRefresh = false
+        }
+    }
+
+    private func handleCollectionChange() async {
+        FavoritesView.logger.info("FavoritesView: selectedCollectionIdForFavorites changed. Setting needsDataRefresh to true.")
+        needsDataRefresh = true
+        if navigationService.selectedTab == .favorites {
+            FavoritesView.logger.info("Collection ID changed while Favorites tab is active. Calling performActualDataRefresh.")
+            await performActualDataRefresh()
+            needsDataRefresh = false
+        }
+    }
+    
+    private func handleApiFlagsChange() async {
+        FavoritesView.logger.info("FavoritesView: apiFlags changed. Setting needsDataRefresh to true.")
+        needsDataRefresh = true
+        if navigationService.selectedTab == .favorites {
+            FavoritesView.logger.info("API flags changed while Favorites tab is active. Calling performActualDataRefresh.")
+            await performActualDataRefresh()
+            needsDataRefresh = false
         }
     }
 
@@ -183,7 +186,7 @@ struct FavoritesView: View {
                     noCollectionSelectedContentView
                 } else if showNoFilterMessage {
                     noFilterContentView
-                } else if isLoading && items.isEmpty && !didPerformInitialLoadForCurrentContext {
+                } else if isLoading && items.isEmpty && needsDataRefresh {
                     ProgressView("Lade Favoriten...").frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if items.isEmpty && !isLoading && errorMessage == nil && !showNoFilterMessage && !showNoCollectionSelectedMessage {
                     Text("Du hast noch keine Favoriten in dieser Sammlung (oder sie passen nicht zum Filter).")
@@ -229,8 +232,9 @@ struct FavoritesView: View {
             .padding(.bottom)
         }
         .refreshable {
-            didPerformInitialLoadForCurrentContext = false
-            await loadDataIfNeeded()
+            needsDataRefresh = true
+            await performActualDataRefresh()
+            needsDataRefresh = false
         }
     }
 
@@ -248,8 +252,9 @@ struct FavoritesView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .refreshable {
-            didPerformInitialLoadForCurrentContext = false
-            await loadDataIfNeeded()
+            needsDataRefresh = true
+            await performActualDataRefresh()
+            needsDataRefresh = false
         }
     }
     
@@ -270,8 +275,9 @@ struct FavoritesView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .refreshable {
-            didPerformInitialLoadForCurrentContext = false
-            await loadDataIfNeeded()
+            needsDataRefresh = true
+            await performActualDataRefresh()
+            needsDataRefresh = false
         }
     }
 
@@ -292,11 +298,6 @@ struct FavoritesView: View {
         FavoritesView.logger.info("performActualDataRefresh called. isLoading: \(isLoading)")
         guard !isLoading else {
             FavoritesView.logger.info("performActualDataRefresh skipped: isLoading is true.")
-            return
-        }
-        
-        guard navigationPath.isEmpty || isReturningFromFullscreen else {
-            FavoritesView.logger.info("performActualDataRefresh skipped: User is in a detail view.")
             return
         }
         
@@ -364,18 +365,16 @@ struct FavoritesView: View {
                 FavoritesView.logger.info("Finished favorites refresh process.")
             }
         }
-        canLoadMore = true; isLoadingMore = false; var initialItemsFromCache: [Item]? = nil
+        canLoadMore = true; isLoadingMore = false;
 
-        if items.isEmpty && !didPerformInitialLoadForCurrentContext {
-             initialItemsFromCache = await settings.loadItemsFromCache(forKey: cacheKey)
-             if let cached = initialItemsFromCache, !cached.isEmpty {
+        if items.isEmpty {
+             if let cached = await settings.loadItemsFromCache(forKey: cacheKey), !cached.isEmpty {
                  self.items = cached.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
                  FavoritesView.logger.info("Found \(self.items.count) favorite items in cache initially for collection '\(collectionKeyword)'.")
              }
              else { FavoritesView.logger.info("No usable cache for favorites in collection '\(collectionKeyword)'.") }
         }
-        let oldFirstItemId = items.first?.id
-
+        
         FavoritesView.logger.info("Performing API fetch for favorites refresh (Collection Keyword: '\(collectionKeyword)', User: \(username), Flags: \(settings.apiFlags))...")
         do {
             let apiResponse = try await apiService.fetchFavorites(
@@ -387,8 +386,7 @@ struct FavoritesView: View {
             FavoritesView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) fresh favorites for collection '\(collectionKeyword)'.");
             guard !Task.isCancelled else { FavoritesView.logger.info("Refresh task cancelled."); return }
 
-            let newFirstItemId = fetchedItemsFromAPI.first?.id
-            let contentChanged = initialItemsFromCache == nil || (initialItemsFromCache != nil && (initialItemsFromCache?.count != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId))
+            let contentChanged = items.map { $0.id }.elementsEqual(fetchedItemsFromAPI.map { $0.id }) == false
 
             self.items = fetchedItemsFromAPI.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
             
@@ -397,13 +395,10 @@ struct FavoritesView: View {
                 FavoritesView.logger.info("Refresh returned 0 items. Setting canLoadMore to false.")
             } else {
                 let atEnd = apiResponse.atEnd ?? false
-                let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
-                if atEnd {
+                let hasOlder = apiResponse.hasOlder ?? true
+                if atEnd || !hasOlder {
                     self.canLoadMore = false
-                    FavoritesView.logger.info("API indicates atEnd=true. Setting canLoadMore to false.")
-                } else if hasOlder == false { // Nur false, nicht nil
-                    self.canLoadMore = false
-                    FavoritesView.logger.info("API indicates hasOlder=false. Setting canLoadMore to false.")
+                    FavoritesView.logger.info("API indicates end of feed (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to false.")
                 } else {
                     self.canLoadMore = true
                     FavoritesView.logger.info("API indicates more items might be available for refresh (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
@@ -414,7 +409,7 @@ struct FavoritesView: View {
             authService.favoritedItemIDs = Set(self.items.map { $0.id })
             FavoritesView.logger.info("Updated global favorite ID set in AuthService (\(authService.favoritedItemIDs.count) IDs) based on collection '\(collectionKeyword)'.")
 
-            if !navigationPath.isEmpty && contentChanged && !isReturningFromFullscreen {
+            if !navigationPath.isEmpty && contentChanged {
                 navigationPath = NavigationPath()
                 FavoritesView.logger.info("Popped navigation due to content change from refresh.")
             }
@@ -476,13 +471,10 @@ struct FavoritesView: View {
                     FavoritesView.logger.info("Appended \(uniqueNewItems.count) unique items. Total: \(self.items.count)")
                     
                     let atEnd = apiResponse.atEnd ?? false
-                    let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
-                    if atEnd {
+                    let hasOlder = apiResponse.hasOlder ?? true
+                    if atEnd || !hasOlder {
                         self.canLoadMore = false
-                        FavoritesView.logger.info("API indicates atEnd=true after loadMore for collection '\(collectionKeyword)'.")
-                    } else if hasOlder == false { // Nur false, nicht nil
-                        self.canLoadMore = false
-                        FavoritesView.logger.info("API indicates hasOlder=false after loadMore for collection '\(collectionKeyword)'.")
+                        FavoritesView.logger.info("API indicates end of feed after loadMore for collection '\(collectionKeyword)' (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
                     } else {
                         self.canLoadMore = true
                         FavoritesView.logger.info("API indicates more items might be available after loadMore for collection '\(collectionKeyword)' (atEnd=\(atEnd), hasOlder=\(hasOlder)).")

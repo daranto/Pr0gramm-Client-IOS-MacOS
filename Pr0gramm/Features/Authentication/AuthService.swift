@@ -24,7 +24,13 @@ class AuthService: ObservableObject {
     private let userTagVotesKey = "pr0grammUserTagVotes_v1"
 
     // MARK: - Published Properties
-    @Published var isLoggedIn: Bool = false
+    @Published var isLoggedIn: Bool = false {
+        // --- MODIFIED: Update AppSettings on login status change ---
+        didSet {
+            appSettings.updateUserLoginStatusForApiFlags(isLoggedIn: isLoggedIn)
+        }
+        // --- END MODIFICATION ---
+    }
     @Published var currentUser: UserInfo? = nil
     @Published var userNonce: String? = nil
     @Published private(set) var isLoading: Bool = false
@@ -57,6 +63,12 @@ class AuthService: ObservableObject {
         loadVotedCommentStates()
         loadVotedTagStates()
         AuthService.logger.info("AuthService initialized. Loaded \(self.votedItemStates.count) item vote states, \(self.votedCommentStates.count) comment vote states, \(self.favoritedCommentIDs.count) favorited comment IDs, and \(self.votedTagStates.count) tag vote states.")
+        // --- NEW: Set initial login status for AppSettings ---
+        // Da isLoggedIn bei Init false ist, wird hier der korrekte Status gesetzt.
+        // Die checkInitialLoginStatus Methode wird später `isLoggedIn` aktualisieren,
+        // was dann den didSet-Observer erneut auslöst.
+        appSettings.updateUserLoginStatusForApiFlags(isLoggedIn: self.isLoggedIn)
+        // --- END NEW ---
     }
 
     #if DEBUG
@@ -122,7 +134,9 @@ class AuthService: ObservableObject {
                         self.appSettings.selectedCollectionIdForFavorites = nil
                         AuthService.logger.warning("No collections found for user. selectedCollectionIdForFavorites set to nil.")
                     }
+                    // --- MODIFIED: isLoggedIn wird hier gesetzt, was den didSet-Observer auslöst ---
                     await MainActor.run { self.isLoggedIn = true }
+                    // --- END MODIFICATION ---
 
                     if self.appSettings.selectedCollectionIdForFavorites != nil {
                         favoritesLoaded = await loadInitialFavorites()
@@ -138,7 +152,7 @@ class AuthService: ObservableObject {
                 }
 
                 let finalLoginSuccess = profileAndCollectionsLoaded && favoritesLoaded && self.userNonce != nil
-                await MainActor.run { self.isLoggedIn = finalLoginSuccess }
+                await MainActor.run { self.isLoggedIn = finalLoginSuccess } // Erneutes Setzen, falls ein Schritt fehlschlug
 
                 if finalLoginSuccess {
                     AuthService.logger.debug("[LOGIN SUCCESS] Cookies BEFORE saving to Keychain:")
@@ -212,7 +226,8 @@ class AuthService: ObservableObject {
         AuthService.logger.info("Checking initial login status...")
         await MainActor.run {
             isLoading = true; self.userNonce = nil; self.favoritedItemIDs = []
-            self.isLoggedIn = false
+            // isLoggedIn wird hier noch nicht gesetzt, erst am Ende, um den didSet nicht mehrfach auszulösen.
+            // Der initiale Wert von isLoggedIn (false) wurde bereits an AppSettings übergeben.
         }
 
         var profileAndCollectionsLoaded = false
@@ -233,7 +248,8 @@ class AuthService: ObservableObject {
 
              profileAndCollectionsLoaded = await loadProfileInfoAndCollections(username: username, setLoadingState: false)
              if profileAndCollectionsLoaded && nonceAvailable {
-                await MainActor.run { self.isLoggedIn = true }
+                 // Temporäres isLoggedIn für die folgende Logik, endgültiges Setzen am Ende
+                 finalIsLoggedIn = true
 
                  if self.appSettings.selectedCollectionIdForFavorites == nil {
                      if let defaultCollection = self.userCollections.first(where: { $0.isActuallyDefault }) {
@@ -262,11 +278,13 @@ class AuthService: ObservableObject {
         
         if !finalIsLoggedIn {
             AuthService.logger.info("Initial login check determined user is NOT logged in or session data incomplete.")
-            await performLogoutCleanup()
+            await performLogoutCleanup() // Stellt sicher, dass isLoggedIn auf false gesetzt wird
         }
 
          await MainActor.run {
+             // --- MODIFIED: isLoggedIn hier endgültig setzen, löst didSet aus ---
              self.isLoggedIn = finalIsLoggedIn
+             // --- END MODIFICATION ---
              if self.isLoggedIn {
                   AuthService.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), TagVotes: \(self.votedTagStates.count), Collections: \(self.userCollections.count)")
              } else {
@@ -564,7 +582,6 @@ class AuthService: ObservableObject {
         do {
             while pagesFetched < maxPages {
                 AuthService.logger.debug("Fetching favorites page \(pagesFetched + 1) for collection '\(collectionKeyword)' (older: \(olderThanId ?? -1))...")
-                // --- MODIFIED: Use apiResponse from fetchFavorites ---
                 let apiResponse = try await apiService.fetchFavorites(
                     username: username,
                     collectionKeyword: collectionKeyword,
@@ -572,22 +589,14 @@ class AuthService: ObservableObject {
                     olderThanId: olderThanId
                 )
                 let fetchedItems = apiResponse.items
-                // --- END MODIFICATION ---
 
-                // --- MODIFIED: Check fetchedItems.isEmpty ---
                 if fetchedItems.isEmpty {
                     AuthService.logger.debug("Reached end of favorites feed (collection '\(collectionKeyword)') during initial load.")
                     break
                 }
-                // --- END MODIFICATION ---
-                // --- MODIFIED: Append fetchedItems ---
                 allFavorites.append(contentsOf: fetchedItems)
-                // --- END MODIFICATION ---
-                // --- MODIFIED: Get last ID from fetchedItems ---
                 olderThanId = fetchedItems.last?.id
-                // --- END MODIFICATION ---
                 pagesFetched += 1
-                 // Break if atEnd or hasOlder == false
                  if (apiResponse.atEnd ?? true) || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
                      AuthService.logger.info("API indicated end of feed (atEnd or !hasOlder) for collection '\(collectionKeyword)'.")
                      break
@@ -700,7 +709,10 @@ class AuthService: ObservableObject {
         let collectionIdToClearCache = self.appSettings.selectedCollectionIdForFavorites
 
         await MainActor.run {
-            self.isLoggedIn = false; self.currentUser = nil; self.userNonce = nil;
+            // --- MODIFIED: isLoggedIn hier setzen, löst didSet aus ---
+            self.isLoggedIn = false;
+            // --- END MODIFICATION ---
+            self.currentUser = nil; self.userNonce = nil;
             self.needsCaptcha = false; self.captchaToken = nil;
             self.captchaImage = nil; self.favoritedItemIDs = [];
             self.votedItemStates = [:]; self.isVoting = [:]
@@ -709,8 +721,8 @@ class AuthService: ObservableObject {
             self.votedTagStates = [:]; self.isVotingTag = [:]
             self.userCollections = []
             self.appSettings.selectedCollectionIdForFavorites = nil
-            self.appSettings.showSFW = true; self.appSettings.showNSFW = false; self.appSettings.showNSFL = false;
-            self.appSettings.showNSFP = false; self.appSettings.showPOL = false
+            // Filter werden beim Logout nicht mehr automatisch auf SFW zurückgesetzt, das macht `applyFilterResetOnAppOpenIfNeeded`
+            // oder der Nutzer manuell. Hier wird nur der Login-Status in AppSettings aktualisiert.
         }
         await clearCookies()
         _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey)

@@ -134,7 +134,7 @@ class AppSettings: ObservableObject {
     private static let showSFWKey = "showSFWPreference_v1"
     private static let showNSFWKey = "showNSFWPreference_v1"
     private static let showNSFLKey = "showNSFLPreference_v1"
-    private static let showNSFPKey = "showNSFPPreference_v1"
+    private static let showNSFPKey = "showNSFPPreference_v1" // Wird beibehalten, aber UI-seitig ggf. entfernt
     private static let showPOLKey = "showPOLPreference_v1"
     private static let maxImageCacheSizeMBKey = "maxImageCacheSizeMB_v1"
     private static let commentSortOrderKey = "commentSortOrder_v1"
@@ -161,7 +161,12 @@ class AppSettings: ObservableObject {
     @Published var showSFW: Bool { didSet { UserDefaults.standard.set(showSFW, forKey: Self.showSFWKey) } }
     @Published var showNSFW: Bool { didSet { UserDefaults.standard.set(showNSFW, forKey: Self.showNSFWKey) } }
     @Published var showNSFL: Bool { didSet { UserDefaults.standard.set(showNSFL, forKey: Self.showNSFLKey) } }
-    @Published var showNSFP: Bool { didSet { UserDefaults.standard.set(showNSFP, forKey: Self.showNSFPKey) } }
+    @Published var showNSFP: Bool {
+        didSet {
+            UserDefaults.standard.set(showNSFP, forKey: Self.showNSFPKey)
+            AppSettings.logger.debug("showNSFP changed to \(self.showNSFP). Note: For logged-in users (non-Junk), this is often coupled with showSFW.")
+        }
+    }
     @Published var showPOL: Bool { didSet { UserDefaults.standard.set(showPOL, forKey: Self.showPOLKey) } }
 
     @Published var maxImageCacheSizeMB: Int {
@@ -281,22 +286,77 @@ class AppSettings: ObservableObject {
     }
 
 
+    private var _isUserLoggedInForApiFlags: Bool = false
+    private let flagAccessQueue = DispatchQueue(label: "com.aetherium.Pr0gramm.flagAccessQueue")
+
+    public func updateUserLoginStatusForApiFlags(isLoggedIn: Bool) {
+        flagAccessQueue.sync {
+            self._isUserLoggedInForApiFlags = isLoggedIn
+        }
+        AppSettings.logger.info("User login status for API flags calculation updated to: \(isLoggedIn)")
+    }
+
+    private var isUserLoggedInForApiFlags: Bool {
+        flagAccessQueue.sync {
+            return self._isUserLoggedInForApiFlags
+        }
+    }
+
     // MARK: - Computed Properties for API Usage
+    // --- MODIFIED: apiFlags Logik korrigiert ---
     var apiFlags: Int {
         get {
+            let loggedIn = self.isUserLoggedInForApiFlags
+
+            if !loggedIn {
+                // Ausgeloggt: Immer SFW (Flag 1)
+                return 1
+            }
+
+            // Eingeloggt:
             if feedType == .junk {
-                return 9
+                // Junk-Feed hat Vorrang und liefert immer SFW + NSFP
+                return 9 // (SFW: 1 | NSFP: 8)
             } else {
                 var flags = 0
-                if showSFW { flags |= 1 }
-                if showNSFW { flags |= 2 }
-                if showNSFL { flags |= 4 }
-                if showNSFP { flags |= 8 }
-                if showPOL { flags |= 16 }
-                return flags == 0 ? 1 : flags
+                if showSFW {
+                    flags |= 1 // SFW
+                    flags |= 8 // NSFP (ist Teil von SFW für eingeloggte User)
+                }
+                if showNSFW {
+                    flags |= 2 // NSFW
+                }
+                if showNSFL {
+                    flags |= 4 // NSFL
+                }
+                // showNSFP wird hier nicht mehr separat geprüft, da es an showSFW gekoppelt ist.
+                // Wenn SFW aus ist, ist showNSFP (intern) auch aus.
+                // Wenn SFW an ist, ist Flag 8 (NSFP) bereits in `flags` durch `flags |= 8` enthalten.
+
+                if showPOL {
+                    flags |= 16 // POL
+                }
+
+                // Wenn keine der spezifischen Kategorien (SFW, NSFW, NSFL) aktiv ist,
+                // dann als Default reines SFW (Flag 1) verwenden.
+                // Dies stellt sicher, dass immer mindestens ein Flag gesetzt ist, wenn POL allein aktiv wäre.
+                if flags == 0 || (flags == 16 && !showSFW && !showNSFW && !showNSFL) { // POL allein aktiv oder alles aus
+                    return 1 | (showPOL ? 16 : 0) // SFW + ggf. POL
+                }
+                
+                // Wenn nur SFW aktiv ist (und damit NSFP), aber showSFW UI-seitig false ist,
+                // aber showNSFP noch true (aus altem Zustand), dann könnte hier ein Konflikt entstehen.
+                // Da der NSFP-Toggle für eingeloggte User aber entfernt wird, sollte dieser Fall
+                // nicht mehr durch die UI herbeigeführt werden.
+                // Die `onChange` Logik für `showSFW` in FilterView stellt sicher, dass `showNSFP`
+                // konsistent mit `showSFW` bleibt.
+
+                return flags
             }
         }
     }
+    // --- END MODIFICATION ---
+
 
     var apiPromoted: Int? {
         get {
@@ -313,7 +373,15 @@ class AppSettings: ObservableObject {
     }
 
     var hasActiveContentFilter: Bool {
-        return feedType == .junk || showSFW || showNSFW || showNSFL || showNSFP || showPOL
+        if feedType == .junk { return true }
+        if isUserLoggedInForApiFlags {
+            // Wenn irgendein Filter aktiv ist (SFW, NSFW, NSFL, POL)
+            // Beachte: Wenn SFW aktiv ist, ist NSFP implizit mit drin.
+            return showSFW || showNSFW || showNSFL || showPOL
+        } else {
+            // Ausgeloggt wird immer SFW (Flag 1) angezeigt, also ist ein Filter aktiv.
+            return true
+        }
     }
 
     // MARK: - Initializer
@@ -370,7 +438,7 @@ class AppSettings: ObservableObject {
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
         Self.logger.info("- feedType: \(self.feedType.displayName)")
         Self.logger.info("- showSFW: \(self.showSFW), showNSFW: \(self.showNSFW), showNSFL: \(self.showNSFL), showNSFP: \(self.showNSFP), showPOL: \(self.showPOL)")
-        Self.logger.info("- apiFlags computed: \(self.apiFlags), apiPromoted computed: \(String(describing: self.apiPromoted)), apiShowJunk computed: \(self.apiShowJunk)")
+        Self.logger.info("- apiFlags computed (assuming logged out for init): \(self.apiFlags), apiPromoted computed: \(String(describing: self.apiPromoted)), apiShowJunk computed: \(self.apiShowJunk)")
         Self.logger.info("- enableExperimentalHideSeen: \(self.enableExperimentalHideSeen)")
         Self.logger.info("- hideSeenItems (actual): \(self.hideSeenItems)")
         Self.logger.info("- subtitleActivationMode: \(self.subtitleActivationMode.displayName)")
@@ -399,23 +467,19 @@ class AppSettings: ObservableObject {
         }
     }
 
-    // --- NEW: Methode zum Zurücksetzen der Filter (public) ---
     public func applyFilterResetOnAppOpenIfNeeded() {
         if self.resetFiltersOnAppOpen {
-            AppSettings.logger.info("Applying filter reset to SFW as per settings.")
+            AppSettings.logger.info("Applying filter reset as per settings.")
             self.showSFW = true
             self.showNSFW = false
             self.showNSFL = false
-            self.showNSFP = false
+            // NSFP wird nicht mehr explizit gesetzt, da es von SFW abhängt, wenn eingeloggt.
+            // Die apiFlags Logik handhabt dies.
             self.showPOL = false
-            // Der FeedType (Neu/Beliebt/Müll) wird hier nicht geändert, nur die Inhaltsfilter.
-            // Die didSet-Observer der einzelnen show... Properties werden hier ausgelöst
-            // und speichern die Änderungen in UserDefaults.
         } else {
             AppSettings.logger.info("Filter reset on app open is disabled.")
         }
     }
-    // --- END NEW ---
 
 
     // MARK: - Cache Management Methods
