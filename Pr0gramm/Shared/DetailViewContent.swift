@@ -45,7 +45,6 @@ struct ShareableItemWrapper: Identifiable {
     }
 }
 
-// --- NEW: Moved ShareSheet to top level ---
 struct ShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
     let applicationActivities: [UIActivity]? = nil
@@ -63,7 +62,6 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
     }
 }
-// --- END NEW ---
 
 
 /// The main content area for the item detail view, arranging media, info, tags, and comments.
@@ -110,7 +108,7 @@ struct DetailViewContent: View {
     let downvoteCommentAction: (Int) -> Void
 
 
-    @EnvironmentObject var navigationService: NavigationService
+    @EnvironmentObject var navigationService: NavigationService // Bleibt für andere Navigationen, wird aber für Tag-Tap nicht mehr direkt verwendet
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var settings: AppSettings
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
@@ -126,6 +124,10 @@ struct DetailViewContent: View {
     @State private var newTagText = ""
     @State private var addTagError: String? = nil
     @State private var isAddingTags: Bool = false
+
+    // --- NEW: State für das Tag-Such-Sheet ---
+    @State private var tagForSheetSearch: String? = nil
+    // --- END NEW ---
 
 
     @ViewBuilder private var mediaContentInternal: some View {
@@ -306,7 +308,12 @@ struct DetailViewContent: View {
                                 isVoting: authService.isVotingTag[tag.id] ?? false,
                                 onUpvote: { upvoteTagAction(tag.id) },
                                 onDownvote: { downvoteTagAction(tag.id) },
-                                onTapTag: { navigationService.requestSearch(tag: tag.tag) }
+                                // --- MODIFIED: Tag-Tap öffnet Sheet ---
+                                onTapTag: {
+                                    DetailViewContent.logger.info("Tag '\(tag.tag)' tapped. Setting tagForSheetSearch.")
+                                    self.tagForSheetSearch = tag.tag
+                                }
+                                // --- END MODIFICATION ---
                             )
                         }
                         if !showingAllTags && totalTagCount > displayedTags.count {
@@ -450,7 +457,6 @@ struct DetailViewContent: View {
 
     @ViewBuilder
     private func commentsContentSection(scrollViewProxy: ScrollViewProxy?) -> some View {
-        // --- MODIFIED: Explicitly name parameters for clarity ---
         CommentsSection(
             flatComments: self.flatComments,
             totalCommentCount: self.totalCommentCount,
@@ -466,7 +472,6 @@ struct DetailViewContent: View {
             onUpvoteComment: { commentId in self.upvoteCommentAction(commentId) },
             onDownvoteComment: { commentId in self.downvoteCommentAction(commentId) }
         )
-        // --- END MODIFICATION ---
     }
     
     private func attemptScrollToComment(proxy: ScrollViewProxy?, targetID: Int) {
@@ -546,6 +551,17 @@ struct DetailViewContent: View {
         .sheet(isPresented: $showingAddTagSheet) {
             addTagSheetContent()
         }
+        // --- NEW: Sheet für die Tag-Suche ---
+        .sheet(item: $tagForSheetSearch, onDismiss: {
+            DetailViewContent.logger.info("Tag search sheet dismissed.")
+            // Optional: Aktionen nach dem Schließen des Sheets, falls nötig
+        }) { tappedTag in
+            TagSearchView(tag: tappedTag)
+                .environmentObject(settings)
+                .environmentObject(authService)
+                // playerManager wird in TagSearchView selbst instanziiert
+        }
+        // --- END NEW ---
     }
 
     @ViewBuilder
