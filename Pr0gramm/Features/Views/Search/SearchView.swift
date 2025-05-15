@@ -30,6 +30,10 @@ struct SearchView: View {
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
+    @State private var searchHistory: [String] = []
+    private let searchHistoryKey = "searchHistory_v1"
+    private let maxSearchHistoryCount = 10
+
     @StateObject private var playerManager = VideoPlayerManager()
 
     private let apiService = APIService()
@@ -117,11 +121,21 @@ struct SearchView: View {
             }
             .navigationTitle("Suche")
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Tags suchen...")
-            .onSubmit(of: .search) { Task { await performSearch(isInitialSearch: true) } }
+            .onSubmit(of: .search) {
+                addToSearchHistory(searchText)
+                Task { await performSearch(isInitialSearch: true) }
+            }
             .navigationDestination(for: Item.self) { destinationItem in
                 detailView(for: destinationItem)
              }
-            .onAppear { if !didPerformInitialPendingSearch, let tagToSearch = navigationService.pendingSearchTag, !tagToSearch.isEmpty { SearchView.logger.info("SearchView appeared with pending tag: '\(tagToSearch)'"); processPendingTag(tagToSearch); didPerformInitialPendingSearch = true } }
+            .onAppear {
+                loadSearchHistory()
+                if !didPerformInitialPendingSearch, let tagToSearch = navigationService.pendingSearchTag, !tagToSearch.isEmpty {
+                    SearchView.logger.info("SearchView appeared with pending tag: '\(tagToSearch)'")
+                    processPendingTag(tagToSearch)
+                    didPerformInitialPendingSearch = true
+                }
+            }
             .task { playerManager.configure(settings: settings) }
             .sheet(isPresented: $showingFilterSheet) {
                  FilterView(hideFeedOptions: true)
@@ -146,10 +160,13 @@ struct SearchView: View {
                 }
             }
             .onChange(of: searchText) { oldValue, newValue in
-                if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && oldValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && minBenisScore > 0 && !isBenisSliderEditing && !isLoading {
+                let newTrimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                let oldTrimmed = oldValue.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if newTrimmed.isEmpty && oldTrimmed.isEmpty && minBenisScore > 0 && !isBenisSliderEditing && !isLoading {
                     SearchView.logger.info("Search text is empty, but Benis filter is active. Triggering search.")
                     Task { await performSearch(isInitialSearch: true) }
-                } else if hasSearched && newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isLoading && minBenisScore == 0 {
+                } else if hasSearched && newTrimmed.isEmpty && !isLoading && minBenisScore == 0 {
                     Task { @MainActor in
                         items = []
                         hasSearched = false
@@ -203,15 +220,17 @@ struct SearchView: View {
             description: { Text(error).font(UIConstants.bodyFont) }
             actions: { Button("Erneut versuchen") { Task { await performSearch(isInitialSearch: true) } }.font(UIConstants.bodyFont) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if !hasSearched {
-            if minBenisScore > 0 {
-                ContentUnavailableView("Filter aktiv", systemImage: "slider.horizontal.3", description: Text("Min. Benis: \(Int(minBenisScore)). Drücke Suchen."))
+        } else if !hasSearched && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if !searchHistory.isEmpty {
+                searchHistoryView
+            } else if minBenisScore > 0 {
+                ContentUnavailableView("Filter aktiv", systemImage: "slider.horizontal.3", description: Text("Min. Benis: \(Int(minBenisScore)). Drücke Suchen oder gib Tags ein."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView("Suche nach Tags", systemImage: "tag").font(UIConstants.headlineFont)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        } else if items.isEmpty {
+        } else if items.isEmpty && hasSearched {
              ContentUnavailableView { Label("Keine Ergebnisse", systemImage: "magnifyingglass").font(UIConstants.headlineFont) }
              description: { Text("Keine Posts für '\(searchText)' gefunden (\(searchFeedType.displayName), Min. Benis: \(Int(minBenisScore))).").font(UIConstants.bodyFont) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -219,6 +238,49 @@ struct SearchView: View {
             searchResultsGrid
         }
     }
+    
+    @ViewBuilder
+    private var searchHistoryView: some View {
+        List {
+            Section {
+                ForEach(searchHistory, id: \.self) { term in
+                    // --- MODIFIED: Make entire row tappable ---
+                    Button(action: {
+                        searchText = term
+                        addToSearchHistory(term) // Move to top and submit
+                        Task { await performSearch(isInitialSearch: true) }
+                    }) {
+                        HStack {
+                            Image(systemName: "magnifyingglass") // Icon for search history item
+                                .foregroundColor(.secondary)
+                            Text(term)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "arrow.up.left")
+                                .foregroundColor(.secondary)
+                        }
+                        .contentShape(Rectangle()) // Ensure the whole HStack area is tappable
+                    }
+                    .buttonStyle(.plain) // Use plain style to make it look like a list item
+                    // --- END MODIFICATION ---
+                }
+                .onDelete(perform: deleteSearchHistoryItem)
+            } header: {
+                HStack {
+                    Text("Letzte Suchen")
+                    Spacer()
+                    if !searchHistory.isEmpty {
+                        Button("Alle löschen", role: .destructive) {
+                            clearSearchHistory()
+                        }
+                        .font(.caption)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+    }
+
 
     private var searchResultsGrid: some View {
         ScrollView {
@@ -245,13 +307,17 @@ struct SearchView: View {
     }
 
     private func processPendingTag(_ tagToSearch: String) {
-         Task { @MainActor in
-            self.searchText = tagToSearch
-         }
+        let trimmedTag = tagToSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTag.isEmpty else { return }
+        
+        Task { @MainActor in
+            self.searchText = trimmedTag
+        }
+        addToSearchHistory(trimmedTag)
         Task {
              await performSearch(isInitialSearch: true);
              await MainActor.run {
-                 if navigationService.pendingSearchTag == tagToSearch {
+                 if navigationService.pendingSearchTag == trimmedTag {
                      navigationService.pendingSearchTag = nil
                  }
              }
@@ -283,22 +349,24 @@ struct SearchView: View {
         if !combinedTagsForAPI.isEmpty {
             effectiveSearchQueryForAPITags = "! \(combinedTagsForAPI)"
         } else {
-            effectiveSearchQueryForAPITags = ""
+            if userEnteredSearchText.isEmpty && currentMinScoreInt == 0 && isInitialSearch {
+                effectiveSearchQueryForAPITags = ""
+            } else if userEnteredSearchText.isEmpty && currentMinScoreInt == 0 && !isInitialSearch {
+                SearchView.logger.info("Load more skipped: Text and Benis are empty, nothing more to load for this 'empty' query.")
+                canLoadMore = false
+                isLoadingMore = false
+                return
+            } else {
+                SearchView.logger.info("Search effectively skipped: query is empty and not an initial empty browse scenario.");
+                items = []; hasSearched = true; errorMessage = nil; isLoading = false; isLoadingMore = false; canLoadMore = false;
+                return
+            }
         }
         
-        guard !effectiveSearchQueryForAPITags.isEmpty || (userEnteredSearchText.isEmpty && currentMinScoreInt > 0) || (isInitialSearch && userEnteredSearchText.isEmpty && currentMinScoreInt == 0) else {
-             if userEnteredSearchText.isEmpty && currentMinScoreInt == 0 && !isInitialSearch {
-                  SearchView.logger.info("Load more skipped: effective search query is empty, and not an initial empty search.");
-                  canLoadMore = false
-                  return
-             } else if userEnteredSearchText.isEmpty && currentMinScoreInt == 0 && isInitialSearch {
-                 SearchView.logger.info("Performing initial empty search (will effectively browse \(searchFeedType.displayName)).")
-                 return
-             } else {
-                 SearchView.logger.info("Search skipped: effective search query is empty and not a valid scenario for empty search.");
-                 items = []; hasSearched = false; errorMessage = nil; isLoading = false; isLoadingMore = false; canLoadMore = true; didPerformInitialPendingSearch = false;
-                 return
-             }
+        guard !effectiveSearchQueryForAPITags.isEmpty || (userEnteredSearchText.isEmpty && currentMinScoreInt == 0 && isInitialSearch) else {
+             SearchView.logger.info("performSearch guard: Final check, effective query empty and not initial empty browse. Clearing state.");
+             items = []; hasSearched = true; errorMessage = nil; isLoading = false; isLoadingMore = false; canLoadMore = false;
+             return
         }
         
         if isInitialSearch {
@@ -330,13 +398,11 @@ struct SearchView: View {
                 } else {
                     olderThanIdForAPI = items.last?.id
                 }
-                // --- MODIFIED: Added return to the guard ---
                 guard olderThanIdForAPI != nil else {
                     SearchView.logger.warning("Cannot load more for '\(effectiveSearchQueryForAPITags)': Last item ID/promoted ID missing.")
                     canLoadMore = false
-                    return // Ensure function exits
+                    return
                 }
-                // --- END MODIFICATION ---
             }
 
             let apiResponse = try await apiService.fetchItems(
@@ -359,8 +425,12 @@ struct SearchView: View {
                  if apiError == "nothingFound" {
                      if isInitialSearch { items = [] }
                      canLoadMore = false
-                     errorMessage = "Keine Ergebnisse für '\(userEnteredSearchText)' gefunden."
+                     // errorMessage = "Keine Ergebnisse für '\(userEnteredSearchText)' gefunden." // Do not set error for "nothingFound"
                      SearchView.logger.info("API returned 'nothingFound' for API tags '\(effectiveSearchQueryForAPITags)'.")
+                 } else if apiError == "tooShort" {
+                      errorMessage = "Suchbegriff zu kurz (mind. 2 Zeichen)."
+                      if isInitialSearch { items = [] }
+                      canLoadMore = false
                  } else {
                      throw NSError(domain: "APIService.performSearch", code: 1, userInfo: [NSLocalizedDescriptionKey: apiError])
                  }
@@ -389,6 +459,41 @@ struct SearchView: View {
             canLoadMore = false
             SearchView.logger.error("Search failed for API tags '\(effectiveSearchQueryForAPITags)': \(error.localizedDescription)");
         }
+    }
+
+    private func loadSearchHistory() {
+        if let history = UserDefaults.standard.stringArray(forKey: searchHistoryKey) {
+            searchHistory = history
+            SearchView.logger.info("Loaded \(history.count) items from search history.")
+        }
+    }
+
+    private func saveSearchHistory() {
+        UserDefaults.standard.set(searchHistory, forKey: searchHistoryKey)
+        SearchView.logger.info("Saved \(searchHistory.count) items to search history.")
+    }
+
+    private func addToSearchHistory(_ term: String) {
+        let trimmedTerm = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTerm.isEmpty else { return }
+
+        searchHistory.removeAll { $0.lowercased() == trimmedTerm.lowercased() }
+        searchHistory.insert(trimmedTerm, at: 0)
+
+        if searchHistory.count > maxSearchHistoryCount {
+            searchHistory = Array(searchHistory.prefix(maxSearchHistoryCount))
+        }
+        saveSearchHistory()
+    }
+
+    private func deleteSearchHistoryItem(at offsets: IndexSet) {
+        searchHistory.remove(atOffsets: offsets)
+        saveSearchHistory()
+    }
+
+    private func clearSearchHistory() {
+        searchHistory.removeAll()
+        saveSearchHistory()
     }
 }
 
