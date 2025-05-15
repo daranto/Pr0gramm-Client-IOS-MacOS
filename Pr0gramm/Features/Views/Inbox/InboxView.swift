@@ -5,9 +5,9 @@ import SwiftUI
 import os
 import Kingfisher
 
+// --- MODIFIED: InboxViewMessageType Enum ---
 enum InboxViewMessageType: Int, CaseIterable, Identifiable {
-    case all = 0
-    case comments = 1
+    case comments = 1 // Start with comments if 'all' is removed
     case notifications = 2
     case privateMessages = 3
 
@@ -15,7 +15,7 @@ enum InboxViewMessageType: Int, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .all: return "Alle"
+        // case .all: return "Alle" // Removed
         case .comments: return "Kommentare"
         case .notifications: return "System"
         case .privateMessages: return "Privat"
@@ -24,13 +24,14 @@ enum InboxViewMessageType: Int, CaseIterable, Identifiable {
 
     var apiTypeString: String? {
         switch self {
-        case .all: return nil
+        // case .all: return nil // Removed
         case .comments: return "comment"
         case .notifications: return "notification"
-        case .privateMessages: return nil
+        case .privateMessages: return nil // Private messages handled differently
         }
     }
 }
+// --- END MODIFICATION ---
 
 
 struct InboxView: View {
@@ -43,9 +44,6 @@ struct InboxView: View {
     @State private var isLoadingMore = false
 
     @State private var targetCommentIDForNavigation: Int? = nil
-    // --- MODIFIED: profileToNavigate wird zu profileNavigationValue ---
-    // @State private var profileToNavigate: String? = nil
-    // --- END MODIFICATION ---
     @State private var isLoadingNavigationTarget: Bool = false
     @State private var navigationTargetId: Int? = nil
 
@@ -53,7 +51,9 @@ struct InboxView: View {
 
     @StateObject private var playerManager = VideoPlayerManager()
 
-    @State private var selectedMessageType: InboxViewMessageType = .all
+    // --- MODIFIED: Default selectedMessageType ---
+    @State private var selectedMessageType: InboxViewMessageType = .comments // Default to comments
+    // --- END MODIFICATION ---
     
     @State private var conversations: [InboxConversation] = []
     @State private var isLoadingConversations = false
@@ -76,13 +76,11 @@ struct InboxView: View {
     }
     @State private var conversationNavigationValue: ConversationNavigationValue? = nil
 
-    // --- NEW: Wrapper struct for Profile Navigation ---
     struct ProfileNavigationValue: Hashable, Identifiable {
         let username: String
         var id: String { username }
     }
     @State private var profileNavigationValue: ProfileNavigationValue? = nil
-    // --- END NEW ---
 
 
     init(
@@ -102,7 +100,7 @@ struct InboxView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 Picker("Nachrichten Typ", selection: $selectedMessageType) {
-                    ForEach(InboxViewMessageType.allCases) { type in
+                    ForEach(InboxViewMessageType.allCases) { type in // Iterates over remaining cases
                         Text(type.displayName).tag(type)
                     }
                 }
@@ -124,27 +122,30 @@ struct InboxView: View {
             }
             .onChange(of: selectedMessageType) { _, newType in
                 Task {
-                    // Reset navigation states when changing tabs to avoid accidental navigation
                     itemNavigationValue = nil
                     conversationNavigationValue = nil
                     profileNavigationValue = nil
                     
+                    // --- MODIFIED: Logic for changing tabs ---
+                    messages = [] // Clear messages when switching tabs to force refresh
+                    conversations = [] // Clear conversations as well
                     if newType == .privateMessages {
-                        if conversations.isEmpty || messages.isEmpty { // Load if either is empty for safety
-                            await refreshConversations()
-                        }
+                        await refreshConversations()
                     } else {
-                        if messages.isEmpty { await refreshMessages() }
+                        await refreshMessages() // This will now fetch based on the new selectedMessageType
                     }
+                    // --- END MODIFICATION ---
                 }
             }
-            .task(id: authService.isLoggedIn) {
+            .task(id: authService.isLoggedIn) { // Handles initial load and login/logout changes
                  if authService.isLoggedIn {
+                     // --- MODIFIED: Initial load logic ---
                      if selectedMessageType == .privateMessages {
                          await refreshConversations()
                      } else {
-                         await refreshMessages()
+                         await refreshMessages() // Default load for comments or notifications
                      }
+                     // --- END MODIFICATION ---
                  } else {
                      messages = []
                      conversations = []
@@ -161,13 +162,11 @@ struct InboxView: View {
                  .environmentObject(settings)
                  .environmentObject(authService)
             }
-            // --- MODIFIED: Use ProfileNavigationValue for profile destination ---
             .navigationDestination(item: $profileNavigationValue) { navValue in
                  UserProfileSheetView(username: navValue.username)
                       .environmentObject(settings)
                       .environmentObject(authService)
             }
-            // --- END MODIFICATION ---
             .navigationDestination(item: $conversationNavigationValue) { navValue in
                 ConversationDetailView(partnerUsername: navValue.conversationPartnerName)
                     .environmentObject(settings)
@@ -215,26 +214,28 @@ struct InboxView: View {
                     self.conversationNavigationValue = ConversationNavigationValue(conversationPartnerName: username)
                 }
             )
-        default:
-            generalMessagesListView
+        // --- MODIFIED: Cases for comments and notifications ---
+        case .comments, .notifications:
+            generalMessagesListView // Use the same list view for these types
+        // --- END MODIFICATION ---
         }
     }
 
     private var filteredMessages: [InboxMessage] {
-        if selectedMessageType == .all {
-            return messages.filter { msg in
-                let type = msg.type
-                return type == "comment" || type == "notification" || type == "follow"
-            }
-        } else if let apiType = selectedMessageType.apiTypeString {
-            return messages.filter { $0.type == apiType }
+        // --- MODIFIED: Logic for filteredMessages ---
+        // Since .all is removed, we directly filter by the selected type's apiTypeString.
+        // This implicitly handles .comments and .notifications.
+        // Private messages are handled by a different view.
+        guard selectedMessageType != .privateMessages, let apiType = selectedMessageType.apiTypeString else {
+            return [] // Should not happen if privateMessages has its own view
         }
-        return []
+        return messages.filter { $0.type == apiType || ($0.type == "follow" && selectedMessageType == .notifications) } // Show "follow" under "System" (notifications)
+        // --- END MODIFICATION ---
     }
 
     private var generalMessagesListView: some View {
         Group {
-            if isLoading && messages.isEmpty {
+            if isLoading && messages.isEmpty { // Use messages here, not filteredMessages for initial loading state
                 ProgressView("Lade Nachrichten...").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = errorMessage, filteredMessages.isEmpty {
                  ContentUnavailableView {
@@ -250,7 +251,7 @@ struct InboxView: View {
                     .foregroundColor(.secondary).padding().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
-                    ForEach(filteredMessages) { message in
+                    ForEach(filteredMessages) { message in // Iterate over filteredMessages
                         InboxMessageRow(message: message)
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -258,8 +259,8 @@ struct InboxView: View {
                                     InboxView.logger.debug("Tap ignored for message \(message.id): isLoadingNavigationTarget=\(isLoadingNavigationTarget)")
                                     return
                                 }
-                                if message.type == "notification" {
-                                    InboxView.logger.debug("Notification message tapped, no navigation action.")
+                                if message.type == "notification" && selectedMessageType == .notifications { // Allow tap only if on "System" tab
+                                    InboxView.logger.debug("Notification message tapped on System tab, no navigation action.")
                                     return
                                 }
                                 Task { await handleMessageTap(message) }
@@ -267,7 +268,7 @@ struct InboxView: View {
                         .listRowInsets(EdgeInsets(top: 10, leading: 15, bottom: 10, trailing: 15))
                         .id(message.id)
                         .onAppear {
-                            let currentList = filteredMessages
+                            let currentList = filteredMessages // Use filteredMessages for pagination trigger
                             if currentList.count >= 2 && message.id == currentList[currentList.count - 2].id && canLoadMore && !isLoadingMore {
                                 InboxView.logger.info("End trigger appeared for message ID: \(message.id).")
                                 Task { await loadMoreMessages() }
@@ -335,9 +336,7 @@ struct InboxView: View {
         case "follow":
              if let senderName = message.name, !senderName.isEmpty {
                  InboxView.logger.info("Message type is 'follow', setting profileNavigationValue: \(senderName)")
-                 // --- MODIFIED: Use ProfileNavigationValue ---
                  self.profileNavigationValue = ProfileNavigationValue(username: senderName)
-                 // --- END MODIFICATION ---
              } else { InboxView.logger.warning("Follow message type tapped, but sender name is nil or empty.") }
         default:
             InboxView.logger.warning("Unhandled message type tapped in handleMessageTap: \(message.type ?? "nil")")
@@ -362,7 +361,7 @@ struct InboxView: View {
         self.targetCommentIDForNavigation = targetCommentID
 
         do {
-            let flagsToFetchWith = 31
+            let flagsToFetchWith = 31 // Fetch with all flags for detail view consistency
             InboxView.logger.debug("Fetching item \(id) for navigation using flags: \(flagsToFetchWith)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
 
@@ -396,7 +395,18 @@ struct InboxView: View {
 
       @MainActor
       func refreshMessages() async {
-          InboxView.logger.info("Refreshing general inbox messages (/inbox/all)...")
+          // --- MODIFIED: Logic for refreshMessages ---
+          // This function now always fetches ALL message types (/inbox/all)
+          // The filtering to specific types (comments, notifications) happens in `filteredMessages`.
+          // Private messages are handled by refreshConversations.
+          guard selectedMessageType != .privateMessages else {
+              InboxView.logger.info("refreshMessages called, but privateMessages selected. Skipping general refresh.")
+              return
+          }
+
+          InboxView.logger.info("Refreshing general inbox messages (/inbox/all) for selected type: \(selectedMessageType.displayName)...")
+          // --- END MODIFICATION ---
+
           guard authService.isLoggedIn else {
               InboxView.logger.warning("Cannot refresh general inbox: User not logged in.")
               self.messages = []; self.errorMessage = "Bitte anmelden."; self.canLoadMore = true
@@ -410,12 +420,13 @@ struct InboxView: View {
           defer { Task { @MainActor in self.isLoading = false } }
 
           do {
-              let response = try await apiService.fetchInboxMessages(older: nil)
+              let response = try await apiService.fetchInboxMessages(older: nil) // Always fetch all for general tabs
               guard !Task.isCancelled else { return }
 
+              // Store all fetched messages, filtering happens in `filteredMessages`
               self.messages = response.messages.sorted { $0.created > $1.created }
               self.canLoadMore = !response.atEnd
-              InboxView.logger.info("Fetched \(response.messages.count) initial general inbox messages. AtEnd: \(response.atEnd)")
+              InboxView.logger.info("Fetched \(response.messages.count) initial general inbox messages (all types). AtEnd: \(response.atEnd)")
 
           } catch let error as URLError where error.code == .userAuthenticationRequired {
               InboxView.logger.error("General inbox API fetch failed: Authentication required.")
@@ -429,12 +440,21 @@ struct InboxView: View {
 
     @MainActor
     func loadMoreMessages() async {
+        // --- MODIFIED: Logic for loadMoreMessages ---
+        guard selectedMessageType != .privateMessages else {
+            InboxView.logger.info("loadMoreMessages called, but privateMessages selected. Skipping general load more.")
+            return
+        }
+        // --- END MODIFICATION ---
+
         guard authService.isLoggedIn else { return }
         guard !isLoadingMore && canLoadMore && !isLoading else { return }
+        // --- MODIFIED: Use the full 'messages' list for pagination ---
         guard let oldestMessageTimestamp = messages.last?.created else {
-             InboxView.logger.warning("Cannot load more general messages: No last message found.")
+             InboxView.logger.warning("Cannot load more general messages: No last message found in the full list.")
              self.canLoadMore = false; return
         }
+        // --- END MODIFICATION ---
 
         InboxView.logger.info("--- Starting loadMoreMessages (general) older than timestamp \(oldestMessageTimestamp) ---")
         self.isLoadingMore = true
@@ -442,7 +462,7 @@ struct InboxView: View {
         defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; InboxView.logger.info("--- Finished loadMoreMessages (general) ---") } } }
 
         do {
-            let response = try await apiService.fetchInboxMessages(older: oldestMessageTimestamp)
+            let response = try await apiService.fetchInboxMessages(older: oldestMessageTimestamp) // Fetch all types
             guard !Task.isCancelled else { return }
             guard self.isLoadingMore else { return }
 
@@ -457,8 +477,9 @@ struct InboxView: View {
                     InboxView.logger.warning("All loaded general inbox messages were duplicates.")
                     self.canLoadMore = !response.atEnd
                 } else {
+                    // Append to the main 'messages' list, sorting will be applied if needed or handled by filteredMessages
                     self.messages.append(contentsOf: uniqueNewMessages)
-                    self.messages.sort { $0.created > $1.created }
+                    self.messages.sort { $0.created > $1.created } // Re-sort after appending
                     InboxView.logger.info("Appended \(uniqueNewMessages.count) unique general inbox messages. Total: \(self.messages.count)")
                     self.canLoadMore = !response.atEnd
                 }
@@ -571,14 +592,14 @@ struct InboxMessageRow: View {
         switch message.type {
         case "comment": return message.name ?? "Kommentar"
         case "notification": return "Systemnachricht"
-        case "message": return message.name ?? "Nachricht"
+        case "message": return message.name ?? "Nachricht" // Should not be displayed by this row if private messages have their own tab
         case "follow": return "\(message.name ?? "Jemand") folgt dir"
         default: return "Unbekannt (\(message.type ?? "N/A"))"
         }
     }
 
     private var titleOrMarkColor: Color {
-        if message.type == "comment" || message.type == "message" || message.type == "follow" {
+        if message.type == "comment" || message.type == "follow" { // Removed "message"
             return Mark(rawValue: message.mark ?? -1).displayColor
         }
         return .secondary
@@ -615,7 +636,7 @@ struct InboxMessageRow: View {
                  Image(systemName: "person.crop.circle.fill")
                      .resizable().scaledToFit().frame(width: 50, height: 50)
                      .foregroundColor(.secondary)
-            } else {
+            } else { // Default for "notification" or other types handled by this row
                  Image(systemName: "bell.circle.fill")
                     .resizable().scaledToFit().frame(width: 50, height: 50)
                     .foregroundColor(.secondary)
@@ -673,10 +694,11 @@ private struct InboxPreviewWrapper: View {
         
         let msg1 = InboxMessage(id: 1, type: "comment", itemId: 123, thumb: "thumb1.jpg", flags: 1, name: "UserA", mark: 2, senderId: 101, score: 5, created: Int(Date().timeIntervalSince1970 - 600), message: "Das ist ein Kommentar http://pr0gramm.com/new/543210 zur Benachrichtigung.", read: 0, blocked: 0, sent: 0)
         let msg2 = InboxMessage(id: 2, type: "notification", itemId: nil, thumb: nil, flags: nil, name: nil, mark: nil, senderId: 0, score: 0, created: Int(Date().timeIntervalSince1970 - 3600), message: "Systemnachricht: Dein pr0mium läuft bald ab!", read: 1, blocked: 0, sent: nil)
+        let msg3 = InboxMessage(id: 3, type: "follow", itemId: nil, thumb: nil, flags: nil, name: "FollowerUser", mark: 1, senderId: 102, score: 0, created: Int(Date().timeIntervalSince1970 - 7200), message: nil, read: 0, blocked: 0, sent: nil)
 
 
         return InboxView(
-            initialMessagesForPreview: [msg1, msg2],
+            initialMessagesForPreview: [msg1, msg2, msg3], // Include follow message
             initialConversationsForPreview: sampleConversations
         )
             .environmentObject(settings)

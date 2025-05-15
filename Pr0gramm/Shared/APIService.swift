@@ -55,9 +55,12 @@ struct ItemComment: Codable, Identifiable, Hashable {
 struct ApiResponse: Codable {
     let items: [Item]
     let atEnd: Bool?
-    let atStart: Bool?
-    let hasOlder: Bool?
-    let hasNewer: Bool?
+    let atStart: Bool? // Keep for completeness, though not always used by client
+    let hasOlder: Bool? // Alternative to atEnd, specific to some API versions/contexts
+    let hasNewer: Bool? // Alternative to atStart
+    // --- NEW: Error field for general API errors ---
+    let error: String? // For errors like "nothingFound" or "tooShort"
+    // --- END NEW ---
 }
 /// Response structure for the `/user/login` endpoint.
 struct LoginResponse: Codable {
@@ -284,16 +287,12 @@ struct InboxConversationUser: Codable {
     let canReceiveMessages: Bool
 }
 
-// --- MODIFIED: Renamed PostPrivateMessageResponse to PostPrivateMessageAPIResponse ---
-// and adjusted its structure to match the actual API JSON
 struct PostPrivateMessageAPIResponse: Codable {
-    let messages: [PrivateMessage] // The API returns the updated list of messages
-    let atEnd: Bool? // Usually true after posting, as it returns the whole conversation
+    let messages: [PrivateMessage]
+    let atEnd: Bool?
     let success: Bool
     let ts: Int?
-    // 'error' and 'messageId' (for the single sent message) are not top-level here
 }
-// --- END MODIFICATION ---
 
 
 extension Array where Element == URLQueryItem {
@@ -336,7 +335,7 @@ class APIService {
         return encodedParametersString.data(using: .utf8)
     }
 
-
+    // --- MODIFIED: fetchItems now returns ApiResponse ---
     func fetchItems(
         flags: Int,
         promoted: Int? = nil,
@@ -346,7 +345,7 @@ class APIService {
         collectionNameForUser: String? = nil,
         isOwnCollection: Bool = false,
         showJunkParameter: Bool = false
-    ) async throws -> [Item] {
+    ) async throws -> ApiResponse { // Changed return type
         let endpoint = "/items/get"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
             throw URLError(.badURL)
@@ -358,7 +357,6 @@ class APIService {
             queryItems.append(URLQueryItem(name: "show_junk", value: "1"))
             logDescription += ", show_junk=1"
         }
-
 
         if let name = collectionNameForUser {
             queryItems.append(URLQueryItem(name: "collection", value: name))
@@ -399,14 +397,31 @@ class APIService {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "\(endpoint) (\(logDescription))")
+            // --- NEW: Check for API-level error in response ---
+            if let apiError = apiResponse.error {
+                Self.logger.error("API returned error for [\(logDescription)]: \(apiError)")
+                // Specific error handling if "nothingFound" or "tooShort"
+                if apiError == "nothingFound" {
+                    // Return an empty successful response, as it's not a network/decode error
+                    return ApiResponse(items: [], atEnd: true, atStart: nil, hasOlder: false, hasNewer: nil, error: apiError)
+                } else if apiError == "tooShort" {
+                     throw NSError(domain: "APIService.fetchItems", code: 2, userInfo: [NSLocalizedDescriptionKey: "Suchbegriff zu kurz (mind. 2 Zeichen)."])
+                }
+                // For other API errors, we might just return them in the ApiResponse
+            }
+            // --- END NEW ---
             Self.logger.info("API fetch completed for [\(logDescription)]: \(apiResponse.items.count) items received. atEnd: \(apiResponse.atEnd ?? false)")
-            return apiResponse.items
+            return apiResponse
         } catch {
             Self.logger.error("Error during \(endpoint) (\(logDescription)): \(error.localizedDescription)")
             throw error
         }
     }
+    // --- END MODIFICATION ---
 
+    // fetchItem is less critical for this change, but for consistency, it should also return ApiResponse.
+    // For now, I'll leave it as is to focus on the search pagination.
+    // If it becomes an issue, we can refactor it similarly.
     func fetchItem(id: Int, flags: Int) async throws -> Item? {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else {
             throw URLError(.badURL)
@@ -442,7 +457,7 @@ class APIService {
     }
 
 
-    func fetchFavorites(username: String, collectionKeyword: String, flags: Int, olderThanId: Int? = nil) async throws -> [Item] {
+    func fetchFavorites(username: String, collectionKeyword: String, flags: Int, olderThanId: Int? = nil) async throws -> ApiResponse {
         Self.logger.debug("Fetching favorites for user \(username), collectionKeyword '\(collectionKeyword)', flags \(flags), olderThan: \(olderThanId ?? -1)")
         return try await fetchItems(
             flags: flags,
@@ -455,7 +470,7 @@ class APIService {
     }
 
     @available(*, deprecated, message: "Use fetchItems(tags:flags:promoted:olderThanId:showJunkParameter:) instead")
-    func searchItems(tags: String, flags: Int) async throws -> [Item] {
+    func searchItems(tags: String, flags: Int) async throws -> ApiResponse {
         return try await fetchItems(flags: flags, user: nil, tags: tags, showJunkParameter: false)
     }
 
@@ -937,7 +952,6 @@ class APIService {
         }
     }
     
-    // --- MODIFIED: postPrivateMessage now expects PostPrivateMessageAPIResponse ---
     func postPrivateMessage(to recipientName: String, messageText: String, nonce: String) async throws -> PostPrivateMessageAPIResponse {
         let endpoint = "/inbox/post"
         Self.logger.info("Attempting to post private message to '\(recipientName)'.")
@@ -956,35 +970,48 @@ class APIService {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            // --- NEW LOGGING FOR RAW JSON ---
             if let jsonString = String(data: data, encoding: .utf8) {
                 Self.logger.info("Raw JSON response from /inbox/post: \(jsonString)")
             }
-            // --- END NEW LOGGING ---
             let apiResponse: PostPrivateMessageAPIResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint)
             
-            // The success check is now based on the 'success' field in PostPrivateMessageAPIResponse
             if apiResponse.success {
                 Self.logger.info("Successfully posted private message to '\(recipientName)'. API returned \(apiResponse.messages.count) messages.")
             } else {
-                // If there's a success:false, we might not have an error message from the API in this structure.
-                // This part of the API might be inconsistent.
                 Self.logger.warning("Failed to post private message to '\(recipientName)': API success was false.")
                 throw NSError(domain: "APIService.postPrivateMessage", code: 1, userInfo: [NSLocalizedDescriptionKey: "Fehler beim Senden (API success:false)."])
             }
             return apiResponse
         } catch {
             Self.logger.error("Error posting private message to '\(recipientName)': \(error.localizedDescription)")
-            // Re-throw to be caught by the calling view
             throw error
         }
     }
-    // --- END MODIFICATION ---
 
 
     private func handleApiResponse<T: Decodable>(data: Data, response: URLResponse, endpoint: String) throws -> T {
         guard let httpResponse = response as? HTTPURLResponse else { Self.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }
-        guard (200..<300).contains(httpResponse.statusCode) else { let responseBody = String(data: data, encoding: .utf8) ?? "No body"; Self.logger.error("API Error (\(endpoint)): Invalid HTTP status code: \(httpResponse.statusCode). Body: \(responseBody)"); if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 { throw URLError(.userAuthenticationRequired, userInfo: [NSLocalizedDescriptionKey: "Authentication failed for \(endpoint)"]) }; throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(httpResponse.statusCode) for \(endpoint). Body: \(responseBody)"]) }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let responseBody = String(data: data, encoding: .utf8) ?? "No body"
+            Self.logger.error("API Error (\(endpoint)): Invalid HTTP status code: \(httpResponse.statusCode). Body: \(responseBody)")
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 { throw URLError(.userAuthenticationRequired, userInfo: [NSLocalizedDescriptionKey: "Authentication failed for \(endpoint)"]) }
+            // --- NEW: Decode error from body if possible ---
+            if let apiErrorResponse = try? decoder.decode(ApiResponse.self, from: data), let apiError = apiErrorResponse.error {
+                 if apiError == "tooShort" {
+                     throw NSError(domain: "APIService.\(endpoint.replacingOccurrences(of: "/", with: "."))", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Suchbegriff zu kurz (mind. 2 Zeichen)."])
+                 } else if apiError == "nothingFound" {
+                     // For "nothingFound", we might want to return an empty successful response T.
+                     // This requires T to have an "empty" state or be optional.
+                     // For ApiResponse itself, it's handled in fetchItems.
+                     // For other T, this is more complex. For now, throw a generic error.
+                     Self.logger.warning("API returned error '\(apiError)' for endpoint \(endpoint). This might need specific handling in the caller.")
+                 }
+                 // Generic error for other API-reported errors
+                 throw NSError(domain: "APIService.\(endpoint.replacingOccurrences(of: "/", with: "."))", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: apiError])
+            }
+            // --- END NEW ---
+            throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(httpResponse.statusCode) for \(endpoint). Body: \(responseBody)"])
+        }
         do { return try decoder.decode(T.self, from: data) }
         catch { Self.logger.error("API Error (\(endpoint)): Failed to decode JSON: \(error)"); if let decodingError = error as? DecodingError { Self.logger.error("Decoding Error Details (\(endpoint)): \(String(describing: decodingError))") }; if let jsonString = String(data: data, encoding: .utf8) { Self.logger.error("Problematic JSON string (\(endpoint)): \(jsonString)") }; throw error }
     }

@@ -21,9 +21,7 @@ class AuthService: ObservableObject {
     private let userVotesKey = "pr0grammUserVotes_v1"
     private let favoritedCommentsKey = "pr0grammFavoritedComments_v1"
     private let userCommentVotesKey = "pr0grammUserCommentVotes_v1"
-    // --- NEW: UserDefaults Key for Tag Votes ---
     private let userTagVotesKey = "pr0grammUserTagVotes_v1"
-    // --- END NEW ---
 
     // MARK: - Published Properties
     @Published var isLoggedIn: Bool = false
@@ -45,10 +43,8 @@ class AuthService: ObservableObject {
     @Published var votedCommentStates: [Int: Int] = [:]
     @Published private(set) var isVotingComment: [Int: Bool] = [:]
     
-    // --- NEW: Published Properties for Tag Votes ---
-    @Published var votedTagStates: [Int: Int] = [:] // [TagID: VoteState (1=up, -1=down, 0=none)]
-    @Published private(set) var isVotingTag: [Int: Bool] = [:] // [TagID: Bool]
-    // --- END NEW ---
+    @Published var votedTagStates: [Int: Int] = [:]
+    @Published private(set) var isVotingTag: [Int: Bool] = [:]
     
     @Published private(set) var userCollections: [ApiCollection] = []
 
@@ -59,9 +55,7 @@ class AuthService: ObservableObject {
         loadVotedStates()
         loadFavoritedCommentIDs()
         loadVotedCommentStates()
-        // --- NEW: Load Tag Vote States ---
         loadVotedTagStates()
-        // --- END NEW ---
         AuthService.logger.info("AuthService initialized. Loaded \(self.votedItemStates.count) item vote states, \(self.votedCommentStates.count) comment vote states, \(self.favoritedCommentIDs.count) favorited comment IDs, and \(self.votedTagStates.count) tag vote states.")
     }
 
@@ -85,9 +79,7 @@ class AuthService: ObservableObject {
             isLoading = true; loginError = nil; self.userNonce = nil; self.favoritedItemIDs = []; self.votedItemStates = [:]; self.isVoting = [:]
             self.favoritedCommentIDs = []; self.isFavoritingComment = [:]
             self.votedCommentStates = [:]; self.isVotingComment = [:]
-            // --- NEW: Reset Tag Vote States ---
             self.votedTagStates = [:]; self.isVotingTag = [:]
-            // --- END NEW ---
             self.userCollections = []
             AuthService.logger.debug("Resetting user-specific states for login.")
         }
@@ -141,9 +133,7 @@ class AuthService: ObservableObject {
                     loadVotedStates()
                     loadFavoritedCommentIDs()
                     loadVotedCommentStates()
-                    // --- NEW: Load Tag Vote States ---
                     loadVotedTagStates()
-                    // --- END NEW ---
                     AuthService.logger.info("Loaded states after successful login. ItemVotes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), TagVotes: \(self.votedTagStates.count), Collections: \(self.userCollections.count)")
                 }
 
@@ -327,7 +317,6 @@ class AuthService: ObservableObject {
         }
     }
 
-    // --- NEW: performTagVote method ---
     func performTagVote(tagId: Int, voteType: Int) async {
         guard isLoggedIn, let nonce = userNonce else {
             AuthService.logger.warning("Tag voting skipped: User not logged in or nonce missing.")
@@ -338,22 +327,22 @@ class AuthService: ObservableObject {
             return
         }
 
-        let currentVote = votedTagStates[tagId] ?? 0 // 0 = no vote, 1 = up, -1 = down
+        let currentVote = votedTagStates[tagId] ?? 0
         let targetVote: Int
 
-        if voteType == 1 { // Upvote
-            targetVote = (currentVote == 1) ? 0 : 1 // If already upvoted, unvote; otherwise upvote
-        } else if voteType == -1 { // Downvote
-            targetVote = (currentVote == -1) ? 0 : -1 // If already downvoted, unvote; otherwise downvote
+        if voteType == 1 {
+            targetVote = (currentVote == 1) ? 0 : 1
+        } else if voteType == -1 {
+            targetVote = (currentVote == -1) ? 0 : -1
         } else {
             AuthService.logger.error("Invalid voteType \(voteType) passed to performTagVote.")
             return
         }
 
-        let previousVoteState = votedTagStates[tagId] // Capture for potential revert
+        let previousVoteState = votedTagStates[tagId]
         AuthService.logger.debug("Setting isVotingTag=true for tag \(tagId)")
         isVotingTag[tagId] = true
-        votedTagStates[tagId] = targetVote // Optimistic UI update
+        votedTagStates[tagId] = targetVote
         AuthService.logger.debug("Optimistic UI: Set vote state for tag \(tagId) to \(targetVote).")
 
         defer {
@@ -366,19 +355,18 @@ class AuthService: ObservableObject {
         do {
             try await apiService.voteTag(tagId: tagId, vote: targetVote, nonce: nonce)
             AuthService.logger.info("Successfully voted \(targetVote) for tag \(tagId).")
-            saveVotedTagStates() // Persist the successful vote
+            saveVotedTagStates()
         } catch let error as URLError where error.code == .userAuthenticationRequired {
             AuthService.logger.error("Tag voting failed for tag \(tagId): Authentication required. Session might be invalid.")
-            votedTagStates[tagId] = previousVoteState // Revert optimistic UI
+            votedTagStates[tagId] = previousVoteState
             saveVotedTagStates()
             await logout()
         } catch {
             AuthService.logger.error("Tag voting failed for tag \(tagId): \(error.localizedDescription)")
-            votedTagStates[tagId] = previousVoteState // Revert optimistic UI
+            votedTagStates[tagId] = previousVoteState
             saveVotedTagStates()
         }
     }
-    // --- END NEW ---
 
     func performCommentFavToggle(commentId: Int) async {
         guard isLoggedIn, let nonce = userNonce else {
@@ -499,7 +487,6 @@ class AuthService: ObservableObject {
         AuthService.logger.trace("Saved \(stringKeyedVotes.count) vote states to UserDefaults.")
     }
 
-    // --- NEW: Load/Save for Tag Votes ---
     private func loadVotedTagStates() {
         if let savedVotes = UserDefaults.standard.dictionary(forKey: userTagVotesKey) as? [String: Int] {
             let loadedStates = Dictionary(uniqueKeysWithValues: savedVotes.compactMap { (key: String, value: Int) -> (Int, Int)? in
@@ -519,7 +506,6 @@ class AuthService: ObservableObject {
         UserDefaults.standard.set(stringKeyedVotes, forKey: userTagVotesKey)
         AuthService.logger.trace("Saved \(stringKeyedVotes.count) tag vote states to UserDefaults.")
     }
-    // --- END NEW ---
 
     private func loadVotedCommentStates() {
         if let savedVotes = UserDefaults.standard.dictionary(forKey: userCommentVotesKey) as? [String: Int] {
@@ -572,25 +558,40 @@ class AuthService: ObservableObject {
         var allFavorites: [Item] = []
         var olderThanId: Int? = nil
         var fetchError: Error? = nil
-        let maxPages = 10
+        let maxPages = 10 // Limit initial load to prevent excessive API calls
         var pagesFetched = 0
 
         do {
             while pagesFetched < maxPages {
                 AuthService.logger.debug("Fetching favorites page \(pagesFetched + 1) for collection '\(collectionKeyword)' (older: \(olderThanId ?? -1))...")
-                let fetchedItems = try await apiService.fetchFavorites(
+                // --- MODIFIED: Use apiResponse from fetchFavorites ---
+                let apiResponse = try await apiService.fetchFavorites(
                     username: username,
                     collectionKeyword: collectionKeyword,
-                    flags: 1,
+                    flags: 1, // Default flags for initial favorite ID load
                     olderThanId: olderThanId
                 )
+                let fetchedItems = apiResponse.items
+                // --- END MODIFICATION ---
+
+                // --- MODIFIED: Check fetchedItems.isEmpty ---
                 if fetchedItems.isEmpty {
                     AuthService.logger.debug("Reached end of favorites feed (collection '\(collectionKeyword)') during initial load.")
                     break
                 }
+                // --- END MODIFICATION ---
+                // --- MODIFIED: Append fetchedItems ---
                 allFavorites.append(contentsOf: fetchedItems)
+                // --- END MODIFICATION ---
+                // --- MODIFIED: Get last ID from fetchedItems ---
                 olderThanId = fetchedItems.last?.id
+                // --- END MODIFICATION ---
                 pagesFetched += 1
+                 // Break if atEnd or hasOlder == false
+                 if (apiResponse.atEnd ?? true) || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
+                     AuthService.logger.info("API indicated end of feed (atEnd or !hasOlder) for collection '\(collectionKeyword)'.")
+                     break
+                 }
             }
         } catch {
             AuthService.logger.error("Error fetching favorites (collection '\(collectionKeyword)') during initial load: \(error.localizedDescription)")
@@ -600,7 +601,7 @@ class AuthService: ObservableObject {
         let finalIDs = Set(allFavorites.map { $0.id })
         await MainActor.run { self.favoritedItemIDs = finalIDs }
         AuthService.logger.info("Finished loading initial favorites for collection '\(collectionKeyword)'. Loaded \(finalIDs.count) IDs across \(pagesFetched) pages. Error encountered: \(fetchError != nil)")
-        return fetchError == nil || !finalIDs.isEmpty
+        return fetchError == nil || !finalIDs.isEmpty // Consider successful if some IDs loaded, even with partial error
     }
 
     @discardableResult
@@ -705,9 +706,7 @@ class AuthService: ObservableObject {
             self.votedItemStates = [:]; self.isVoting = [:]
             self.favoritedCommentIDs = []; self.isFavoritingComment = [:]
             self.votedCommentStates = [:]; self.isVotingComment = [:]
-            // --- NEW: Reset Tag Vote States ---
             self.votedTagStates = [:]; self.isVotingTag = [:]
-            // --- END NEW ---
             self.userCollections = []
             self.appSettings.selectedCollectionIdForFavorites = nil
             self.appSettings.showSFW = true; self.appSettings.showNSFW = false; self.appSettings.showNSFL = false;
@@ -719,9 +718,7 @@ class AuthService: ObservableObject {
         UserDefaults.standard.removeObject(forKey: userVotesKey)
         UserDefaults.standard.removeObject(forKey: favoritedCommentsKey)
         UserDefaults.standard.removeObject(forKey: userCommentVotesKey)
-        // --- NEW: Remove Tag Vote States from UserDefaults ---
         UserDefaults.standard.removeObject(forKey: userTagVotesKey)
-        // --- END NEW ---
         
         await self.appSettings.clearFavoritesCache(username: usernameToClearCache, collectionId: collectionIdToClearCache)
         AuthService.logger.info("Reset content filters to SFW-only and cleared persisted item votes, comment favorites, comment votes, and tag votes. Cleared collections data and favorites cache.")

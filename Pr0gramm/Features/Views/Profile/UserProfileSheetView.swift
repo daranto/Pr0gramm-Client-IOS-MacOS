@@ -30,10 +30,8 @@ struct UserProfileSheetView: View {
     @State private var itemForDetailSheet: Item? = nil
     @State private var targetCommentIDForDetailSheet: Int? = nil
     
-    // --- NEW: State für weitere Sheets ---
     @State private var showAllUploadsSheet = false
     @State private var showAllCommentsSheet = false
-    // --- END NEW ---
 
     @State private var isLoadingNavigationTarget: Bool = false
     @State private var navigationTargetItemId: Int? = nil
@@ -42,9 +40,6 @@ struct UserProfileSheetView: View {
     @State private var didLoad: Bool = false
 
     @StateObject private var playerManager = VideoPlayerManager()
-    // sheetNavigationPath wird nicht mehr benötigt, da wir keine Push-Navigation mehr im Sheet haben
-    // @State private var sheetNavigationPath = NavigationPath()
-
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserProfileSheetView")
@@ -58,12 +53,11 @@ struct UserProfileSheetView: View {
     }()
 
     var body: some View {
-        // --- MODIFIED: NavigationStack ist nur noch für den Titel und die Toolbar da, keine deep navigation mehr ---
         NavigationStack {
             List {
                 profileInfoSection()
-                userUploadsSection() // Wird jetzt Buttons für Sheet enthalten
-                userCommentsSection() // Wird jetzt Buttons für Sheet enthalten
+                userUploadsSection()
+                userCommentsSection()
             }
             .navigationTitle(username)
             #if os(iOS)
@@ -89,11 +83,10 @@ struct UserProfileSheetView: View {
                 UserProfileSheetView.logger.info("Global filters (apiFlags) changed. Reloading data for \(username) sheet.")
                 Task { await loadAllData(forceRefresh: true) }
             }
-            // --- REMOVED: .navigationDestination(for: ProfileNavigationTarget.self) ---
             .environment(\.openURL, OpenURLAction { url in
                 if let itemID = parsePr0grammLink(url: url) {
-                    UserProfileSheetView.logger.info("Pr0gramm link tapped in UserProfileSheet comment, setting previewLinkTargetFromComment (was: navigation).")
-                    self.previewLinkTargetFromComment = PreviewLinkTarget(id: itemID) // Behält Sheet für externe Links
+                    UserProfileSheetView.logger.info("Pr0gramm link tapped in UserProfileSheet comment, setting previewLinkTargetFromComment.")
+                    self.previewLinkTargetFromComment = PreviewLinkTarget(id: itemID)
                     return .handled
                 } else {
                     UserProfileSheetView.logger.info("Non-pr0gramm link tapped in UserProfileSheet: \(url). Opening in system browser.")
@@ -111,10 +104,10 @@ struct UserProfileSheetView: View {
                 targetCommentIDForDetailSheet = nil
             }) {
                 if let item = itemForDetailSheet {
-                    NavigationStack{ // Eigener Stack für dieses Sheet
+                    NavigationStack{
                         PagedDetailViewWrapperForItem(
                             item: item,
-                            playerManager: playerManager, // Überlege, ob eine neue Instanz hier besser wäre
+                            playerManager: playerManager,
                             targetCommentID: targetCommentIDForDetailSheet
                         )
                         .environmentObject(settings)
@@ -127,9 +120,8 @@ struct UserProfileSheetView: View {
                     }
                 }
             }
-            // --- NEW: Sheets für alle Uploads und alle Kommentare ---
             .sheet(isPresented: $showAllUploadsSheet) {
-                NavigationStack { // Eigener Stack für dieses Sheet
+                NavigationStack {
                     UserUploadsView(username: username)
                         .environmentObject(settings)
                         .environmentObject(authService)
@@ -137,14 +129,13 @@ struct UserProfileSheetView: View {
                 }
             }
             .sheet(isPresented: $showAllCommentsSheet) {
-                NavigationStack { // Eigener Stack für dieses Sheet
+                NavigationStack {
                     UserProfileCommentsView(username: username)
                         .environmentObject(settings)
                         .environmentObject(authService)
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllCommentsSheet = false } } }
                 }
             }
-            // --- END NEW ---
             .sheet(item: $previewLinkTargetFromComment) { target in
                  LinkedItemPreviewView(itemID: target.id)
                      .environmentObject(settings)
@@ -155,7 +146,6 @@ struct UserProfileSheetView: View {
 
     private func loadAllData(forceRefresh: Bool = false) async {
         UserProfileSheetView.logger.info("Loading all data for user \(username). Force refresh: \(forceRefresh)")
-        // sheetNavigationPath wird nicht mehr verwendet
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await loadProfileInfo(forceRefresh: forceRefresh) }
             group.addTask { await loadUserUploads(isRefresh: forceRefresh, initialLoad: true) }
@@ -211,21 +201,20 @@ struct UserProfileSheetView: View {
     @ViewBuilder
     private func userUploadsSection() -> some View {
         Section {
-            // ... (Inhalt der Upload-Vorschau bleibt gleich) ...
-            if isLoadingUploads && userUploads.isEmpty { // Ladeanzeige
+            if isLoadingUploads && userUploads.isEmpty {
                 HStack { Spacer(); ProgressView(); Text("Lade Uploads...").font(.footnote); Spacer() }
             } else if let error = uploadsError {
                 Text("Fehler: \(error)").foregroundColor(.red)
-            } else if userUploads.isEmpty && profileInfo?.uploadCount ?? 0 > 0 { // Wenn es Uploads gibt, aber keine den Filtern entsprechen
+            } else if userUploads.isEmpty && profileInfo?.uploadCount ?? 0 > 0 {
                  Text("\(username) hat keine Uploads, die deinen aktuellen Filtern entsprechen.")
                     .foregroundColor(.secondary)
                     .font(UIConstants.footnoteFont)
-            } else if userUploads.isEmpty { // Wenn es generell keine Uploads gibt
+            } else if userUploads.isEmpty {
                 Text("\(username) hat (noch) keine Uploads.").foregroundColor(.secondary)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(userUploads.prefix(uploadsPageLimit)) { item in
+                        ForEach(userUploads) { item in // No .prefix here, as it's already limited in loadUserUploads
                             Button {
                                 Task { await prepareAndShowItemDetailSheet(item.id, targetCommentID: nil) }
                             } label: {
@@ -241,7 +230,6 @@ struct UserProfileSheetView: View {
                 .frame(height: 100)
             }
         } header: {
-            // --- MODIFIED: NavigationLink zu Button, der Sheet öffnet ---
             Button {
                 showAllUploadsSheet = true
             } label: {
@@ -251,22 +239,20 @@ struct UserProfileSheetView: View {
                     if let totalUploads = profileInfo?.uploadCount, totalUploads > 0 {
                         Text("Alle \(totalUploads) anzeigen")
                             .font(.caption)
-                            // .foregroundColor(.accentColor) // Button Style kümmert sich drum
                     }
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
             }
-            .buttonStyle(.plain) // Damit es wie ein Listeneintrag aussieht
-            .disabled((profileInfo?.uploadCount ?? 0) == 0) // Deaktiviere, wenn keine Uploads
-            // --- END MODIFICATION ---
+            .buttonStyle(.plain)
+            .disabled((profileInfo?.uploadCount ?? 0) == 0)
         }
         .headerProminence(.increased)
     }
 
     private func loadUserUploads(isRefresh: Bool = false, initialLoad: Bool = false) async {
-        if !initialLoad && !isRefresh { return }
+        if !initialLoad && !isRefresh && !userUploads.isEmpty { return } // Skip if already loaded and not forced
         UserProfileSheetView.logger.info("Loading uploads for \(username) (Profile Sheet - Using global filters: \(settings.apiFlags)). Refresh: \(isRefresh), Initial: \(initialLoad)")
         await MainActor.run {
             if isRefresh || initialLoad { userUploads = [] }
@@ -274,7 +260,10 @@ struct UserProfileSheetView: View {
         }
         do {
             let flagsToFetchWith = settings.apiFlags
-            let fetchedItems = try await apiService.fetchItems(flags: flagsToFetchWith, user: username, olderThanId: nil)
+            let apiResponse = try await apiService.fetchItems(flags: flagsToFetchWith, user: username, olderThanId: nil)
+            // --- MODIFIED: Extract items from apiResponse ---
+            let fetchedItems = apiResponse.items
+            // --- END MODIFICATION ---
             await MainActor.run { userUploads = Array(fetchedItems.prefix(uploadsPageLimit)) }
         } catch {
             UserProfileSheetView.logger.error("Failed to load uploads for \(username): \(error.localizedDescription)")
@@ -286,7 +275,6 @@ struct UserProfileSheetView: View {
     @ViewBuilder
     private func userCommentsSection() -> some View {
         Section {
-            // ... (Inhalt der Kommentar-Vorschau bleibt gleich) ...
             if isLoadingComments && userComments.isEmpty {
                 HStack { Spacer(); ProgressView(); Text("Lade Kommentare...").font(.footnote); Spacer() }
             } else if let error = commentsError {
@@ -298,7 +286,7 @@ struct UserProfileSheetView: View {
             } else if userComments.isEmpty {
                 Text("\(username) hat (noch) keine Kommentare geschrieben.").foregroundColor(.secondary)
             } else {
-                ForEach(userComments.prefix(commentsPageLimit)) { comment in
+                ForEach(userComments) { comment in // No .prefix here, as it's limited in loadUserComments
                     Button {
                         Task { await prepareAndShowItemDetailSheet(comment.itemId, targetCommentID: comment.id) }
                     } label: {
@@ -313,7 +301,6 @@ struct UserProfileSheetView: View {
                 }
             }
         } header: {
-            // --- MODIFIED: NavigationLink zu Button, der Sheet öffnet ---
             Button {
                 showAllCommentsSheet = true
             } label: {
@@ -323,20 +310,18 @@ struct UserProfileSheetView: View {
                     if let totalComments = profileInfo?.commentCount, totalComments > 0 {
                         Text("Alle \(totalComments) anzeigen")
                             .font(.caption)
-                            // .foregroundColor(.accentColor)
                     }
                     Image(systemName: "chevron.right").font(.caption).foregroundColor(.secondary)
                 }
             }
             .buttonStyle(.plain)
             .disabled((profileInfo?.commentCount ?? 0) == 0)
-            // --- END MODIFICATION ---
         }
         .headerProminence(.increased)
     }
 
     private func loadUserComments(isRefresh: Bool = false, initialLoad: Bool = false) async {
-        if !initialLoad && !isRefresh { return }
+        if !initialLoad && !isRefresh && !userComments.isEmpty { return } // Skip if already loaded and not forced
         UserProfileSheetView.logger.info("Loading comments for \(username) (Profile Sheet - Using global filters: \(settings.apiFlags)). Refresh: \(isRefresh), Initial: \(initialLoad)")
         await MainActor.run {
             if isRefresh || initialLoad { userComments = [] }
@@ -374,8 +359,8 @@ struct UserProfileSheetView: View {
         targetCommentIDForDetailSheet = nil
 
         do {
-            let flagsToFetchWith = 31
-            UserProfileSheetView.logger.debug("Fetching item \(id) for sheet display using flags: \(flagsToFetchWith)")
+            let flagsToFetchWith = settings.apiFlags // Use global filters for consistency
+            UserProfileSheetView.logger.debug("Fetching item \(id) for sheet display using global flags: \(flagsToFetchWith)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
 
             guard navigationTargetItemId == id else {
@@ -388,12 +373,16 @@ struct UserProfileSheetView: View {
                 targetCommentIDForDetailSheet = targetCommentID
                 showPostDetailSheet = true
             } else {
-                UserProfileSheetView.logger.warning("Could not fetch item \(id) for sheet display (API returned nil).")
+                UserProfileSheetView.logger.warning("Could not fetch item \(id) for sheet display (API returned nil or item does not match filters).")
+                // Optionally show an error to the user
+                // self.profileInfoError = "Post \(id) konnte nicht geladen werden oder entspricht nicht den Filtern."
             }
         } catch is CancellationError {
             UserProfileSheetView.logger.info("Item fetch for sheet display cancelled (ID: \(id)).")
         } catch {
             UserProfileSheetView.logger.error("Failed to fetch item \(id) for sheet display: \(error.localizedDescription)")
+            // Optionally show an error to the user
+            // if navigationTargetItemId == id { self.profileInfoError = "Post \(id) konnte nicht geladen werden: \(error.localizedDescription)" }
         }
         if navigationTargetItemId == id {
              isLoadingNavigationTarget = false

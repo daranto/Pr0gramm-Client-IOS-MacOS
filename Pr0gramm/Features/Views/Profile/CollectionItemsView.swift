@@ -18,13 +18,11 @@ struct CollectionItemsView: View {
     @State private var isLoading = false
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
-    @State private var showNoFilterMessage = false // State to show if filters hide all content
+    @State private var showNoFilterMessage = false
 
     @State private var navigationPath = NavigationPath()
     @StateObject private var playerManager = VideoPlayerManager()
-    // --- NEW: State for showing filter sheet ---
     @State private var showingFilterSheet = false
-    // --- END NEW ---
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CollectionItemsView")
@@ -37,7 +35,7 @@ struct CollectionItemsView: View {
 
     private var gridColumns: [GridItem] {
             let isMac = ProcessInfo.processInfo.isiOSAppOnMac
-            let currentHorizontalSizeClass: UserInterfaceSizeClass? = isMac ? .regular : .compact // Vereinfachte Annahme
+            let currentHorizontalSizeClass: UserInterfaceSizeClass? = isMac ? .regular : .compact
 
             let numberOfColumns = settings.gridSize.columns(for: currentHorizontalSizeClass, isMac: isMac)
             let minItemWidth: CGFloat = isMac ? 150 : (numberOfColumns <= 3 ? 100 : 80)
@@ -47,9 +45,7 @@ struct CollectionItemsView: View {
 
     private var collectionItemsCacheKey: String {
         let safeKeyword = collection.keyword?.replacingOccurrences(of: " ", with: "_") ?? "id_\(collection.id)"
-        // --- MODIFIED: Include current apiFlags in cache key for collections ---
         return "collection_\(username.lowercased())_\(safeKeyword)_flags_\(settings.apiFlags)_items"
-        // --- END MODIFICATION ---
     }
 
     var body: some View {
@@ -58,7 +54,6 @@ struct CollectionItemsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        // --- NEW: ToolbarItem for filter button ---
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -69,12 +64,10 @@ struct CollectionItemsView: View {
             }
         }
         .sheet(isPresented: $showingFilterSheet) {
-            // FilterView for collections should hide feed-specific options
             FilterView(hideFeedOptions: true)
                 .environmentObject(settings)
                 .environmentObject(authService)
         }
-        // --- END NEW ---
         .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
             Button("OK") { errorMessage = nil }
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
@@ -83,15 +76,11 @@ struct CollectionItemsView: View {
         }
         .task {
             playerManager.configure(settings: settings)
-            if items.isEmpty {
+            if items.isEmpty { // Load only if items are not pre-populated (e.g., by preview)
                 await refreshItems()
             }
         }
-        .onChange(of: settings.showSFW) { _, _ in Task { await refreshItems() } }
-        .onChange(of: settings.showNSFW) { _, _ in Task { await refreshItems() } }
-        .onChange(of: settings.showNSFL) { _, _ in Task { await refreshItems() } }
-        .onChange(of: settings.showNSFP) { _, _ in Task { await refreshItems() } }
-        .onChange(of: settings.showPOL) { _, _ in Task { await refreshItems() } }
+        .onChange(of: settings.apiFlags) { _, _ in Task { await refreshItems() } } // Simplified from individual filter changes
         .onChange(of: settings.seenItemIDs) { _, _ in CollectionItemsView.logger.trace("CollectionItemsView detected change in seenItemIDs.") }
     }
 
@@ -102,7 +91,7 @@ struct CollectionItemsView: View {
                 items: $items,
                 selectedIndex: index,
                 playerManager: playerManager,
-                loadMoreAction: loadMoreItems
+                loadMoreAction: { Task { await loadMoreItems() } } // Pass the correct load more action
             )
         } else {
             Text("Fehler: Item \(destinationItem.id) nicht mehr in der Sammlung gefunden.")
@@ -131,10 +120,9 @@ struct CollectionItemsView: View {
                         .font(UIConstants.bodyFont)
                  }
                  .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if showNoFilterMessage { // Check for this state specifically
+            } else if showNoFilterMessage {
                  noFilterContentView
             } else if items.isEmpty && !isLoading && errorMessage == nil {
-                // This message is now more specific to an empty collection *after* filters are considered
                 Text("Diese Sammlung enthält keine Items, die deinen aktuellen Filtern entsprechen.")
                     .font(UIConstants.bodyFont)
                     .foregroundColor(.secondary)
@@ -185,13 +173,11 @@ struct CollectionItemsView: View {
              Text("Keine Items für Filter").font(UIConstants.headlineFont)
              Text("Bitte passe deine globalen Inhaltsfilter an, um möglicherweise mehr Items in dieser Sammlung zu sehen.")
                 .font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
-             // --- MODIFIED: Add button to open filter sheet ---
              Button("Filter anpassen") {
                  showingFilterSheet = true
              }
              .buttonStyle(.bordered)
              .padding(.top)
-             // --- END MODIFICATION ---
              Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -202,17 +188,17 @@ struct CollectionItemsView: View {
     @MainActor
     func refreshItems() async {
         CollectionItemsView.logger.info("Refreshing items for collection: '\(collection.name)' (Keyword: \(collection.keyword ?? "N/A")) by user: \(username)")
-        let cacheKey = collectionItemsCacheKey // Cache key now includes flags
+        let cacheKey = collectionItemsCacheKey
 
         self.isLoading = true
         self.errorMessage = nil
-        self.showNoFilterMessage = false // Reset this flag
+        self.showNoFilterMessage = false
         defer { Task { @MainActor in self.isLoading = false; CollectionItemsView.logger.info("Finished item refresh process for collection '\(collection.name)'.") } }
 
         guard settings.hasActiveContentFilter else {
             CollectionItemsView.logger.warning("Refresh items for collection '\(collection.name)' blocked: No active content filter selected.")
-            self.items = [] // Clear items
-            self.showNoFilterMessage = true // Set flag to show specific message
+            self.items = []
+            self.showNoFilterMessage = true
             self.canLoadMore = false
             self.isLoadingMore = false
             return
@@ -225,7 +211,7 @@ struct CollectionItemsView: View {
 
         canLoadMore = true; isLoadingMore = false; var initialItemsFromCache: [Item]? = nil
 
-        if self.items.isEmpty { // Only load from cache if items are truly empty (not pre-populated by preview)
+        if self.items.isEmpty {
             initialItemsFromCache = await settings.loadItemsFromCache(forKey: cacheKey)
             if let cached = initialItemsFromCache, !cached.isEmpty {
                  CollectionItemsView.logger.info("Found \(cached.count) items in cache for collection '\(collection.name)' with current filters.");
@@ -239,34 +225,38 @@ struct CollectionItemsView: View {
         CollectionItemsView.logger.info("Performing API fetch for collection items refresh (Collection Keyword: '\(collectionNameForAPI)', User: \(username), Flags: \(settings.apiFlags))...");
         do {
             let isOwn = authService.currentUser?.name.lowercased() == username.lowercased() && authService.isLoggedIn
-            let fetchedItemsFromAPI = try await apiService.fetchItems(
+            // --- MODIFIED: Use apiResponse ---
+            let apiResponse = try await apiService.fetchItems(
                 flags: settings.apiFlags,
                 user: username,
                 collectionNameForUser: collectionNameForAPI,
                 isOwnCollection: isOwn
             )
+            let fetchedItemsFromAPI = apiResponse.items
+            // --- END MODIFICATION ---
             CollectionItemsView.logger.info("API fetch for collection '\(collection.name)' completed: \(fetchedItemsFromAPI.count) items.")
             guard !Task.isCancelled else { return }
 
             self.items = fetchedItemsFromAPI
-            // --- MODIFIED: Set showNoFilterMessage if API returns empty with active filters ---
             if fetchedItemsFromAPI.isEmpty && settings.hasActiveContentFilter {
                 self.showNoFilterMessage = true
                 CollectionItemsView.logger.info("API returned no items for collection '\(collection.name)' with active filters. Setting showNoFilterMessage.")
             } else {
                 self.showNoFilterMessage = false
             }
+            // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
+            self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
             // --- END MODIFICATION ---
-            self.canLoadMore = !fetchedItemsFromAPI.isEmpty
-
-            CollectionItemsView.logger.info("CollectionItemsView updated with \(fetchedItemsFromAPI.count) items from API for collection '\(collection.name)'.")
+            CollectionItemsView.logger.info("CollectionItemsView updated with \(fetchedItemsFromAPI.count) items from API for collection '\(collection.name)'. Can load more: \(self.canLoadMore)")
 
             let newFirstItemId = fetchedItemsFromAPI.first?.id
             if !navigationPath.isEmpty && (initialItemsFromCache == nil || initialItemsFromCache?.count != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId) {
                 navigationPath = NavigationPath()
                 CollectionItemsView.logger.info("Popped navigation due to collection items refresh resulting in different list content.")
             }
+            // --- MODIFIED: Pass fetchedItemsFromAPI to save ---
             await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
+            // --- END MODIFICATION ---
             await settings.updateCacheSizes()
         }
         catch let error as URLError where error.code == .userAuthenticationRequired {
@@ -294,7 +284,7 @@ struct CollectionItemsView: View {
             CollectionItemsView.logger.debug("Skipping loadMoreItems for collection '\(collection.name)': State prevents loading.")
             return
         }
-        guard let lastItemId = items.last?.id else {
+        guard let lastItemId = items.last?.id else { // Use item ID for pagination for collections
             CollectionItemsView.logger.warning("Skipping loadMoreItems for collection '\(collection.name)': No last item found.")
             return
         }
@@ -303,20 +293,23 @@ struct CollectionItemsView: View {
             self.canLoadMore = false; return
         }
 
-        let cacheKey = collectionItemsCacheKey // Cache key now includes flags
+        let cacheKey = collectionItemsCacheKey
         CollectionItemsView.logger.info("--- Starting loadMoreItems for collection '\(collection.name)' by \(username) older than \(lastItemId) ---");
         self.isLoadingMore = true;
         defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; CollectionItemsView.logger.info("--- Finished loadMoreItems for collection '\(collection.name)' ---") } } }
 
         do {
             let isOwn = authService.currentUser?.name.lowercased() == username.lowercased() && authService.isLoggedIn
-            let newItems = try await apiService.fetchItems(
+            // --- MODIFIED: Use apiResponse ---
+            let apiResponse = try await apiService.fetchItems(
                 flags: settings.apiFlags,
                 user: username,
                 olderThanId: lastItemId,
                 collectionNameForUser: collectionNameForAPI,
                 isOwnCollection: isOwn
             )
+            let newItems = apiResponse.items
+            // --- END MODIFICATION ---
             CollectionItemsView.logger.info("Loaded \(newItems.count) more items from API for collection '\(collection.name)'.");
             var appendedItemCount = 0
             guard !Task.isCancelled else { return }
@@ -324,24 +317,35 @@ struct CollectionItemsView: View {
 
             if newItems.isEmpty {
                 CollectionItemsView.logger.info("Reached end of item feed for collection '\(collection.name)'.")
-                self.canLoadMore = false
+                // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
+                self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
+                if self.canLoadMore { CollectionItemsView.logger.warning("API returned empty but atEnd/hasOlder suggests more. API inconsistency?")}
+                // --- END MODIFICATION ---
             } else {
                 let currentIDs = Set(self.items.map { $0.id })
+                // --- MODIFIED: Filter newItems ---
                 let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) };
+                // --- END MODIFICATION ---
                 if uniqueNewItems.isEmpty {
                     CollectionItemsView.logger.warning("All loaded items for collection '\(collection.name)' (older than \(lastItemId)) were duplicates.")
-                    self.canLoadMore = true
+                    // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
+                    self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
+                    // --- END MODIFICATION ---
                 } else {
                     self.items.append(contentsOf: uniqueNewItems)
                     appendedItemCount = uniqueNewItems.count
                     CollectionItemsView.logger.info("Appended \(uniqueNewItems.count) unique items to collection '\(collection.name)'. Total items: \(self.items.count)")
-                    self.canLoadMore = true
+                    // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
+                    self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
+                    // --- END MODIFICATION ---
                 }
             }
 
             if appendedItemCount > 0 {
                 let itemsToSave = self.items
-                await settings.saveItemsToCache(itemsToSave, forKey: cacheKey); // Save with current flags
+                // --- MODIFIED: Pass itemsToSave ---
+                await settings.saveItemsToCache(itemsToSave, forKey: cacheKey);
+                // --- END MODIFICATION ---
                 await settings.updateCacheSizes()
             }
         }
@@ -397,7 +401,7 @@ struct CollectionItemsView: View {
     return Previewer()
 }
 
-#Preview("Empty Collection - No Filter Active") { // Preview to test noFilterContentView
+#Preview("Empty Collection - No Filter Active") {
     struct Previewer: View {
         @StateObject private var settings = AppSettings()
         @StateObject private var authService: AuthService
@@ -406,7 +410,6 @@ struct CollectionItemsView: View {
 
         init() {
             let tempSettings = AppSettings()
-            // Simulate no active filters
             tempSettings.showSFW = false
             tempSettings.showNSFW = false
             tempSettings.showNSFL = false
@@ -416,7 +419,7 @@ struct CollectionItemsView: View {
             _settings = StateObject(wrappedValue: tempSettings)
             _authService = StateObject(wrappedValue: AuthService(appSettings: tempSettings))
             
-            self.emptyCollection = ApiCollection(id: 103, name: "Leere Sammlung", keyword: "empty", isPublic: 0, isDefault: 0, itemCount: 10) // Give it some items for the scenario
+            self.emptyCollection = ApiCollection(id: 103, name: "Leere Sammlung", keyword: "empty", isPublic: 0, isDefault: 0, itemCount: 10)
             self.username = "Daranto"
 
             authService.isLoggedIn = true
@@ -425,7 +428,7 @@ struct CollectionItemsView: View {
         
         var body: some View {
             NavigationStack {
-                CollectionItemsView(collection: emptyCollection, username: username, initialItemsForPreview: []) // Start with empty to trigger refresh
+                CollectionItemsView(collection: emptyCollection, username: username, initialItemsForPreview: [])
                     .environmentObject(settings)
                     .environmentObject(authService)
             }
