@@ -100,7 +100,11 @@ struct FeedView: View {
                 feedContentView
             }
             .sheet(isPresented: $showingFilterSheet) {
-                 FilterView(hideFeedOptions: true).environmentObject(settings).environmentObject(authService)
+                 // --- MODIFIED: Pass showHideSeenItemsToggle: true ---
+                 FilterView(hideFeedOptions: true, showHideSeenItemsToggle: true)
+                     .environmentObject(settings)
+                     .environmentObject(authService)
+                 // --- END MODIFICATION ---
             }
             .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) { Button("OK") { errorMessage = nil } } message: { Text(errorMessage ?? "Unbekannter Fehler") }
             .navigationDestination(for: Item.self) { destinationItem in
@@ -140,7 +144,7 @@ struct FeedView: View {
             }
             .onChange(of: popToRootTrigger) { if !navigationPath.isEmpty { navigationPath = NavigationPath() } }
             .onChange(of: settings.seenItemIDs) { _, _ in FeedView.logger.trace("FeedView detected change in seenItemIDs, body will update.") }
-            .onChange(of: settings.hideSeenItems) { _, newValue in
+            .onChange(of: settings.hideSeenItems) { _, newValue in // This now directly controls the filter, no need to check enableExperimentalHideSeen here for refresh
                 FeedView.logger.info("Hide seen items setting changed to: \(newValue)")
                 triggerRefreshTask(resetInitialLoad: true)
             }
@@ -161,7 +165,7 @@ struct FeedView: View {
         else if isLoading && (items.isEmpty || !didLoadInitially) {
             ProgressView("Lade...").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if displayedItems.isEmpty && !isLoading && errorMessage == nil && !showNoFilterMessage {
-             let message = settings.hideSeenItems ? "Übersicht wird geladen..." : "Übersicht wird geladen..." // This message might need adjustment based on context
+             let message = settings.hideSeenItems && settings.enableExperimentalHideSeen ? "Keine neuen Posts, die den Filtern entsprechen." : "Keine Posts für die aktuellen Filter gefunden."
              Text(message).foregroundColor(.secondary).multilineTextAlignment(.center).padding().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else { scrollViewContent }
     }
@@ -239,31 +243,25 @@ struct FeedView: View {
         FeedView.logger.info("Starting API fetch for refresh (FeedType: \(settings.feedType.displayName), Flags: \(currentApiFlags), Promoted: \(String(describing: currentFeedTypePromoted)), Junk: \(currentShowJunk)). Strategy: REPLACE.")
         
         do {
-            // --- MODIFIED: Use apiResponse from fetchItems ---
             let apiResponse = try await apiService.fetchItems(
                 flags: currentApiFlags,
                 promoted: currentFeedTypePromoted,
                 showJunkParameter: currentShowJunk
             )
             let fetchedItemsFromAPI = apiResponse.items
-            // --- END MODIFICATION ---
 
             guard !Task.isCancelled else { FeedView.logger.info("RefreshItems Task cancelled after API fetch."); return }
             FeedView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) items received for refresh.")
             
             await MainActor.run {
                  self.items = fetchedItemsFromAPI
-                 // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
                  self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                 // --- END MODIFICATION ---
                  FeedView.logger.info("FeedView updated (REPLACED). Count: \(self.items.count). Can load more: \(self.canLoadMore)")
                  if !navigationPath.isEmpty { navigationPath = NavigationPath(); FeedView.logger.info("Popped navigation due to refresh.") }
                  self.showNoFilterMessage = false
                  self.didLoadInitially = true
             }
-            // --- MODIFIED: Pass fetchedItemsFromAPI to save ---
             await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: currentCacheKey)
-            // --- END MODIFICATION ---
             await settings.updateCacheSizes()
         } catch is CancellationError { FeedView.logger.info("RefreshItems Task API call explicitly cancelled.") }
           catch {
@@ -306,7 +304,6 @@ struct FeedView: View {
         defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; FeedView.logger.info("--- Finished loadMoreItems older than \(olderValue) (isLoadingMore set to false via defer) ---") } } }
         
         do {
-            // --- MODIFIED: Use apiResponse from fetchItems ---
             let apiResponse = try await apiService.fetchItems(
                 flags: settings.apiFlags,
                 promoted: settings.apiPromoted,
@@ -314,7 +311,6 @@ struct FeedView: View {
                 showJunkParameter: settings.apiShowJunk
             )
             let newItems = apiResponse.items
-            // --- END MODIFICATION ---
 
             guard !Task.isCancelled else { FeedView.logger.info("LoadMoreItems Task cancelled after API fetch."); return }
             FeedView.logger.info("Loaded \(newItems.count) more items from API (requesting older than \(olderValue)).");
@@ -323,33 +319,25 @@ struct FeedView: View {
             await MainActor.run {
                 if newItems.isEmpty {
                     FeedView.logger.info("Reached end of feed (API returned empty list for older than \(olderValue)).")
-                    // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
                     canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
                     if canLoadMore { FeedView.logger.warning("API returned empty list for loadMore, but atEnd/hasOlder suggests more items. Might be an API issue.") }
-                    // --- END MODIFICATION ---
                 } else {
                     let currentIDs = Set(self.items.map { $0.id })
                     let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
                     if uniqueNewItems.isEmpty {
                         FeedView.logger.warning("All loaded items (older than \(olderValue)) were duplicates.")
-                        // --- MODIFIED: Use apiResponse.atEnd or hasOlder even for duplicates ---
                         canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                        // --- END MODIFICATION ---
                     } else {
                         self.items.append(contentsOf: uniqueNewItems)
                         appendedItemCount = uniqueNewItems.count
                         FeedView.logger.info("Appended \(uniqueNewItems.count) unique items to original list. Total items: \(self.items.count)")
-                        // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
                         self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                        // --- END MODIFICATION ---
                     }
                 }
             }
             if appendedItemCount > 0 {
                 let itemsToSave = await MainActor.run { self.items }
-                // --- MODIFIED: Pass itemsToSave ---
                 await settings.saveItemsToCache(itemsToSave, forKey: currentCacheKey)
-                // --- END MODIFICATION ---
                 await settings.updateCacheSizes()
             }
         } catch is CancellationError {

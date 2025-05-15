@@ -103,7 +103,11 @@ struct FavoritesView: View {
             Button("OK") { errorMessage = nil }
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
         .sheet(isPresented: $showingFilterSheet) {
-            FilterView().environmentObject(settings).environmentObject(authService)
+            // --- MODIFIED: Pass showHideSeenItemsToggle: false ---
+            FilterView(hideFeedOptions: true, showHideSeenItemsToggle: false)
+                .environmentObject(settings)
+                .environmentObject(authService)
+            // --- END MODIFICATION ---
         }
         .onAppear {
             playerManager.configure(settings: settings)
@@ -137,7 +141,9 @@ struct FavoritesView: View {
             needsRefreshForFilterChange = true
             didPerformInitialLoadForCurrentContext = false
         }
-        .onChange(of: settings.seenItemIDs) { _, _ in FavoritesView.logger.trace("SeenItemIDs changed.") }
+        // --- REMOVED: onChange for settings.seenItemIDs as it's not used for display ---
+        // .onChange(of: settings.seenItemIDs) { _, _ in FavoritesView.logger.trace("SeenItemIDs changed.") }
+        // --- END REMOVAL ---
     }
 
     private var triggerKey: String {
@@ -202,11 +208,13 @@ struct FavoritesView: View {
     private var scrollViewContent: some View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 3) {
+                // --- MODIFIED: Iterate directly over 'items' ---
                 ForEach(items) { item in
+                // --- END MODIFICATION ---
                     NavigationLink(value: item) {
                         FeedItemThumbnail(
                             item: item,
-                            isSeen: settings.seenItemIDs.contains(item.id)
+                            isSeen: settings.seenItemIDs.contains(item.id) // isSeen can still be passed, even if not filtered by
                         )
                     }
                     .buttonStyle(.plain)
@@ -377,14 +385,12 @@ struct FavoritesView: View {
 
         FavoritesView.logger.info("Performing API fetch for favorites refresh (Collection Keyword: '\(collectionKeyword)', User: \(username), Flags: \(settings.apiFlags))...")
         do {
-            // --- MODIFIED: Use apiResponse.items ---
             let apiResponse = try await apiService.fetchFavorites(
                 username: username,
                 collectionKeyword: collectionKeyword,
                 flags: settings.apiFlags
             )
             let fetchedItemsFromAPI = apiResponse.items
-            // --- END MODIFICATION ---
             FavoritesView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) fresh favorites for collection '\(collectionKeyword)'.");
             guard !Task.isCancelled else { FavoritesView.logger.info("Refresh task cancelled."); return }
 
@@ -392,9 +398,7 @@ struct FavoritesView: View {
             let contentChanged = initialItemsFromCache == nil || (initialItemsFromCache != nil && (initialItemsFromCache?.count != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId))
 
             self.items = fetchedItemsFromAPI.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
-            // --- MODIFIED: Use apiResponse.atEnd or apiResponse.hasOlder ---
             self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-            // --- END MODIFICATION ---
             FavoritesView.logger.info("FavoritesView updated. Total: \(self.items.count). Can load more: \(self.canLoadMore)");
 
             authService.favoritedItemIDs = Set(self.items.map { $0.id })
@@ -404,9 +408,7 @@ struct FavoritesView: View {
                 navigationPath = NavigationPath()
                 FavoritesView.logger.info("Popped navigation due to content change from refresh.")
             }
-            // --- MODIFIED: Pass fetchedItemsFromAPI to saveItemsToCache ---
             await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
-            // --- END MODIFICATION ---
             await settings.updateCacheSizes()
         }
         catch let error as URLError where error.code == .userAuthenticationRequired {
@@ -430,13 +432,12 @@ struct FavoritesView: View {
             return
         }
         guard !isLoadingMore && canLoadMore && !isLoading else { return }
-        guard let lastItemId = items.last?.id else { return } // Paginierung für Favoriten erfolgt über die Item-ID, nicht über promotedId
+        guard let lastItemId = items.last?.id else { return }
         guard let cacheKey = favoritesCacheKey else { return }
         FavoritesView.logger.info("--- Starting loadMoreFavorites for collection '\(collectionKeyword)' older than \(lastItemId) ---");
         self.isLoadingMore = true;
         defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; FavoritesView.logger.info("--- Finished loadMoreFavorites for collection '\(collectionKeyword)' ---") } } }
         do {
-            // --- MODIFIED: Use apiResponse.items ---
             let apiResponse = try await apiService.fetchFavorites(
                 username: username,
                 collectionKeyword: collectionKeyword,
@@ -444,37 +445,30 @@ struct FavoritesView: View {
                 olderThanId: lastItemId
             )
             let newItems = apiResponse.items
-            // --- END MODIFICATION ---
             FavoritesView.logger.info("Loaded \(newItems.count) more favorite items from API for collection '\(collectionKeyword)'.");
             var appendedItemCount = 0;
             guard !Task.isCancelled else { FavoritesView.logger.info("Load more cancelled."); return }
             guard self.isLoadingMore else { FavoritesView.logger.info("Load more cancelled before UI update."); return };
 
             if newItems.isEmpty {
-                // --- MODIFIED: Use apiResponse.atEnd or apiResponse.hasOlder for canLoadMore ---
                 self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
                 if self.canLoadMore {
                      FavoritesView.logger.warning("API returned empty list but atEnd/hasOlder suggests more items. This might be an API inconsistency.")
                 } else {
                      FavoritesView.logger.info("Reached end of favorites feed for collection '\(collectionKeyword)'.")
                 }
-                // --- END MODIFICATION ---
             } else {
                 let currentIDs = Set(self.items.map { $0.id });
                 let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) };
                 if uniqueNewItems.isEmpty {
-                    // --- MODIFIED: Check atEnd/hasOlder even if duplicates received ---
                     self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
                     FavoritesView.logger.warning("All loaded items were duplicates. Can load more: \(self.canLoadMore)")
-                    // --- END MODIFICATION ---
                 } else {
                     let markedNewItems = uniqueNewItems.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
                     self.items.append(contentsOf: markedNewItems)
                     appendedItemCount = uniqueNewItems.count
                     FavoritesView.logger.info("Appended \(uniqueNewItems.count) unique items. Total: \(self.items.count)")
-                    // --- MODIFIED: Use apiResponse.atEnd or apiResponse.hasOlder ---
                     self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                    // --- END MODIFICATION ---
                     authService.favoritedItemIDs.formUnion(uniqueNewItems.map { $0.id })
                     FavoritesView.logger.info("Added \(uniqueNewItems.count) IDs to global favorite set (\(authService.favoritedItemIDs.count) total) from collection '\(collectionKeyword)'.")
                 }
@@ -482,9 +476,7 @@ struct FavoritesView: View {
 
             if appendedItemCount > 0 {
                 let itemsToSave = self.items.map { var mutableItem = $0; mutableItem.favorited = nil; return mutableItem }
-                // --- MODIFIED: Pass itemsToSave to saveItemsToCache ---
                 await settings.saveItemsToCache(itemsToSave, forKey: cacheKey);
-                // --- END MODIFICATION ---
                 await settings.updateCacheSizes()
             }
         }

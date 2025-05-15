@@ -138,9 +138,11 @@ struct SearchView: View {
             }
             .task { playerManager.configure(settings: settings) }
             .sheet(isPresented: $showingFilterSheet) {
-                 FilterView(hideFeedOptions: true)
+                 // --- MODIFIED: Pass showHideSeenItemsToggle: false ---
+                 FilterView(hideFeedOptions: true, showHideSeenItemsToggle: false)
                      .environmentObject(settings)
                      .environmentObject(authService)
+                 // --- END MODIFICATION ---
              }
             .onChange(of: navigationService.pendingSearchTag) { _, newTag in
                 if let tagToSearch = newTag, !tagToSearch.isEmpty {
@@ -177,14 +179,16 @@ struct SearchView: View {
                 }
             }
             .onDisappear { didPerformInitialPendingSearch = false }
-            .onChange(of: settings.seenItemIDs) { _, _ in SearchView.logger.trace("SearchView detected change in seenItemIDs, body will update.") }
+            // --- REMOVED: onChange(of: settings.seenItemIDs) as it's not used for display in SearchView ---
+            // .onChange(of: settings.seenItemIDs) { _, _ in SearchView.logger.trace("SearchView detected change in seenItemIDs, body will update.") }
+            // --- END REMOVAL ---
             .onChange(of: searchFeedType) { _, _ in
                  if !isLoading && !isBenisSliderEditing && (hasSearched || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minBenisScore > 0) {
                       SearchView.logger.info("Local searchFeedType changed, re-running search.")
                       Task { await performSearch(isInitialSearch: true) }
                  }
             }
-            .onChange(of: settings.apiFlags) { _, _ in
+            .onChange(of: settings.apiFlags) { _, _ in // This will still trigger a refresh if SFW/NSFW etc. change
                  if !isLoading && !isBenisSliderEditing && (hasSearched || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minBenisScore > 0) {
                       SearchView.logger.info("Global API flags changed, re-running search.")
                       Task { await performSearch(isInitialSearch: true) }
@@ -244,14 +248,13 @@ struct SearchView: View {
         List {
             Section {
                 ForEach(searchHistory, id: \.self) { term in
-                    // --- MODIFIED: Make entire row tappable ---
                     Button(action: {
                         searchText = term
-                        addToSearchHistory(term) // Move to top and submit
+                        addToSearchHistory(term)
                         Task { await performSearch(isInitialSearch: true) }
                     }) {
                         HStack {
-                            Image(systemName: "magnifyingglass") // Icon for search history item
+                            Image(systemName: "magnifyingglass")
                                 .foregroundColor(.secondary)
                             Text(term)
                                 .foregroundColor(.primary)
@@ -259,10 +262,9 @@ struct SearchView: View {
                             Image(systemName: "arrow.up.left")
                                 .foregroundColor(.secondary)
                         }
-                        .contentShape(Rectangle()) // Ensure the whole HStack area is tappable
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain) // Use plain style to make it look like a list item
-                    // --- END MODIFICATION ---
+                    .buttonStyle(.plain)
                 }
                 .onDelete(perform: deleteSearchHistoryItem)
             } header: {
@@ -285,7 +287,9 @@ struct SearchView: View {
     private var searchResultsGrid: some View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 3) {
+                // --- MODIFIED: Iterate directly over 'items' ---
                 ForEach(items) { item in
+                // --- END MODIFICATION ---
                     NavigationLink(value: item) { FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id)) }.buttonStyle(.plain)
                 }
                 if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
@@ -425,7 +429,6 @@ struct SearchView: View {
                  if apiError == "nothingFound" {
                      if isInitialSearch { items = [] }
                      canLoadMore = false
-                     // errorMessage = "Keine Ergebnisse für '\(userEnteredSearchText)' gefunden." // Do not set error for "nothingFound"
                      SearchView.logger.info("API returned 'nothingFound' for API tags '\(effectiveSearchQueryForAPITags)'.")
                  } else if apiError == "tooShort" {
                       errorMessage = "Suchbegriff zu kurz (mind. 2 Zeichen)."
