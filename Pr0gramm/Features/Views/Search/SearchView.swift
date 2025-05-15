@@ -8,29 +8,27 @@ import os
 /// Displays results in a grid and allows navigation to the detail view.
 /// Includes a local toggle to search in "New" or "Promoted" items and a button to adjust content filters.
 struct SearchView: View {
-    @EnvironmentObject var settings: AppSettings // Needed for content flags (apiFlags) and filter sheet
-    @EnvironmentObject var authService: AuthService // Needed for filter sheet
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var authService: AuthService
     @EnvironmentObject var navigationService: NavigationService
     @State private var searchText = ""
-    @State var items: [Item] = [] // Keep public for PagedDetailView binding
+    @State var items: [Item] = []
     @State private var isLoading = false
     @State private var errorMessage: String? = nil
     @State private var hasSearched = false
     @State private var navigationPath = NavigationPath()
     @State private var didPerformInitialPendingSearch = false
 
-    @State private var searchFeedType: FeedType = .promoted // Default to searching 'Promoted'
+    @State private var searchFeedType: FeedType = .promoted
     @State private var showingFilterSheet = false
 
-    @State private var minBenisScore: Double = 0 // Slider value
-    @State private var isBenisSliderEditing: Bool = false // Track if user is currently dragging
+    @State private var minBenisScore: Double = 0
+    @State private var isBenisSliderEditing: Bool = false
     private let benisSliderRange: ClosedRange<Double> = 0...5000
     private let benisSliderStep: Double = 100
 
-    // --- NEW: State for pagination ---
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
-    // --- END NEW ---
 
     @StateObject private var playerManager = VideoPlayerManager()
 
@@ -57,7 +55,7 @@ struct SearchView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .disabled(isLoading || isLoadingMore) // Disable while loading
+                    .disabled(isLoading || isLoadingMore)
 
                     Spacer(minLength: 15)
 
@@ -83,17 +81,23 @@ struct SearchView: View {
                         onEditingChanged: { editing in
                             isBenisSliderEditing = editing
                             if !editing {
-                                SearchView.logger.info("Benis slider editing finished. New value: \(Int(minBenisScore)). Triggering search.")
-                                if hasSearched && !isLoading { Task { await performSearch(isInitialSearch: true) } }
+                                SearchView.logger.info("Benis slider editing finished. New value: \(Int(minBenisScore)).")
+                                if !isLoading && (hasSearched || searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                                    SearchView.logger.info("Triggering search due to Benis slider change.")
+                                    Task { await performSearch(isInitialSearch: true) }
+                                }
                             }
                         }
                     )
-                    .disabled(isLoading || isLoadingMore) // Disable while loading
+                    .disabled(isLoading || isLoadingMore)
 
                     if minBenisScore > 0 {
                         Button {
                             minBenisScore = 0
-                            if hasSearched && !isLoading { Task { await performSearch(isInitialSearch: true) } }
+                            if !isLoading && (hasSearched || searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                                SearchView.logger.info("Triggering search due to Benis slider reset.")
+                                Task { await performSearch(isInitialSearch: true) }
+                            }
                         } label: {
                             Image(systemName: "arrow.uturn.backward.circle.fill")
                                 .foregroundColor(.secondary)
@@ -142,32 +146,33 @@ struct SearchView: View {
                 }
             }
             .onChange(of: searchText) { oldValue, newValue in
-                if hasSearched && newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isLoading {
+                if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && oldValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && minBenisScore > 0 && !isBenisSliderEditing && !isLoading {
+                    SearchView.logger.info("Search text is empty, but Benis filter is active. Triggering search.")
+                    Task { await performSearch(isInitialSearch: true) }
+                } else if hasSearched && newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isLoading && minBenisScore == 0 {
                     Task { @MainActor in
                         items = []
                         hasSearched = false
                         errorMessage = nil
                         didPerformInitialPendingSearch = false
-                        canLoadMore = true // Reset for potential new search
+                        canLoadMore = true
                     }
                 }
             }
             .onDisappear { didPerformInitialPendingSearch = false }
             .onChange(of: settings.seenItemIDs) { _, _ in SearchView.logger.trace("SearchView detected change in seenItemIDs, body will update.") }
             .onChange(of: searchFeedType) { _, _ in
-                 if hasSearched && !isLoading && !isBenisSliderEditing {
-                      SearchView.logger.info("Local searchFeedType changed, re-running search for '\(searchText)'")
+                 if !isLoading && !isBenisSliderEditing && (hasSearched || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minBenisScore > 0) {
+                      SearchView.logger.info("Local searchFeedType changed, re-running search.")
                       Task { await performSearch(isInitialSearch: true) }
                  }
             }
-            // --- NEW: Refresh on global filter changes ---
             .onChange(of: settings.apiFlags) { _, _ in
-                 if hasSearched && !isLoading && !isBenisSliderEditing {
-                      SearchView.logger.info("Global API flags changed, re-running search for '\(searchText)'")
+                 if !isLoading && !isBenisSliderEditing && (hasSearched || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minBenisScore > 0) {
+                      SearchView.logger.info("Global API flags changed, re-running search.")
                       Task { await performSearch(isInitialSearch: true) }
                  }
             }
-            // --- END NEW ---
         }
     }
 
@@ -178,9 +183,7 @@ struct SearchView: View {
                 items: $items,
                 selectedIndex: index,
                 playerManager: playerManager,
-                // --- MODIFIED: Pass loadMoreItems for search pagination ---
                 loadMoreAction: { Task { await performSearch(isInitialSearch: false) } }
-                // --- END MODIFICATION ---
             )
         } else {
             Text("Fehler: Item \(destinationItem.id) nicht mehr in Suchergebnissen gefunden.")
@@ -191,7 +194,7 @@ struct SearchView: View {
     }
 
     @ViewBuilder private var searchContentView: some View {
-        if isLoading && items.isEmpty { // Show main loading indicator only if no items are displayed
+        if isLoading && items.isEmpty {
             ProgressView("Suche läuft...")
                 .font(UIConstants.bodyFont)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -201,9 +204,14 @@ struct SearchView: View {
             actions: { Button("Erneut versuchen") { Task { await performSearch(isInitialSearch: true) } }.font(UIConstants.bodyFont) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if !hasSearched {
-            ContentUnavailableView("Suche nach Tags", systemImage: "tag").font(UIConstants.headlineFont)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if items.isEmpty { // This means a search was performed but returned no results
+            if minBenisScore > 0 {
+                ContentUnavailableView("Filter aktiv", systemImage: "slider.horizontal.3", description: Text("Min. Benis: \(Int(minBenisScore)). Drücke Suchen."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView("Suche nach Tags", systemImage: "tag").font(UIConstants.headlineFont)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else if items.isEmpty {
              ContentUnavailableView { Label("Keine Ergebnisse", systemImage: "magnifyingglass").font(UIConstants.headlineFont) }
              description: { Text("Keine Posts für '\(searchText)' gefunden (\(searchFeedType.displayName), Min. Benis: \(Int(minBenisScore))).").font(UIConstants.bodyFont) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -218,21 +226,19 @@ struct SearchView: View {
                 ForEach(items) { item in
                     NavigationLink(value: item) { FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id)) }.buttonStyle(.plain)
                 }
-                // --- NEW: Load more trigger and indicator ---
                 if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
                     Color.clear
                         .frame(height: 1)
                         .onAppear {
                             SearchView.logger.info("Search: End trigger appeared.")
-                            Task { await performSearch(isInitialSearch: false) } // isInitialSearch = false for loading more
+                            Task { await performSearch(isInitialSearch: false) }
                         }
                 }
                 if isLoadingMore {
                     ProgressView("Lade mehr...")
                         .padding()
-                        .gridCellColumns(gridColumns.count) // Ensure it spans all columns
+                        .gridCellColumns(gridColumns.count)
                 }
-                // --- END NEW ---
             }
             .padding(.horizontal, 5).padding(.bottom)
         }
@@ -243,7 +249,7 @@ struct SearchView: View {
             self.searchText = tagToSearch
          }
         Task {
-             await performSearch(isInitialSearch: true); // Always true for a new pending tag
+             await performSearch(isInitialSearch: true);
              await MainActor.run {
                  if navigationService.pendingSearchTag == tagToSearch {
                      navigationService.pendingSearchTag = nil
@@ -252,7 +258,6 @@ struct SearchView: View {
         }
     }
 
-    // --- MODIFIED: performSearch now handles initial and subsequent loads ---
     @MainActor
     private func performSearch(isInitialSearch: Bool) async {
         let userEnteredSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -273,26 +278,39 @@ struct SearchView: View {
             if !combinedTagsForAPI.isEmpty { combinedTagsForAPI += " " }
             combinedTagsForAPI += sTag
         }
+        
+        let effectiveSearchQueryForAPITags: String
         if !combinedTagsForAPI.isEmpty {
-            combinedTagsForAPI = "! \(combinedTagsForAPI)"
+            effectiveSearchQueryForAPITags = "! \(combinedTagsForAPI)"
+        } else {
+            effectiveSearchQueryForAPITags = ""
         }
-
-        guard !combinedTagsForAPI.isEmpty else {
-            SearchView.logger.info("Search skipped: effective search query is empty.");
-            items = []; hasSearched = false; errorMessage = nil; isLoading = false; isLoadingMore = false; canLoadMore = true; didPerformInitialPendingSearch = false;
-            return
+        
+        guard !effectiveSearchQueryForAPITags.isEmpty || (userEnteredSearchText.isEmpty && currentMinScoreInt > 0) || (isInitialSearch && userEnteredSearchText.isEmpty && currentMinScoreInt == 0) else {
+             if userEnteredSearchText.isEmpty && currentMinScoreInt == 0 && !isInitialSearch {
+                  SearchView.logger.info("Load more skipped: effective search query is empty, and not an initial empty search.");
+                  canLoadMore = false
+                  return
+             } else if userEnteredSearchText.isEmpty && currentMinScoreInt == 0 && isInitialSearch {
+                 SearchView.logger.info("Performing initial empty search (will effectively browse \(searchFeedType.displayName)).")
+                 return
+             } else {
+                 SearchView.logger.info("Search skipped: effective search query is empty and not a valid scenario for empty search.");
+                 items = []; hasSearched = false; errorMessage = nil; isLoading = false; isLoadingMore = false; canLoadMore = true; didPerformInitialPendingSearch = false;
+                 return
+             }
         }
         
         if isInitialSearch {
             isLoading = true; errorMessage = nil; items = []; hasSearched = true; canLoadMore = true;
-            SearchView.logger.info("Performing INITIAL search with API tags: '\(combinedTagsForAPI)' (User Text: '\(userEnteredSearchText)', FeedType: \(searchFeedType.displayName), Flags: \(settings.apiFlags), MinScore UI: \(currentMinScoreInt))");
+            SearchView.logger.info("Performing INITIAL search with API tags: '\(effectiveSearchQueryForAPITags)' (User Text: '\(userEnteredSearchText)', FeedType: \(searchFeedType.displayName), Flags: \(settings.apiFlags), MinScore UI: \(currentMinScoreInt))");
         } else {
             guard !isLoadingMore && canLoadMore else {
                 SearchView.logger.debug("Load more skipped: isLoadingMore (\(isLoadingMore)) or !canLoadMore (\(!canLoadMore)).")
                 return
             }
             isLoadingMore = true
-            SearchView.logger.info("Performing LOAD MORE search with API tags: '\(combinedTagsForAPI)', older than ID: \(items.last?.id ?? -1)");
+            SearchView.logger.info("Performing LOAD MORE search with API tags: '\(effectiveSearchQueryForAPITags)', older than ID: \(items.last?.id ?? -1)");
         }
         
         defer {
@@ -307,43 +325,42 @@ struct SearchView: View {
             if isInitialSearch {
                 olderThanIdForAPI = nil
             } else {
-                // For "promoted" search, use item.promoted for pagination if available
-                // For "new" search, use item.id
                 if searchFeedType == .promoted {
                     olderThanIdForAPI = items.last?.promoted ?? items.last?.id
                 } else {
                     olderThanIdForAPI = items.last?.id
                 }
+                // --- MODIFIED: Added return to the guard ---
                 guard olderThanIdForAPI != nil else {
-                    SearchView.logger.warning("Cannot load more for '\(combinedTagsForAPI)': Last item ID/promoted ID missing.")
+                    SearchView.logger.warning("Cannot load more for '\(effectiveSearchQueryForAPITags)': Last item ID/promoted ID missing.")
                     canLoadMore = false
-                    return
+                    return // Ensure function exits
                 }
+                // --- END MODIFICATION ---
             }
 
             let apiResponse = try await apiService.fetchItems(
                 flags: settings.apiFlags,
-                promoted: searchFeedType.rawValue, // New or Promoted
-                tags: combinedTagsForAPI,
+                promoted: searchFeedType.rawValue,
+                tags: effectiveSearchQueryForAPITags,
                 olderThanId: olderThanIdForAPI,
-                showJunkParameter: searchFeedType == .junk // Pass showJunk if junk feed type
+                showJunkParameter: searchFeedType == .junk
             )
 
-            // Check if context changed during fetch
             let currentUserSearchTextAfterFetch = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
             let searchContextStillValid = (currentUserSearchTextAfterFetch == userEnteredSearchText) && (Int(self.minBenisScore) == currentMinScoreInt)
 
             guard searchContextStillValid else {
-                SearchView.logger.info("Search results for API tags '\(combinedTagsForAPI)' discarded, user search text or score changed during fetch.")
+                SearchView.logger.info("Search results for API tags '\(effectiveSearchQueryForAPITags)' discarded, user search text or score changed during fetch.")
                 return
             }
             
             if let apiError = apiResponse.error {
                  if apiError == "nothingFound" {
-                     if isInitialSearch { items = [] } // Clear if initial search
+                     if isInitialSearch { items = [] }
                      canLoadMore = false
                      errorMessage = "Keine Ergebnisse für '\(userEnteredSearchText)' gefunden."
-                     SearchView.logger.info("API returned 'nothingFound' for API tags '\(combinedTagsForAPI)'.")
+                     SearchView.logger.info("API returned 'nothingFound' for API tags '\(effectiveSearchQueryForAPITags)'.")
                  } else {
                      throw NSError(domain: "APIService.performSearch", code: 1, userInfo: [NSLocalizedDescriptionKey: apiError])
                  }
@@ -356,24 +373,23 @@ struct SearchView: View {
                      items.append(contentsOf: uniqueNewItems)
                  }
                  canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                 errorMessage = nil // Clear previous errors on success
-                 SearchView.logger.info("Search successful. \(isInitialSearch ? "Found" : "Loaded") \(apiResponse.items.count) items for API tags '\(combinedTagsForAPI)'. Total items: \(items.count). Can load more: \(canLoadMore)")
+                 errorMessage = nil
+                 SearchView.logger.info("Search successful. \(isInitialSearch ? "Found" : "Loaded") \(apiResponse.items.count) items for API tags '\(effectiveSearchQueryForAPITags)'. Total items: \(items.count). Can load more: \(canLoadMore)")
             }
 
-        } catch let error as NSError where error.domain == "APIService.fetchItems" && error.userInfo[NSLocalizedDescriptionKey] as? String == "Suchbegriff zu kurz (mind. 2 Zeichen)." {
+        } catch let error as NSError where error.domain == "APIService.fetchItems" && error.localizedDescription.contains("Suchbegriff zu kurz") {
             errorMessage = error.localizedDescription
             items = []
             canLoadMore = false
-            SearchView.logger.warning("Search failed for API tags '\(combinedTagsForAPI)': \(error.localizedDescription)")
+            SearchView.logger.warning("Search failed for API tags '\(effectiveSearchQueryForAPITags)': \(error.localizedDescription)")
         }
         catch {
             errorMessage = "Fehler: \(error.localizedDescription)"
-            if isInitialSearch { items = [] } // Clear only on initial search error
-            canLoadMore = false // Stop pagination on error
-            SearchView.logger.error("Search failed for API tags '\(combinedTagsForAPI)': \(error.localizedDescription)");
+            if isInitialSearch { items = [] }
+            canLoadMore = false
+            SearchView.logger.error("Search failed for API tags '\(effectiveSearchQueryForAPITags)': \(error.localizedDescription)");
         }
     }
-    // --- END MODIFICATION ---
 }
 
 // MARK: - Preview
