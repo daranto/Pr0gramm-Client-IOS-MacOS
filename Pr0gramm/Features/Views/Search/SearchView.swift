@@ -34,10 +34,8 @@ struct SearchView: View {
 
     @StateObject private var playerManager = VideoPlayerManager()
 
-    // --- NEW: Debounce für Load More ---
     @State private var loadMoreTask: Task<Void, Never>? = nil
     private let loadMoreDebounceTime: Duration = .milliseconds(500)
-    // --- END NEW ---
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "SearchView")
@@ -117,7 +115,7 @@ struct SearchView: View {
             }
             .onDisappear {
                 didPerformInitialPendingSearch = false
-                loadMoreTask?.cancel() // Wichtig: Laufende Tasks abbrechen
+                loadMoreTask?.cancel()
             }
             .onChange(of: searchFeedType) { _, _ in
                  if !isLoading && !isBenisSliderEditing && (hasSearched || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minBenisScore > 0) {
@@ -211,7 +209,7 @@ struct SearchView: View {
                 items: $items,
                 selectedIndex: index,
                 playerManager: playerManager,
-                loadMoreAction: { Task { await triggerLoadMoreWithDebounce() } } // Debounced aufrufen
+                loadMoreAction: { Task { await triggerLoadMoreWithDebounce() } }
             )
             .environmentObject(settings)
             .environmentObject(authService)
@@ -298,9 +296,7 @@ struct SearchView: View {
                 if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
                     Color.clear.frame(height: 1).onAppear {
                         SearchView.logger.info("Search: End trigger appeared.")
-                        // --- MODIFIED: Debounced aufrufen ---
                         Task { await triggerLoadMoreWithDebounce() }
-                        // --- END MODIFICATION ---
                     }
                 }
                 if isLoadingMore { ProgressView("Lade mehr...").padding().gridCellColumns(gridColumns.count) }
@@ -309,7 +305,6 @@ struct SearchView: View {
         }
     }
 
-    // --- NEW: Debounce-Methode ---
     private func triggerLoadMoreWithDebounce() async {
         loadMoreTask?.cancel()
         loadMoreTask = Task {
@@ -323,7 +318,6 @@ struct SearchView: View {
             }
         }
     }
-    // --- END NEW ---
 
     private func processPendingTag(_ tagToSearch: String) {
         let trimmedTag = tagToSearch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -405,9 +399,13 @@ struct SearchView: View {
             guard searchContextStillValid else { SearchView.logger.info("Search results discarded, context changed."); return }
             
             if let apiError = apiResponse.error, apiError != "limitReached" {
-                 if apiError == "nothingFound" { if isInitialSearch { items = [] }; canLoadMore = false; SearchView.logger.info("API: nothingFound.") }
-                 else if apiError == "tooShort" { errorMessage = "Suchbegriff zu kurz."; if isInitialSearch { items = [] }; canLoadMore = false }
-                 else { throw NSError(domain: "APIService.performSearch", code: 1, userInfo: [NSLocalizedDescriptionKey: apiError]) }
+                 if apiError == "nothingFound" {
+                     if isInitialSearch { items = [] }
+                     canLoadMore = false
+                     SearchView.logger.info("API: nothingFound.")
+                 } else if apiError == "tooShort" {
+                     errorMessage = "Suchbegriff zu kurz."; if isInitialSearch { items = [] }; canLoadMore = false
+                 } else { throw NSError(domain: "APIService.performSearch", code: 1, userInfo: [NSLocalizedDescriptionKey: apiError]) }
             } else if apiResponse.error == "limitReached" {
                 SearchView.logger.warning("API returned 'limitReached'.")
                 errorMessage = "Zu viele Anfragen. Bitte später erneut versuchen (Fehler 429)."
@@ -419,13 +417,24 @@ struct SearchView: View {
                      let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
                      items.append(contentsOf: uniqueNewItems)
                  }
-                 // --- MODIFIED: Verbesserte canLoadMore Logik ---
-                 if newItems.isEmpty && !(apiResponse.atEnd == false && apiResponse.hasOlder == true) {
-                     canLoadMore = false
+                
+                 if newItems.isEmpty {
+                     self.canLoadMore = false
+                     SearchView.logger.info("\(isInitialSearch ? "Search" : "LoadMore") returned 0 items. Setting canLoadMore to false.")
                  } else {
-                     canLoadMore = !(apiResponse.atEnd ?? false) || (apiResponse.hasOlder ?? false)
+                     let atEnd = apiResponse.atEnd ?? false
+                     let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
+                     if atEnd {
+                         self.canLoadMore = false
+                         SearchView.logger.info("API indicates atEnd=true. Setting canLoadMore to false.")
+                     } else if hasOlder == false { // Nur false, nicht nil
+                         self.canLoadMore = false
+                         SearchView.logger.info("API indicates hasOlder=false. Setting canLoadMore to false.")
+                     } else {
+                         self.canLoadMore = true
+                         SearchView.logger.info("API indicates more items might be available (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+                     }
                  }
-                 // --- END MODIFICATION ---
                  errorMessage = nil
                  SearchView.logger.info("Search successful. \(isInitialSearch ? "Found" : "Loaded") \(newItems.count). Total: \(items.count). More: \(canLoadMore)")
             }

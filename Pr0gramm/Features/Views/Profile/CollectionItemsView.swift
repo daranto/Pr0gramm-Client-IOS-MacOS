@@ -76,11 +76,11 @@ struct CollectionItemsView: View {
         }
         .task {
             playerManager.configure(settings: settings)
-            if items.isEmpty { // Load only if items are not pre-populated (e.g., by preview)
+            if items.isEmpty {
                 await refreshItems()
             }
         }
-        .onChange(of: settings.apiFlags) { _, _ in Task { await refreshItems() } } // Simplified from individual filter changes
+        .onChange(of: settings.apiFlags) { _, _ in Task { await refreshItems() } }
         .onChange(of: settings.seenItemIDs) { _, _ in CollectionItemsView.logger.trace("CollectionItemsView detected change in seenItemIDs.") }
     }
 
@@ -91,7 +91,7 @@ struct CollectionItemsView: View {
                 items: $items,
                 selectedIndex: index,
                 playerManager: playerManager,
-                loadMoreAction: { Task { await loadMoreItems() } } // Pass the correct load more action
+                loadMoreAction: { Task { await loadMoreItems() } }
             )
         } else {
             Text("Fehler: Item \(destinationItem.id) nicht mehr in der Sammlung gefunden.")
@@ -225,7 +225,6 @@ struct CollectionItemsView: View {
         CollectionItemsView.logger.info("Performing API fetch for collection items refresh (Collection Keyword: '\(collectionNameForAPI)', User: \(username), Flags: \(settings.apiFlags))...");
         do {
             let isOwn = authService.currentUser?.name.lowercased() == username.lowercased() && authService.isLoggedIn
-            // --- MODIFIED: Use apiResponse ---
             let apiResponse = try await apiService.fetchItems(
                 flags: settings.apiFlags,
                 user: username,
@@ -233,7 +232,6 @@ struct CollectionItemsView: View {
                 isOwnCollection: isOwn
             )
             let fetchedItemsFromAPI = apiResponse.items
-            // --- END MODIFICATION ---
             CollectionItemsView.logger.info("API fetch for collection '\(collection.name)' completed: \(fetchedItemsFromAPI.count) items.")
             guard !Task.isCancelled else { return }
 
@@ -244,9 +242,24 @@ struct CollectionItemsView: View {
             } else {
                 self.showNoFilterMessage = false
             }
-            // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
-            self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-            // --- END MODIFICATION ---
+            
+            if fetchedItemsFromAPI.isEmpty {
+                self.canLoadMore = false
+                CollectionItemsView.logger.info("Refresh returned 0 items for collection '\(collection.name)'. Setting canLoadMore to false.")
+            } else {
+                let atEnd = apiResponse.atEnd ?? false
+                let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
+                if atEnd {
+                    self.canLoadMore = false
+                    CollectionItemsView.logger.info("API indicates atEnd=true for collection '\(collection.name)'. Setting canLoadMore to false.")
+                } else if hasOlder == false { // Nur false, nicht nil
+                    self.canLoadMore = false
+                    CollectionItemsView.logger.info("API indicates hasOlder=false for collection '\(collection.name)'. Setting canLoadMore to false.")
+                } else {
+                    self.canLoadMore = true
+                    CollectionItemsView.logger.info("API indicates more items might be available for collection '\(collection.name)' (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+                }
+            }
             CollectionItemsView.logger.info("CollectionItemsView updated with \(fetchedItemsFromAPI.count) items from API for collection '\(collection.name)'. Can load more: \(self.canLoadMore)")
 
             let newFirstItemId = fetchedItemsFromAPI.first?.id
@@ -254,9 +267,7 @@ struct CollectionItemsView: View {
                 navigationPath = NavigationPath()
                 CollectionItemsView.logger.info("Popped navigation due to collection items refresh resulting in different list content.")
             }
-            // --- MODIFIED: Pass fetchedItemsFromAPI to save ---
             await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
-            // --- END MODIFICATION ---
             await settings.updateCacheSizes()
         }
         catch let error as URLError where error.code == .userAuthenticationRequired {
@@ -284,7 +295,7 @@ struct CollectionItemsView: View {
             CollectionItemsView.logger.debug("Skipping loadMoreItems for collection '\(collection.name)': State prevents loading.")
             return
         }
-        guard let lastItemId = items.last?.id else { // Use item ID for pagination for collections
+        guard let lastItemId = items.last?.id else {
             CollectionItemsView.logger.warning("Skipping loadMoreItems for collection '\(collection.name)': No last item found.")
             return
         }
@@ -300,7 +311,6 @@ struct CollectionItemsView: View {
 
         do {
             let isOwn = authService.currentUser?.name.lowercased() == username.lowercased() && authService.isLoggedIn
-            // --- MODIFIED: Use apiResponse ---
             let apiResponse = try await apiService.fetchItems(
                 flags: settings.apiFlags,
                 user: username,
@@ -309,43 +319,43 @@ struct CollectionItemsView: View {
                 isOwnCollection: isOwn
             )
             let newItems = apiResponse.items
-            // --- END MODIFICATION ---
             CollectionItemsView.logger.info("Loaded \(newItems.count) more items from API for collection '\(collection.name)'.");
             var appendedItemCount = 0
             guard !Task.isCancelled else { return }
             guard self.isLoadingMore else { return }
 
             if newItems.isEmpty {
-                CollectionItemsView.logger.info("Reached end of item feed for collection '\(collection.name)'.")
-                // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
-                self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                if self.canLoadMore { CollectionItemsView.logger.warning("API returned empty but atEnd/hasOlder suggests more. API inconsistency?")}
-                // --- END MODIFICATION ---
+                CollectionItemsView.logger.info("Reached end of item feed for collection '\(collection.name)' because API returned 0 items for loadMore.")
+                self.canLoadMore = false
             } else {
                 let currentIDs = Set(self.items.map { $0.id })
-                // --- MODIFIED: Filter newItems ---
                 let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) };
-                // --- END MODIFICATION ---
                 if uniqueNewItems.isEmpty {
-                    CollectionItemsView.logger.warning("All loaded items for collection '\(collection.name)' (older than \(lastItemId)) were duplicates.")
-                    // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
-                    self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                    // --- END MODIFICATION ---
+                    CollectionItemsView.logger.warning("All loaded items for collection '\(collection.name)' (older than \(lastItemId)) were duplicates. Assuming end of actual new content.")
+                    self.canLoadMore = false
                 } else {
                     self.items.append(contentsOf: uniqueNewItems)
                     appendedItemCount = uniqueNewItems.count
                     CollectionItemsView.logger.info("Appended \(uniqueNewItems.count) unique items to collection '\(collection.name)'. Total items: \(self.items.count)")
-                    // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
-                    self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                    // --- END MODIFICATION ---
+                    
+                    let atEnd = apiResponse.atEnd ?? false
+                    let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
+                    if atEnd {
+                        self.canLoadMore = false
+                        CollectionItemsView.logger.info("API indicates atEnd=true after loadMore for collection '\(collection.name)'.")
+                    } else if hasOlder == false { // Nur false, nicht nil
+                        self.canLoadMore = false
+                        CollectionItemsView.logger.info("API indicates hasOlder=false after loadMore for collection '\(collection.name)'.")
+                    } else {
+                        self.canLoadMore = true
+                        CollectionItemsView.logger.info("API indicates more items might be available after loadMore for collection '\(collection.name)' (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
+                    }
                 }
             }
 
             if appendedItemCount > 0 {
                 let itemsToSave = self.items
-                // --- MODIFIED: Pass itemsToSave ---
                 await settings.saveItemsToCache(itemsToSave, forKey: cacheKey);
-                // --- END MODIFICATION ---
                 await settings.updateCacheSizes()
             }
         }

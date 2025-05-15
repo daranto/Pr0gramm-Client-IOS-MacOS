@@ -47,7 +47,7 @@ struct UserUploadsView: View {
             detailView(for: destinationItem)
         }
         .task { playerManager.configure(settings: settings); await refreshUploads() }
-        .onChange(of: settings.apiFlags) { _, _ in Task { await refreshUploads() } } // Refresh if global filters change
+        .onChange(of: settings.apiFlags) { _, _ in Task { await refreshUploads() } }
         .onChange(of: settings.seenItemIDs) { _, _ in UserUploadsView.logger.trace("UserUploadsView detected change in seenItemIDs, body will update.") }
     }
 
@@ -142,17 +142,29 @@ struct UserUploadsView: View {
         UserUploadsView.logger.info("Performing API fetch for uploads refresh (User: \(username), Flags: \(settings.apiFlags))...");
         
         do {
-            // --- MODIFIED: Use apiResponse from fetchItems ---
             let apiResponse = try await apiService.fetchItems(flags: settings.apiFlags, user: username)
             let fetchedItemsFromAPI = apiResponse.items
-            // --- END MODIFICATION ---
             UserUploadsView.logger.info("API fetch for uploads completed: \(fetchedItemsFromAPI.count) items for user \(username).")
             
             await MainActor.run {
                 self.items = fetchedItemsFromAPI
-                // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
-                self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                // --- END MODIFICATION ---
+                if fetchedItemsFromAPI.isEmpty {
+                    self.canLoadMore = false
+                    UserUploadsView.logger.info("Refresh returned 0 items. Setting canLoadMore to false.")
+                } else {
+                    let atEnd = apiResponse.atEnd ?? false
+                    let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
+                    if atEnd {
+                        self.canLoadMore = false
+                        UserUploadsView.logger.info("API indicates atEnd=true. Setting canLoadMore to false.")
+                    } else if hasOlder == false { // Nur false, nicht nil
+                        self.canLoadMore = false
+                        UserUploadsView.logger.info("API indicates hasOlder=false. Setting canLoadMore to false.")
+                    } else {
+                        self.canLoadMore = true
+                        UserUploadsView.logger.info("API indicates more items might be available for refresh (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+                    }
+                }
                 UserUploadsView.logger.info("UserUploadsView updated with \(fetchedItemsFromAPI.count) items directly from API for \(username). Can load more: \(self.canLoadMore)")
                 
                 let newFirstItemId = fetchedItemsFromAPI.first?.id
@@ -161,9 +173,7 @@ struct UserUploadsView: View {
                     UserUploadsView.logger.info("Popped navigation due to uploads refresh resulting in different list content.")
                 }
             }
-            // --- MODIFIED: Pass fetchedItemsFromAPI to save ---
             await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
-            // --- END MODIFICATION ---
             await settings.updateCacheSizes()
         }
         catch let error as URLError where error.code == .userAuthenticationRequired {
@@ -184,7 +194,7 @@ struct UserUploadsView: View {
                 } else {
                     UserUploadsView.logger.warning("Showing potentially stale cached uploads data because API refresh failed for \(username).")
                 };
-                self.canLoadMore = false // Stop pagination on error
+                self.canLoadMore = false
             }
         }
     }
@@ -198,44 +208,45 @@ struct UserUploadsView: View {
         defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; UserUploadsView.logger.info("--- Finished loadMoreUploads for user \(username) ---") } } }
         
         do {
-            // --- MODIFIED: Use apiResponse from fetchItems ---
             let apiResponse = try await apiService.fetchItems(flags: settings.apiFlags, user: username, olderThanId: lastItemId)
             let newItems = apiResponse.items
-            // --- END MODIFICATION ---
             UserUploadsView.logger.info("Loaded \(newItems.count) more uploaded items from API (requesting older than \(lastItemId)).");
             var appendedItemCount = 0
             
             await MainActor.run {
                 guard self.isLoadingMore else { UserUploadsView.logger.info("Load more cancelled before UI update."); return }
                 if newItems.isEmpty {
-                    UserUploadsView.logger.info("Reached end of uploads feed for \(username).")
-                    // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
-                    self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                    if self.canLoadMore { UserUploadsView.logger.warning("API returned empty but atEnd/hasOlder suggests more. API inconsistency?")}
-                    // --- END MODIFICATION ---
+                    UserUploadsView.logger.info("Reached end of uploads feed for \(username) because API returned 0 items for loadMore.")
+                    self.canLoadMore = false // Wenn 0 Items geladen werden, gibt es nichts mehr.
                 } else {
                     let currentIDs = Set(self.items.map { $0.id })
                     let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) };
                     if uniqueNewItems.isEmpty {
-                        UserUploadsView.logger.warning("All loaded uploaded items (older than \(lastItemId)) were duplicates for \(username).")
-                        // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
-                        self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                        // --- END MODIFICATION ---
+                        UserUploadsView.logger.warning("All loaded uploaded items (older than \(lastItemId)) were duplicates for \(username). Assuming end of actual new content.")
+                        self.canLoadMore = false // Wenn nur Duplikate kommen, gibt es auch nichts Neues mehr.
                     } else {
                         self.items.append(contentsOf: uniqueNewItems)
                         appendedItemCount = uniqueNewItems.count
                         UserUploadsView.logger.info("Appended \(uniqueNewItems.count) unique uploaded items for \(username). Total items: \(self.items.count)")
-                        // --- MODIFIED: Use apiResponse.atEnd or hasOlder ---
-                        self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                        // --- END MODIFICATION ---
+
+                        let atEnd = apiResponse.atEnd ?? false
+                        let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
+                        if atEnd {
+                            self.canLoadMore = false
+                            UserUploadsView.logger.info("API indicates atEnd=true after loadMore.")
+                        } else if hasOlder == false { // Nur false, nicht nil
+                            self.canLoadMore = false
+                            UserUploadsView.logger.info("API indicates hasOlder=false after loadMore.")
+                        } else {
+                            self.canLoadMore = true
+                            UserUploadsView.logger.info("API indicates more items might be available after loadMore (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
+                        }
                     }
                 }
             }
             if appendedItemCount > 0 {
                 let itemsToSave = await MainActor.run { self.items }
-                // --- MODIFIED: Pass itemsToSave ---
                 await settings.saveItemsToCache(itemsToSave, forKey: cacheKey);
-                // --- END MODIFICATION ---
                 await settings.updateCacheSizes()
             }
         }
@@ -253,7 +264,7 @@ struct UserUploadsView: View {
             await MainActor.run {
                 guard self.isLoadingMore else { return };
                 if items.isEmpty { errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" };
-                self.canLoadMore = false // Stop pagination on error
+                self.canLoadMore = false
             }
         }
     }

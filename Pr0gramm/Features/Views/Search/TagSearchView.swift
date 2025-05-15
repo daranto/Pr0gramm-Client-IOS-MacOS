@@ -56,7 +56,7 @@ struct TagSearchView: View {
                     Button("Schließen") { dismiss() }
                 }
             }
-            .task(id: currentSearchTag) { // Reagiert auf Änderungen von außen
+            .task(id: currentSearchTag) {
                 TagSearchView.logger.info("TagSearchView task triggered for currentSearchTag: \(currentSearchTag)")
                 playerManager.configure(settings: settings)
                 await performSearch(isInitialSearch: true)
@@ -81,7 +81,6 @@ struct TagSearchView: View {
                 selectedIndex: index,
                 playerManager: playerManager,
                 loadMoreAction: { Task { await triggerLoadMoreWithDebounce() } },
-                // --- MODIFIED: Hier wird die Callback von TagSearchView weitergegeben ---
                 onTagTappedInSheetCallback: self.onNewTagSelectedInSheet
             )
             .environmentObject(settings)
@@ -156,13 +155,10 @@ struct TagSearchView: View {
     @MainActor
     private func performSearch(isInitialSearch: Bool) async {
         let tagToSearch = currentSearchTag
-        // SearchView.addTagToGlobalSearchHistory(tagToSearch) // Wird jetzt in DetailViewContent gemacht, wenn das Sheet geöffnet wird
-
         let effectiveSearchQueryForAPITags = "! \(tagToSearch)"
 
         if isInitialSearch {
-            // Beim initialen Laden (oder wenn sich currentSearchTag ändert), werden die Items zurückgesetzt
-            items = [] // Wichtig, um alte Ergebnisse zu entfernen
+            items = []
             isLoading = true; errorMessage = nil; hasSearched = false; canLoadMore = true
             TagSearchView.logger.info("Performing INITIAL search: Tag='\(tagToSearch)', API Query='\(effectiveSearchQueryForAPITags)', FeedType=\(settings.feedType.displayName), Flags=\(settings.apiFlags)")
         } else {
@@ -184,14 +180,12 @@ struct TagSearchView: View {
                 guard olderThanIdForAPI != nil else { TagSearchView.logger.warning("Cannot load more: Tag='\(tagToSearch)'"); canLoadMore = false; return }
             }
 
-            // Die FeedType-Optionen (promoted/new/junk) werden hier von den globalen `settings` genommen.
-            // Das ist für eine "Tag-Suche" üblich, da sie meistens im Kontext des aktuellen Feed-Typs stattfindet.
             let apiResponse = try await apiService.fetchItems(
                 flags: settings.apiFlags,
-                promoted: settings.apiPromoted, // Nimmt den globalen FeedType (promoted/new)
+                promoted: settings.apiPromoted,
                 tags: effectiveSearchQueryForAPITags,
                 olderThanId: olderThanIdForAPI,
-                showJunkParameter: settings.apiShowJunk // Nimmt den globalen FeedType (junk)
+                showJunkParameter: settings.apiShowJunk
             )
 
             if let apiError = apiResponse.error, apiError != "limitReached" {
@@ -206,16 +200,29 @@ struct TagSearchView: View {
                 errorMessage = "Zu viele Anfragen. Bitte später erneut versuchen (Fehler 429)."
             } else {
                  let newItems = apiResponse.items
-                 if isInitialSearch { items = newItems } // Ersetze Items bei initialer Suche
-                 else { // Füge hinzu bei "load more"
+                 if isInitialSearch { items = newItems }
+                 else {
                      let currentIDs = Set(items.map { $0.id })
                      let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
                      items.append(contentsOf: uniqueNewItems)
                  }
-                 if newItems.isEmpty && !(apiResponse.atEnd == false && apiResponse.hasOlder == true) {
-                     canLoadMore = false
+                
+                 if newItems.isEmpty {
+                     self.canLoadMore = false
+                     TagSearchView.logger.info("\(isInitialSearch ? "Search" : "LoadMore") for tag '\(tagToSearch)' returned 0 items. Setting canLoadMore to false.")
                  } else {
-                     canLoadMore = !(apiResponse.atEnd ?? false) || (apiResponse.hasOlder ?? false)
+                     let atEnd = apiResponse.atEnd ?? false
+                     let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
+                     if atEnd {
+                         self.canLoadMore = false
+                         TagSearchView.logger.info("API indicates atEnd=true for tag '\(tagToSearch)'. Setting canLoadMore to false.")
+                     } else if hasOlder == false { // Nur false, nicht nil
+                         self.canLoadMore = false
+                         TagSearchView.logger.info("API indicates hasOlder=false for tag '\(tagToSearch)'. Setting canLoadMore to false.")
+                     } else {
+                         self.canLoadMore = true
+                         TagSearchView.logger.info("API indicates more items might be available for tag '\(tagToSearch)' (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+                     }
                  }
                  errorMessage = nil
                  TagSearchView.logger.info("Search for tag '\(tagToSearch)' successful. \(isInitialSearch ? "Found" : "Loaded") \(newItems.count). Total: \(items.count). More: \(canLoadMore)")

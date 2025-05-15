@@ -100,11 +100,9 @@ struct FeedView: View {
                 feedContentView
             }
             .sheet(isPresented: $showingFilterSheet) {
-                 // --- MODIFIED: Pass showHideSeenItemsToggle: true ---
                  FilterView(hideFeedOptions: true, showHideSeenItemsToggle: true)
                      .environmentObject(settings)
                      .environmentObject(authService)
-                 // --- END MODIFICATION ---
             }
             .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) { Button("OK") { errorMessage = nil } } message: { Text(errorMessage ?? "Unbekannter Fehler") }
             .navigationDestination(for: Item.self) { destinationItem in
@@ -144,7 +142,7 @@ struct FeedView: View {
             }
             .onChange(of: popToRootTrigger) { if !navigationPath.isEmpty { navigationPath = NavigationPath() } }
             .onChange(of: settings.seenItemIDs) { _, _ in FeedView.logger.trace("FeedView detected change in seenItemIDs, body will update.") }
-            .onChange(of: settings.hideSeenItems) { _, newValue in // This now directly controls the filter, no need to check enableExperimentalHideSeen here for refresh
+            .onChange(of: settings.hideSeenItems) { _, newValue in
                 FeedView.logger.info("Hide seen items setting changed to: \(newValue)")
                 triggerRefreshTask(resetInitialLoad: true)
             }
@@ -255,7 +253,23 @@ struct FeedView: View {
             
             await MainActor.run {
                  self.items = fetchedItemsFromAPI
-                 self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
+                if fetchedItemsFromAPI.isEmpty {
+                    self.canLoadMore = false
+                    FeedView.logger.info("Refresh returned 0 items. Setting canLoadMore to false.")
+                } else {
+                    let atEnd = apiResponse.atEnd ?? false
+                    let hasOlder = apiResponse.hasOlder ?? true
+                    if atEnd {
+                        self.canLoadMore = false
+                        FeedView.logger.info("API indicates atEnd=true. Setting canLoadMore to false.")
+                    } else if hasOlder == false { // Nur false, nicht nil
+                        self.canLoadMore = false
+                        FeedView.logger.info("API indicates hasOlder=false. Setting canLoadMore to false.")
+                    } else {
+                        self.canLoadMore = true
+                        FeedView.logger.info("API indicates more items might be available for refresh (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+                    }
+                }
                  FeedView.logger.info("FeedView updated (REPLACED). Count: \(self.items.count). Can load more: \(self.canLoadMore)")
                  if !navigationPath.isEmpty { navigationPath = NavigationPath(); FeedView.logger.info("Popped navigation due to refresh.") }
                  self.showNoFilterMessage = false
@@ -319,19 +333,30 @@ struct FeedView: View {
             await MainActor.run {
                 if newItems.isEmpty {
                     FeedView.logger.info("Reached end of feed (API returned empty list for older than \(olderValue)).")
-                    canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                    if canLoadMore { FeedView.logger.warning("API returned empty list for loadMore, but atEnd/hasOlder suggests more items. Might be an API issue.") }
+                    self.canLoadMore = false // Wenn 0 Items geladen werden, gibt es nichts mehr.
                 } else {
                     let currentIDs = Set(self.items.map { $0.id })
                     let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
                     if uniqueNewItems.isEmpty {
-                        FeedView.logger.warning("All loaded items (older than \(olderValue)) were duplicates.")
-                        canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
+                        FeedView.logger.warning("All loaded items (older than \(olderValue)) were duplicates. Assuming end of actual new content.")
+                        self.canLoadMore = false // Wenn nur Duplikate kommen, gibt es auch nichts Neues mehr.
                     } else {
                         self.items.append(contentsOf: uniqueNewItems)
                         appendedItemCount = uniqueNewItems.count
                         FeedView.logger.info("Appended \(uniqueNewItems.count) unique items to original list. Total items: \(self.items.count)")
-                        self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
+                        
+                        let atEnd = apiResponse.atEnd ?? false
+                        let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil, to potentially try again
+                        if atEnd {
+                            self.canLoadMore = false
+                            FeedView.logger.info("API indicates atEnd=true after loadMore.")
+                        } else if hasOlder == false { // Nur false, nicht nil
+                            self.canLoadMore = false
+                            FeedView.logger.info("API indicates hasOlder=false after loadMore.")
+                        } else {
+                            self.canLoadMore = true
+                            FeedView.logger.info("API indicates more items might be available after loadMore (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
+                        }
                     }
                 }
             }

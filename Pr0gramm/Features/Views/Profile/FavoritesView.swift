@@ -103,11 +103,9 @@ struct FavoritesView: View {
             Button("OK") { errorMessage = nil }
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
         .sheet(isPresented: $showingFilterSheet) {
-            // --- MODIFIED: Pass showHideSeenItemsToggle: false ---
             FilterView(hideFeedOptions: true, showHideSeenItemsToggle: false)
                 .environmentObject(settings)
                 .environmentObject(authService)
-            // --- END MODIFICATION ---
         }
         .onAppear {
             playerManager.configure(settings: settings)
@@ -141,9 +139,6 @@ struct FavoritesView: View {
             needsRefreshForFilterChange = true
             didPerformInitialLoadForCurrentContext = false
         }
-        // --- REMOVED: onChange for settings.seenItemIDs as it's not used for display ---
-        // .onChange(of: settings.seenItemIDs) { _, _ in FavoritesView.logger.trace("SeenItemIDs changed.") }
-        // --- END REMOVAL ---
     }
 
     private var triggerKey: String {
@@ -208,13 +203,11 @@ struct FavoritesView: View {
     private var scrollViewContent: some View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 3) {
-                // --- MODIFIED: Iterate directly over 'items' ---
                 ForEach(items) { item in
-                // --- END MODIFICATION ---
                     NavigationLink(value: item) {
                         FeedItemThumbnail(
                             item: item,
-                            isSeen: settings.seenItemIDs.contains(item.id) // isSeen can still be passed, even if not filtered by
+                            isSeen: settings.seenItemIDs.contains(item.id)
                         )
                     }
                     .buttonStyle(.plain)
@@ -398,7 +391,24 @@ struct FavoritesView: View {
             let contentChanged = initialItemsFromCache == nil || (initialItemsFromCache != nil && (initialItemsFromCache?.count != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId))
 
             self.items = fetchedItemsFromAPI.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
-            self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
+            
+            if fetchedItemsFromAPI.isEmpty {
+                self.canLoadMore = false
+                FavoritesView.logger.info("Refresh returned 0 items. Setting canLoadMore to false.")
+            } else {
+                let atEnd = apiResponse.atEnd ?? false
+                let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
+                if atEnd {
+                    self.canLoadMore = false
+                    FavoritesView.logger.info("API indicates atEnd=true. Setting canLoadMore to false.")
+                } else if hasOlder == false { // Nur false, nicht nil
+                    self.canLoadMore = false
+                    FavoritesView.logger.info("API indicates hasOlder=false. Setting canLoadMore to false.")
+                } else {
+                    self.canLoadMore = true
+                    FavoritesView.logger.info("API indicates more items might be available for refresh (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+                }
+            }
             FavoritesView.logger.info("FavoritesView updated. Total: \(self.items.count). Can load more: \(self.canLoadMore)");
 
             authService.favoritedItemIDs = Set(self.items.map { $0.id })
@@ -451,24 +461,32 @@ struct FavoritesView: View {
             guard self.isLoadingMore else { FavoritesView.logger.info("Load more cancelled before UI update."); return };
 
             if newItems.isEmpty {
-                self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                if self.canLoadMore {
-                     FavoritesView.logger.warning("API returned empty list but atEnd/hasOlder suggests more items. This might be an API inconsistency.")
-                } else {
-                     FavoritesView.logger.info("Reached end of favorites feed for collection '\(collectionKeyword)'.")
-                }
+                FavoritesView.logger.info("Reached end of favorites feed for collection '\(collectionKeyword)' because API returned 0 items for loadMore.")
+                self.canLoadMore = false
             } else {
                 let currentIDs = Set(self.items.map { $0.id });
                 let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) };
                 if uniqueNewItems.isEmpty {
-                    self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
-                    FavoritesView.logger.warning("All loaded items were duplicates. Can load more: \(self.canLoadMore)")
+                    FavoritesView.logger.warning("All loaded items were duplicates. Assuming end of actual new content for collection '\(collectionKeyword)'.")
+                    self.canLoadMore = false
                 } else {
                     let markedNewItems = uniqueNewItems.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
                     self.items.append(contentsOf: markedNewItems)
                     appendedItemCount = uniqueNewItems.count
                     FavoritesView.logger.info("Appended \(uniqueNewItems.count) unique items. Total: \(self.items.count)")
-                    self.canLoadMore = !(apiResponse.atEnd ?? true) || !(apiResponse.hasOlder == false)
+                    
+                    let atEnd = apiResponse.atEnd ?? false
+                    let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
+                    if atEnd {
+                        self.canLoadMore = false
+                        FavoritesView.logger.info("API indicates atEnd=true after loadMore for collection '\(collectionKeyword)'.")
+                    } else if hasOlder == false { // Nur false, nicht nil
+                        self.canLoadMore = false
+                        FavoritesView.logger.info("API indicates hasOlder=false after loadMore for collection '\(collectionKeyword)'.")
+                    } else {
+                        self.canLoadMore = true
+                        FavoritesView.logger.info("API indicates more items might be available after loadMore for collection '\(collectionKeyword)' (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
+                    }
                     authService.favoritedItemIDs.formUnion(uniqueNewItems.map { $0.id })
                     FavoritesView.logger.info("Added \(uniqueNewItems.count) IDs to global favorite set (\(authService.favoritedItemIDs.count) total) from collection '\(collectionKeyword)'.")
                 }
