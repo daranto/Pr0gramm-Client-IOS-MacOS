@@ -74,10 +74,10 @@ struct PagedDetailTabViewItem: View {
     let upvoteTagAction: (Int) -> Void
     let downvoteTagAction: (Int) -> Void
     let addTagsAction: (String) async -> String?
-    // --- NEW: Callbacks für Comment Votes ---
     let upvoteCommentAction: (Int) -> Void
     let downvoteCommentAction: (Int) -> Void
-    // --- END NEW ---
+    // --- NEW: Callback für Tag-Tap im Sheet ---
+    let onTagTappedInSheetCallback: ((String) -> Void)?
 
 
     @Binding var previewLinkTarget: PreviewLinkTarget?
@@ -120,10 +120,10 @@ struct PagedDetailTabViewItem: View {
             upvoteTagAction: upvoteTagAction,
             downvoteTagAction: downvoteTagAction,
             addTagsAction: addTagsAction,
-            // --- NEW: Pass comment vote actions ---
             upvoteCommentAction: upvoteCommentAction,
-            downvoteCommentAction: downvoteCommentAction
-            // --- END NEW ---
+            downvoteCommentAction: downvoteCommentAction,
+            // --- NEW: Übergabe der Callback an DetailViewContent ---
+            onTagTappedInSheetCallback: onTagTappedInSheetCallback
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -181,25 +181,39 @@ struct PagedDetailView: View {
     @State private var currentItemTargetCommentID: Int?
 
     let loadMoreAction: () async -> Void
+    // --- NEW: Callback für Tag-Tap im Sheet ---
+    let onTagTappedInSheetCallback: ((String) -> Void)?
+
     let commentMaxDepth = 5
     let preloadThreshold = 5
     let prefetchLookahead = 3
     let swipeSettleDelay: Duration = .milliseconds(200)
 
     @State private var imagePrefetcher = ImagePrefetcher(urls: [])
-
-    init(items: Binding<[Item]>, selectedIndex: Int, playerManager: VideoPlayerManager, loadMoreAction: @escaping () async -> Void, initialTargetCommentID: Int? = nil) {
+    
+    // --- MODIFIED: Initializer mit neuer Callback ---
+    init(
+        items: Binding<[Item]>,
+        selectedIndex: Int,
+        playerManager: VideoPlayerManager,
+        loadMoreAction: @escaping () async -> Void,
+        initialTargetCommentID: Int? = nil,
+        onTagTappedInSheetCallback: ((String) -> Void)? = nil // Neuer optionaler Parameter
+    ) {
         self._items = items
         self._selectedIndex = State(initialValue: selectedIndex)
         self.playerManager = playerManager
         self.loadMoreAction = loadMoreAction
         self._currentItemTargetCommentID = State(initialValue: initialTargetCommentID)
+        self.onTagTappedInSheetCallback = onTagTappedInSheetCallback // Zuweisen
 
         if selectedIndex >= 0 && selectedIndex < items.wrappedValue.count {
             self._previouslySelectedItemForMarking = State(initialValue: items.wrappedValue[selectedIndex])
         }
-        PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex), initialTargetCommentID: \(initialTargetCommentID ?? -1)")
+        PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex), initialTargetCommentID: \(initialTargetCommentID ?? -1), onTagTappedInSheetCallback is \(onTagTappedInSheetCallback == nil ? "nil" : "set")")
     }
+    // --- END MODIFICATION ---
+
 
     var body: some View {
         tabViewContent
@@ -426,10 +440,10 @@ struct PagedDetailView: View {
                  addTagsAction: { tagsToAdd in
                      return await handleAddTags(tags: tagsToAdd)
                  },
-                 // --- NEW: Pass comment vote actions ---
                  upvoteCommentAction: { commentId in Task { await handleCommentVoteTap(commentId: commentId, voteType: 1) } },
                  downvoteCommentAction: { commentId in Task { await handleCommentVoteTap(commentId: commentId, voteType: -1) } },
-                 // --- END NEW ---
+                 // --- NEW: Übergabe der Callback an PagedDetailTabViewItem ---
+                 onTagTappedInSheetCallback: self.onTagTappedInSheetCallback,
                  previewLinkTarget: $previewLinkTarget,
                  userProfileSheetTarget: $userProfileSheetTarget,
                  fullscreenImageTarget: $fullscreenImageTarget
@@ -896,7 +910,6 @@ struct PagedDetailView: View {
         await authService.performTagVote(tagId: tagId, voteType: voteType)
     }
 
-    // --- NEW: Method to handle comment votes ---
     private func handleCommentVoteTap(commentId: Int, voteType: Int) async {
         guard selectedIndex >= 0 && selectedIndex < items.count else {
             PagedDetailView.logger.warning("Comment vote skipped: Invalid selectedIndex.")
@@ -911,18 +924,14 @@ struct PagedDetailView: View {
 
         let previousVoteStateForRevert = authService.votedCommentStates[commentId] ?? 0
         
-        // Perform the vote via AuthService (this updates authService.votedCommentStates)
         await authService.performCommentVote(commentId: commentId, voteType: voteType)
-
-        // After the API call, get the new confirmed vote state
         let newVoteState = authService.votedCommentStates[commentId] ?? 0
 
-        // Update the local ItemComment object if the vote state actually changed
         if previousVoteStateForRevert != newVoteState {
-            if var cachedItemDetail = cachedDetails[currentItemId] { // Make a mutable copy
-                var mutableComments = cachedItemDetail.info.comments // Make a mutable copy of comments
+            if var cachedItemDetail = cachedDetails[currentItemId] {
+                var mutableComments = cachedItemDetail.info.comments
                 if let commentIndex = mutableComments.firstIndex(where: { $0.id == commentId }) {
-                    var mutableComment = mutableComments[commentIndex] // Make a mutable copy of the specific comment
+                    var mutableComment = mutableComments[commentIndex]
 
                     var deltaUp = 0
                     var deltaDown = 0
@@ -937,9 +946,8 @@ struct PagedDetailView: View {
                     mutableComment.up += deltaUp
                     mutableComment.down += deltaDown
                     
-                    mutableComments[commentIndex] = mutableComment // Update the comment in the mutable array
+                    mutableComments[commentIndex] = mutableComment
                     
-                    // Create new ItemsInfoResponse and CachedItemDetails with the updated comments
                     let updatedInfo = ItemsInfoResponse(tags: cachedItemDetail.info.tags, comments: mutableComments)
                     let newFlatList = prepareFlatDisplayComments(from: updatedInfo.comments, sortedBy: cachedItemDetail.sortedBy, maxDepth: commentMaxDepth)
                     
@@ -956,7 +964,6 @@ struct PagedDetailView: View {
             PagedDetailView.logger.info("Comment vote state for \(commentId) did not effectively change. No local score update needed.")
         }
     }
-    // --- END NEW ---
 
     private func handleAddTags(tags: String) async -> String? {
         guard selectedIndex >= 0 && selectedIndex < items.count else {
@@ -1053,7 +1060,7 @@ struct LinkedItemPreviewWrapperView: View {
     }
 }
 
-#Preview("Preview") {
+#Preview {
     struct PreviewWrapper: View {
          @State var previewItems: [Item] = [
              Item(id: 1, promoted: 1001, userId: 1, down: 15, up: 150, created: 1, image: "img1.jpg", thumb: "t1.jpg", fullsize: "f1.jpg", preview: nil, width: 800, height: 600, audio: false, source: "http://example.com", flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, subtitles: nil, favorited: false),
@@ -1097,7 +1104,10 @@ struct LinkedItemPreviewWrapperView: View {
                     selectedIndex: 0,
                     playerManager: previewPlayerManager,
                     loadMoreAction: dummyLoadMore,
-                    initialTargetCommentID: nil
+                    initialTargetCommentID: nil,
+                    onTagTappedInSheetCallback: { tag in // Dummy-Callback für Preview
+                        print("Preview PagedDetailView: Tag '\(tag)' tapped in sheet context.")
+                    }
                  )
              }
              .environmentObject(previewSettings)

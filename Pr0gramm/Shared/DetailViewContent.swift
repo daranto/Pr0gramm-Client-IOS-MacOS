@@ -106,9 +106,11 @@ struct DetailViewContent: View {
     let addTagsAction: (String) async -> String?
     let upvoteCommentAction: (Int) -> Void
     let downvoteCommentAction: (Int) -> Void
+    
+    let onTagTappedInSheetCallback: ((String) -> Void)?
 
 
-    @EnvironmentObject var navigationService: NavigationService // Bleibt für andere Navigationen, wird aber für Tag-Tap nicht mehr direkt verwendet
+    @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var settings: AppSettings
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
@@ -125,9 +127,78 @@ struct DetailViewContent: View {
     @State private var addTagError: String? = nil
     @State private var isAddingTags: Bool = false
 
-    // --- NEW: State für das Tag-Such-Sheet ---
     @State private var tagForSheetSearch: String? = nil
-    // --- END NEW ---
+    @State private var wasPlayingBeforeAnySheet: Bool = false
+    
+    init(
+        item: Item,
+        keyboardActionHandler: KeyboardActionHandler,
+        playerManager: VideoPlayerManager,
+        currentSubtitleText: String?,
+        onWillBeginFullScreen: @escaping () -> Void,
+        onWillEndFullScreen: @escaping () -> Void,
+        displayedTags: [ItemTag],
+        totalTagCount: Int,
+        showingAllTags: Bool,
+        flatComments: [FlatCommentDisplayItem],
+        totalCommentCount: Int,
+        infoLoadingStatus: InfoLoadingStatus,
+        previewLinkTarget: Binding<PreviewLinkTarget?>,
+        userProfileSheetTarget: Binding<UserProfileSheetTarget?>,
+        fullscreenImageTarget: Binding<FullscreenImageTarget?>,
+        isFavorited: Bool,
+        toggleFavoriteAction: @escaping () async -> Void,
+        showCollectionSelectionAction: @escaping () -> Void,
+        showAllTagsAction: @escaping () -> Void,
+        isCommentCollapsed: @escaping (Int) -> Bool,
+        toggleCollapseAction: @escaping (Int) -> Void,
+        currentVote: Int,
+        upvoteAction: @escaping () -> Void,
+        downvoteAction: @escaping () -> Void,
+        showCommentInputAction: @escaping (Int, Int) -> Void,
+        targetCommentID: Int?,
+        onHighlightCompletedForCommentID: @escaping (Int) -> Void,
+        upvoteTagAction: @escaping (Int) -> Void,
+        downvoteTagAction: @escaping (Int) -> Void,
+        addTagsAction: @escaping (String) async -> String?,
+        upvoteCommentAction: @escaping (Int) -> Void,
+        downvoteCommentAction: @escaping (Int) -> Void,
+        onTagTappedInSheetCallback: ((String) -> Void)? = nil
+    ) {
+        self.item = item
+        self.keyboardActionHandler = keyboardActionHandler
+        self.playerManager = playerManager
+        self.currentSubtitleText = currentSubtitleText
+        self.onWillBeginFullScreen = onWillBeginFullScreen
+        self.onWillEndFullScreen = onWillEndFullScreen
+        self.displayedTags = displayedTags
+        self.totalTagCount = totalTagCount
+        self.showingAllTags = showingAllTags
+        self.flatComments = flatComments
+        self.totalCommentCount = totalCommentCount
+        self.infoLoadingStatus = infoLoadingStatus
+        self._previewLinkTarget = previewLinkTarget
+        self._userProfileSheetTarget = userProfileSheetTarget
+        self._fullscreenImageTarget = fullscreenImageTarget
+        self.isFavorited = isFavorited
+        self.toggleFavoriteAction = toggleFavoriteAction
+        self.showCollectionSelectionAction = showCollectionSelectionAction
+        self.showAllTagsAction = showAllTagsAction
+        self.isCommentCollapsed = isCommentCollapsed
+        self.toggleCollapseAction = toggleCollapseAction
+        self.currentVote = currentVote
+        self.upvoteAction = upvoteAction
+        self.downvoteAction = downvoteAction
+        self.showCommentInputAction = showCommentInputAction
+        self.targetCommentID = targetCommentID
+        self.onHighlightCompletedForCommentID = onHighlightCompletedForCommentID
+        self.upvoteTagAction = upvoteTagAction
+        self.downvoteTagAction = downvoteTagAction
+        self.addTagsAction = addTagsAction
+        self.upvoteCommentAction = upvoteCommentAction
+        self.downvoteCommentAction = downvoteCommentAction
+        self.onTagTappedInSheetCallback = onTagTappedInSheetCallback
+    }
 
 
     @ViewBuilder private var mediaContentInternal: some View {
@@ -220,7 +291,11 @@ struct DetailViewContent: View {
 
 
     @ViewBuilder private var shareButton: some View {
-        Button { showingShareOptions = true; sharePreparationError = nil }
+        Button {
+            pausePlayerForSheet()
+            showingShareOptions = true
+            sharePreparationError = nil
+        }
         label: {
             if isPreparingShare {
                 ProgressView()
@@ -276,6 +351,55 @@ struct DetailViewContent: View {
             self.userProfileSheetTarget = UserProfileSheetTarget(username: item.user)
         }
     }
+    
+    @ViewBuilder
+    private var tagsFlowLayoutView: some View {
+        FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+            ForEach(displayedTags) { tag in
+                VotableTagView(
+                    tag: tag,
+                    currentVote: authService.votedTagStates[tag.id] ?? 0,
+                    isVoting: authService.isVotingTag[tag.id] ?? false,
+                    onUpvote: { upvoteTagAction(tag.id) },
+                    onDownvote: { downvoteTagAction(tag.id) },
+                    onTapTag: {
+                        if let sheetCallback = onTagTappedInSheetCallback {
+                            DetailViewContent.logger.info("Tag '\(tag.tag)' tapped IN SHEET. Calling sheetCallback.")
+                            pausePlayerForSheet()
+                            sheetCallback(tag.tag)
+                        } else {
+                            DetailViewContent.logger.info("Tag '\(tag.tag)' tapped (standard). Setting tagForSheetSearch.")
+                            pausePlayerForSheet()
+                            self.tagForSheetSearch = tag.tag
+                        }
+                    }
+                )
+            }
+            if !showingAllTags && totalTagCount > displayedTags.count {
+                let remainingCount = totalTagCount - displayedTags.count
+                Button { showAllTagsAction() } label: { Text("+\(remainingCount) mehr").font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.accentColor.opacity(0.15)).foregroundColor(.accentColor).clipShape(Capsule()).contentShape(Capsule()).lineLimit(1) }
+                .buttonStyle(.plain)
+            }
+            if authService.isLoggedIn && infoLoadingStatus == .loaded {
+                Button {
+                    newTagText = ""
+                    addTagError = nil
+                    isAddingTags = false
+                    showingAddTagSheet = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.gray.opacity(0.2))
+                        .foregroundColor(.secondary)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
 
     @ViewBuilder private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -300,45 +424,7 @@ struct DetailViewContent: View {
             Group {
                 switch infoLoadingStatus {
                 case .loaded:
-                    FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
-                        ForEach(displayedTags) { tag in
-                            VotableTagView(
-                                tag: tag,
-                                currentVote: authService.votedTagStates[tag.id] ?? 0,
-                                isVoting: authService.isVotingTag[tag.id] ?? false,
-                                onUpvote: { upvoteTagAction(tag.id) },
-                                onDownvote: { downvoteTagAction(tag.id) },
-                                // --- MODIFIED: Tag-Tap öffnet Sheet ---
-                                onTapTag: {
-                                    DetailViewContent.logger.info("Tag '\(tag.tag)' tapped. Setting tagForSheetSearch.")
-                                    self.tagForSheetSearch = tag.tag
-                                }
-                                // --- END MODIFICATION ---
-                            )
-                        }
-                        if !showingAllTags && totalTagCount > displayedTags.count {
-                            let remainingCount = totalTagCount - displayedTags.count
-                            Button { showAllTagsAction() } label: { Text("+\(remainingCount) mehr").font(.caption).padding(.horizontal, 8).padding(.vertical, 4).background(Color.accentColor.opacity(0.15)).foregroundColor(.accentColor).clipShape(Capsule()).contentShape(Capsule()).lineLimit(1) }
-                            .buttonStyle(.plain)
-                        }
-                        if authService.isLoggedIn && infoLoadingStatus == .loaded {
-                            Button {
-                                newTagText = ""
-                                addTagError = nil
-                                isAddingTags = false
-                                showingAddTagSheet = true
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.caption.weight(.bold))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color.gray.opacity(0.2))
-                                    .foregroundColor(.secondary)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                    tagsFlowLayoutView
                 case .loading: ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .error: Text("Fehler beim Laden der Tags").font(.caption).foregroundColor(.red).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                 case .idle: Text(" ").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
@@ -403,6 +489,66 @@ struct DetailViewContent: View {
     @ViewBuilder
     private var commentsWrapper: some View {
         if horizontalSizeClass == .regular {
+            regularLayout
+        } else {
+            compactLayout
+        }
+    }
+    
+    @ViewBuilder
+    private var regularLayout: some View {
+         HStack(alignment: .top, spacing: 0) {
+            mediaContentInternal
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 15) {
+                    infoAndTagsContent.padding([.horizontal, .top]);
+                    commentsContentSectionWithScrollReader(proxyEnabled: true)
+                        .padding([.horizontal, .bottom])
+                }
+            }
+            .frame(minWidth: 300, idealWidth: 450, maxWidth: 600).background(Color(.secondarySystemBackground))
+        }
+    }
+    
+    @ViewBuilder
+    private var compactLayout: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    GeometryReader { geo in
+                        let aspect = guessAspectRatio() ?? 1.0
+                        mediaContentInternal
+                            .frame(width: geo.size.width, height: geo.size.width / aspect)
+                    }
+                    .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
+                    infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
+                    commentsContentSection(scrollViewProxy: proxy)
+                        .padding(.horizontal).padding(.bottom, 10)
+                }
+            }
+            .onChange(of: infoLoadingStatus) { _, newStatus in
+                if newStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                     attemptScrollToComment(proxy: proxy, targetID: tid)
+                }
+            }
+            .onChange(of: flatComments.count) { _, _ in
+                if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                    attemptScrollToComment(proxy: proxy, targetID: tid)
+                }
+            }
+            .onAppear {
+                if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                    attemptScrollToComment(proxy: proxy, targetID: tid)
+                }
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func commentsContentSectionWithScrollReader(proxyEnabled: Bool) -> some View {
+        if proxyEnabled {
             ScrollViewReader { proxy in
                 commentsContentSection(scrollViewProxy: proxy)
                     .onChange(of: infoLoadingStatus) { _, newStatus in
@@ -422,38 +568,10 @@ struct DetailViewContent: View {
                     }
             }
         } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        GeometryReader { geo in
-                            let aspect = guessAspectRatio() ?? 1.0
-                            mediaContentInternal
-                                .frame(width: geo.size.width, height: geo.size.width / aspect)
-                        }
-                        .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
-                        infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
-                        commentsContentSection(scrollViewProxy: proxy)
-                            .padding(.horizontal).padding(.bottom, 10)
-                    }
-                }
-                .onChange(of: infoLoadingStatus) { _, newStatus in
-                    if newStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
-                         attemptScrollToComment(proxy: proxy, targetID: tid)
-                    }
-                }
-                .onChange(of: flatComments.count) { _, _ in
-                    if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
-                        attemptScrollToComment(proxy: proxy, targetID: tid)
-                    }
-                }
-                .onAppear {
-                    if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
-                        attemptScrollToComment(proxy: proxy, targetID: tid)
-                    }
-                }
-            }
+            commentsContentSection(scrollViewProxy: nil)
         }
     }
+
 
     @ViewBuilder
     private func commentsContentSection(scrollViewProxy: ScrollViewProxy?) -> some View {
@@ -495,28 +613,35 @@ struct DetailViewContent: View {
             DetailViewContent.logger.info("Scroll to comment ID \(targetID) requested with anchor: .top")
         }
     }
+    
+    private func pausePlayerForSheet() {
+        if playerManager.player?.timeControlStatus == .playing {
+            wasPlayingBeforeAnySheet = true
+            playerManager.player?.pause()
+            DetailViewContent.logger.debug("Player paused because a sheet is about to open.")
+        } else {
+            wasPlayingBeforeAnySheet = false
+            DetailViewContent.logger.debug("Player was not playing when sheet was triggered.")
+        }
+    }
+
+    private func resumePlayerIfNeeded() {
+        if wasPlayingBeforeAnySheet {
+            let appIsActive = UIApplication.shared.applicationState == .active
+            if item.isVideo, item.id == playerManager.playerItemID, !onWillBeginFullScreenCalledRecently, appIsActive {
+                playerManager.player?.play()
+                DetailViewContent.logger.debug("Player resumed after sheet dismissed (not fullscreen, app active).")
+            } else {
+                DetailViewContent.logger.debug("Not resuming player: conditions not met (item not video/player changed, or fullscreen, or app not active).")
+            }
+        }
+        wasPlayingBeforeAnySheet = false
+    }
+    private var onWillBeginFullScreenCalledRecently: Bool { false }
 
 
     var body: some View {
-        Group {
-            if horizontalSizeClass == .regular {
-                HStack(alignment: .top, spacing: 0) {
-                    mediaContentInternal
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    Divider()
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 15) {
-                            infoAndTagsContent.padding([.horizontal, .top]);
-                            commentsWrapper
-                                .padding([.horizontal, .bottom])
-                        }
-                    }
-                    .frame(minWidth: 300, idealWidth: 450, maxWidth: 600).background(Color(.secondarySystemBackground))
-                }
-            } else {
-                commentsWrapper
-            }
-        }
+        commentsWrapper
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             DetailViewContent.logger.debug("DetailViewContent for item \(item.id) appearing. TargetCommentID: \(targetCommentID ?? -1)")
@@ -538,6 +663,7 @@ struct DetailViewContent: View {
             if let tempUrl = itemToShare?.temporaryFileUrlToDelete {
                 deleteTemporaryFile(at: tempUrl)
             }
+            resumePlayerIfNeeded()
         }) { shareableItemWrapper in
             ShareSheet(activityItems: shareableItemWrapper.itemsToShare)
         }
@@ -551,18 +677,50 @@ struct DetailViewContent: View {
         .sheet(isPresented: $showingAddTagSheet) {
             addTagSheetContent()
         }
-        // --- NEW: Sheet für die Tag-Suche ---
-        .sheet(item: $tagForSheetSearch, onDismiss: {
-            DetailViewContent.logger.info("Tag search sheet dismissed.")
-            // Optional: Aktionen nach dem Schließen des Sheets, falls nötig
-        }) { tappedTag in
-            TagSearchView(tag: tappedTag)
+        // --- MODIFIED: .sheet(item: $tagForSheetSearch) ---
+        .sheet(item: $tagForSheetSearch, onDismiss: resumePlayerIfNeeded) { tappedTagString in
+             TagSearchViewWrapper(initialTag: tappedTagString, onNewTagSelected: { newTagFromSheet in
+                 DetailViewContent.logger.info("Received new tag '\(newTagFromSheet)' from TagSearchViewWrapper. Updating tagForSheetSearch.")
+                 // --- ADDED: Pause player before updating tag for sheet ---
+                 pausePlayerForSheet()
+                 // --- END ADDED ---
+                 self.tagForSheetSearch = newTagFromSheet
+             })
+             .environmentObject(settings)
+             .environmentObject(authService)
+         }
+         // --- END MODIFICATION ---
+    }
+    
+    struct TagSearchViewWrapper: View {
+        @State var currentTag: String
+        let onNewTagSelected: (String) -> Void
+
+        @StateObject private var localPlayerManager = VideoPlayerManager()
+        @EnvironmentObject var settings: AppSettings
+        @EnvironmentObject var authService: AuthService
+
+        init(initialTag: String, onNewTagSelected: @escaping (String) -> Void) {
+            self._currentTag = State(initialValue: initialTag)
+            self.onNewTagSelected = onNewTagSelected
+            DetailViewContent.logger.debug("TagSearchViewWrapper init. initialTag: \(initialTag), onNewTagSelected closure is set.")
+        }
+        
+        var body: some View {
+            TagSearchView(
+                currentSearchTag: $currentTag,
+                onNewTagSelectedInSheet: { newTagClickedInSheet in
+                    DetailViewContent.logger.debug("TagSearchViewWrapper: Tag '\(newTagClickedInSheet)' clicked inside sheet's PagedDetailView. Calling onNewTagSelected (outer callback).")
+                    self.onNewTagSelected(newTagClickedInSheet)
+                }
+            )
+                .task { localPlayerManager.configure(settings: settings) }
+                .environmentObject(localPlayerManager)
                 .environmentObject(settings)
                 .environmentObject(authService)
-                // playerManager wird in TagSearchView selbst instanziiert
         }
-        // --- END NEW ---
     }
+
 
     @ViewBuilder
     private func addTagSheetContent() -> some View {
@@ -815,7 +973,8 @@ struct PreviewWrapper: View {
                     return nil
                 },
                 upvoteCommentAction: { commentId in print("Preview: Upvote comment \(commentId)") },
-                downvoteCommentAction: { commentId in print("Preview: Downvote comment \(commentId)") }
+                downvoteCommentAction: { commentId in print("Preview: Downvote comment \(commentId)") },
+                onTagTappedInSheetCallback: nil
             )
             .sheet(item: $commentReplyTarget) { target in CommentInputView(itemId: target.itemId, parentId: target.parentId, onSubmit: { _ in }) }
             .sheet(item: $userProfileSheetTarget) { target in Text("Preview: User Profile Sheet for \(target.username)") }

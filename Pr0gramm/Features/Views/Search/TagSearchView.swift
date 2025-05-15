@@ -5,7 +5,8 @@ import SwiftUI
 import os
 
 struct TagSearchView: View {
-    let tag: String
+    @Binding var currentSearchTag: String
+    let onNewTagSelectedInSheet: ((String) -> Void)?
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
@@ -24,10 +25,14 @@ struct TagSearchView: View {
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "TagSearchView")
 
-    // --- NEW: Debounce für Load More ---
     @State private var loadMoreTask: Task<Void, Never>? = nil
     private let loadMoreDebounceTime: Duration = .milliseconds(500)
-    // --- END NEW ---
+
+    init(currentSearchTag: Binding<String>, onNewTagSelectedInSheet: ((String) -> Void)? = nil) {
+        self._currentSearchTag = currentSearchTag
+        self.onNewTagSelectedInSheet = onNewTagSelectedInSheet
+        TagSearchView.logger.info("TagSearchView init. currentSearchTag: \(currentSearchTag.wrappedValue), onNewTagSelectedInSheet is \(onNewTagSelectedInSheet == nil ? "nil" : "set")")
+    }
 
     private var gridColumns: [GridItem] {
         let isMac = ProcessInfo.processInfo.isiOSAppOnMac
@@ -42,7 +47,7 @@ struct TagSearchView: View {
             VStack(spacing: 0) {
                 searchContentView
             }
-            .navigationTitle("Suche: \(tag)")
+            .navigationTitle("Suche: \(currentSearchTag)")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -51,9 +56,9 @@ struct TagSearchView: View {
                     Button("Schließen") { dismiss() }
                 }
             }
-            .task {
+            .task(id: currentSearchTag) { // Reagiert auf Änderungen von außen
+                TagSearchView.logger.info("TagSearchView task triggered for currentSearchTag: \(currentSearchTag)")
                 playerManager.configure(settings: settings)
-                SearchView.addTagToGlobalSearchHistory(tag)
                 await performSearch(isInitialSearch: true)
             }
             .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
@@ -62,7 +67,7 @@ struct TagSearchView: View {
             .navigationDestination(for: Item.self) { destinationItem in
                 detailView(for: destinationItem)
             }
-            .onDisappear { // Wichtig: Laufende Tasks abbrechen
+            .onDisappear {
                 loadMoreTask?.cancel()
             }
         }
@@ -75,7 +80,9 @@ struct TagSearchView: View {
                 items: $items,
                 selectedIndex: index,
                 playerManager: playerManager,
-                loadMoreAction: { Task { await triggerLoadMoreWithDebounce() } } // Debounced aufrufen
+                loadMoreAction: { Task { await triggerLoadMoreWithDebounce() } },
+                // --- MODIFIED: Hier wird die Callback von TagSearchView weitergegeben ---
+                onTagTappedInSheetCallback: self.onNewTagSelectedInSheet
             )
             .environmentObject(settings)
             .environmentObject(authService)
@@ -90,7 +97,7 @@ struct TagSearchView: View {
     @ViewBuilder
     private var searchContentView: some View {
         if isLoading && items.isEmpty {
-            ProgressView("Suche nach '\(tag)'...")
+            ProgressView("Suche nach '\(currentSearchTag)'...")
                 .font(UIConstants.bodyFont)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = errorMessage {
@@ -102,7 +109,7 @@ struct TagSearchView: View {
         } else if items.isEmpty && hasSearched {
             ContentUnavailableView {
                 Label("Keine Ergebnisse", systemImage: "magnifyingglass").font(UIConstants.headlineFont)
-            } description: { Text("Keine Posts für '\(tag)' gefunden (\(settings.feedType.displayName), Filter aktiv).").font(UIConstants.bodyFont) }
+            } description: { Text("Keine Posts für '\(currentSearchTag)' gefunden (\(settings.feedType.displayName), Filter aktiv).").font(UIConstants.bodyFont) }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if items.isEmpty && !hasSearched && !isLoading {
              Text("Suche wird ausgeführt...").foregroundColor(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -121,10 +128,8 @@ struct TagSearchView: View {
                 }
                 if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
                     Color.clear.frame(height: 1).onAppear {
-                        TagSearchView.logger.info("TagSearchView: End trigger appeared for tag '\(tag)'.")
-                        // --- MODIFIED: Debounced aufrufen ---
+                        TagSearchView.logger.info("TagSearchView: End trigger appeared for tag '\(currentSearchTag)'.")
                         Task { await triggerLoadMoreWithDebounce() }
-                        // --- END MODIFICATION ---
                     }
                 }
                 if isLoadingMore { ProgressView("Lade mehr...").padding().gridCellColumns(gridColumns.count) }
@@ -134,7 +139,6 @@ struct TagSearchView: View {
         .refreshable { await performSearch(isInitialSearch: true) }
     }
     
-    // --- NEW: Debounce-Methode ---
     private func triggerLoadMoreWithDebounce() async {
         loadMoreTask?.cancel()
         loadMoreTask = Task {
@@ -142,27 +146,31 @@ struct TagSearchView: View {
                 try await Task.sleep(for: loadMoreDebounceTime)
                 await performSearch(isInitialSearch: false)
             } catch is CancellationError {
-                TagSearchView.logger.info("Load more task cancelled for tag '\(tag)'.")
+                TagSearchView.logger.info("Load more task cancelled for tag '\(currentSearchTag)'.")
             } catch {
                 TagSearchView.logger.error("Error in load more task sleep: \(error)")
             }
         }
     }
-    // --- END NEW ---
 
     @MainActor
     private func performSearch(isInitialSearch: Bool) async {
-        let effectiveSearchQueryForAPITags = "! \(tag)"
+        let tagToSearch = currentSearchTag
+        // SearchView.addTagToGlobalSearchHistory(tagToSearch) // Wird jetzt in DetailViewContent gemacht, wenn das Sheet geöffnet wird
+
+        let effectiveSearchQueryForAPITags = "! \(tagToSearch)"
 
         if isInitialSearch {
-            isLoading = true; errorMessage = nil; items = []; hasSearched = false; canLoadMore = true
-            TagSearchView.logger.info("Performing INITIAL search: Tag='\(tag)', API Query='\(effectiveSearchQueryForAPITags)', FeedType=\(settings.feedType.displayName), Flags=\(settings.apiFlags)")
+            // Beim initialen Laden (oder wenn sich currentSearchTag ändert), werden die Items zurückgesetzt
+            items = [] // Wichtig, um alte Ergebnisse zu entfernen
+            isLoading = true; errorMessage = nil; hasSearched = false; canLoadMore = true
+            TagSearchView.logger.info("Performing INITIAL search: Tag='\(tagToSearch)', API Query='\(effectiveSearchQueryForAPITags)', FeedType=\(settings.feedType.displayName), Flags=\(settings.apiFlags)")
         } else {
             guard !isLoadingMore && canLoadMore else {
-                TagSearchView.logger.debug("Load more skipped: Tag='\(tag)'"); return
+                TagSearchView.logger.debug("Load more skipped: Tag='\(tagToSearch)'"); return
             }
             isLoadingMore = true
-            TagSearchView.logger.info("Performing LOAD MORE: Tag='\(tag)', API Query='\(effectiveSearchQueryForAPITags)', OlderThan=\(items.last?.id ?? -1)")
+            TagSearchView.logger.info("Performing LOAD MORE: Tag='\(tagToSearch)', API Query='\(effectiveSearchQueryForAPITags)', OlderThan=\(items.last?.id ?? -1)")
         }
 
         defer { Task { @MainActor in if isInitialSearch { self.isLoading = false } else { self.isLoadingMore = false }; self.hasSearched = true } }
@@ -173,73 +181,79 @@ struct TagSearchView: View {
             else {
                 if settings.feedType == .promoted { olderThanIdForAPI = items.last?.promoted ?? items.last?.id }
                 else { olderThanIdForAPI = items.last?.id }
-                guard olderThanIdForAPI != nil else { TagSearchView.logger.warning("Cannot load more: Tag='\(tag)'"); canLoadMore = false; return }
+                guard olderThanIdForAPI != nil else { TagSearchView.logger.warning("Cannot load more: Tag='\(tagToSearch)'"); canLoadMore = false; return }
             }
 
+            // Die FeedType-Optionen (promoted/new/junk) werden hier von den globalen `settings` genommen.
+            // Das ist für eine "Tag-Suche" üblich, da sie meistens im Kontext des aktuellen Feed-Typs stattfindet.
             let apiResponse = try await apiService.fetchItems(
-                flags: settings.apiFlags, promoted: settings.apiPromoted,
-                tags: effectiveSearchQueryForAPITags, olderThanId: olderThanIdForAPI,
-                showJunkParameter: settings.apiShowJunk
+                flags: settings.apiFlags,
+                promoted: settings.apiPromoted, // Nimmt den globalen FeedType (promoted/new)
+                tags: effectiveSearchQueryForAPITags,
+                olderThanId: olderThanIdForAPI,
+                showJunkParameter: settings.apiShowJunk // Nimmt den globalen FeedType (junk)
             )
 
-            if let apiError = apiResponse.error, apiError != "limitReached" /* Ignoriere limitReached hier kurzfristig */ {
+            if let apiError = apiResponse.error, apiError != "limitReached" {
                  if apiError == "nothingFound" {
                      if isInitialSearch { items = [] }; canLoadMore = false
-                     TagSearchView.logger.info("API: nothingFound for tag '\(tag)'.")
+                     TagSearchView.logger.info("API: nothingFound for tag '\(tagToSearch)'.")
                  } else if apiError == "tooShort" {
                      errorMessage = "Suchbegriff zu kurz."; if isInitialSearch { items = [] }; canLoadMore = false
                  } else { throw NSError(domain: "APIService.performTagSearch", code: 1, userInfo: [NSLocalizedDescriptionKey: apiError]) }
             } else if apiResponse.error == "limitReached" {
-                // Spezifische Behandlung für limitReached, falls gewünscht, ansonsten fällt es in den Catch-Block
-                TagSearchView.logger.warning("API returned 'limitReached' for tag '\(tag)'. CanLoadMore wird vorerst true gelassen für manuelle Retries.")
-                errorMessage = "Zu viele Anfragen. Bitte später erneut versuchen (Fehler 429)." // Setze Fehlermeldung
-                // canLoadMore bleibt hier true, damit der User manuell refreshen kann, oder der Fehler wird im allgemeinen Catch behandelt
+                TagSearchView.logger.warning("API returned 'limitReached' for tag '\(tagToSearch)'.")
+                errorMessage = "Zu viele Anfragen. Bitte später erneut versuchen (Fehler 429)."
             } else {
-                 let newItems = apiResponse.items // Holen der neuen Items
-                 if isInitialSearch { items = newItems }
-                 else {
+                 let newItems = apiResponse.items
+                 if isInitialSearch { items = newItems } // Ersetze Items bei initialer Suche
+                 else { // Füge hinzu bei "load more"
                      let currentIDs = Set(items.map { $0.id })
                      let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
                      items.append(contentsOf: uniqueNewItems)
                  }
-                 // --- MODIFIED: Verbesserte canLoadMore Logik ---
                  if newItems.isEmpty && !(apiResponse.atEnd == false && apiResponse.hasOlder == true) {
-                     canLoadMore = false // Keine neuen Items und API sagt nicht explizit, dass es mehr gibt
+                     canLoadMore = false
                  } else {
-                     canLoadMore = !(apiResponse.atEnd ?? false) || (apiResponse.hasOlder ?? false) // Originale Logik, wenn Items kamen
+                     canLoadMore = !(apiResponse.atEnd ?? false) || (apiResponse.hasOlder ?? false)
                  }
-                 // --- END MODIFICATION ---
                  errorMessage = nil
-                 TagSearchView.logger.info("Search for tag '\(tag)' successful. \(isInitialSearch ? "Found" : "Loaded") \(newItems.count). Total: \(items.count). More: \(canLoadMore)")
+                 TagSearchView.logger.info("Search for tag '\(tagToSearch)' successful. \(isInitialSearch ? "Found" : "Loaded") \(newItems.count). Total: \(items.count). More: \(canLoadMore)")
             }
         } catch let error as NSError where error.userInfo[NSLocalizedDescriptionKey] as? String == "limitReached" {
             errorMessage = "Zu viele Anfragen. Bitte später erneut versuchen (Fehler 429)."
-            // canLoadMore bleibt true, damit der "Erneut versuchen" Button oder Pull-to-Refresh funktioniert
-            TagSearchView.logger.error("Search for tag '\(tag)' failed due to rate limit: \(error.localizedDescription)")
+            TagSearchView.logger.error("Search for tag '\(tagToSearch)' failed due to rate limit: \(error.localizedDescription)")
         }
         catch {
             errorMessage = "Fehler: \(error.localizedDescription)"; if isInitialSearch { items = [] }; canLoadMore = false
-            TagSearchView.logger.error("Search for tag '\(tag)' failed: \(error.localizedDescription)")
+            TagSearchView.logger.error("Search for tag '\(tagToSearch)' failed: \(error.localizedDescription)")
         }
     }
 }
 
-#Preview {
-    struct TagSearchPreviewWrapper: View {
-        @StateObject private var settings = AppSettings()
-        @StateObject private var authService: AuthService
-
-        init() {
-            let s = AppSettings(); let a = AuthService(appSettings: s)
-            a.isLoggedIn = true; s.showSFW = true; s.feedType = .promoted
-            _settings = StateObject(wrappedValue: s); _authService = StateObject(wrappedValue: a)
-        }
-        var body: some View {
-            Text("Parent View").sheet(isPresented: .constant(true)) {
-                TagSearchView(tag: "Katze").environmentObject(settings).environmentObject(authService)
-            }
-        }
+struct TagSearchView_PreviewWrapper: View {
+    @State private var previewTag: String = "Katze"
+    
+    private func handleNewTagSelectionInSheet(newTag: String) {
+        print("TagSearchView_PreviewWrapper: New tag selected in sheet - \(newTag)")
+        self.previewTag = newTag
     }
-    return TagSearchPreviewWrapper()
+
+    var body: some View {
+        let settings = AppSettings()
+        let authService = AuthService(appSettings: settings)
+        authService.isLoggedIn = true
+
+        return TagSearchView(
+            currentSearchTag: $previewTag,
+            onNewTagSelectedInSheet: handleNewTagSelectionInSheet
+        )
+            .environmentObject(settings)
+            .environmentObject(authService)
+    }
+}
+
+#Preview {
+    TagSearchView_PreviewWrapper()
 }
 // --- END OF COMPLETE FILE ---
