@@ -32,6 +32,8 @@ struct UserProfileSheetView: View {
     
     @State private var showAllUploadsSheet = false
     @State private var showAllCommentsSheet = false
+    
+    @State private var showConversationSheet = false
 
     @State private var isLoadingNavigationTarget: Bool = false
     @State private var navigationTargetItemId: Int? = nil
@@ -136,6 +138,19 @@ struct UserProfileSheetView: View {
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllCommentsSheet = false } } }
                 }
             }
+            .sheet(isPresented: $showConversationSheet) {
+                NavigationStack {
+                    ConversationDetailView(partnerUsername: username)
+                        .environmentObject(settings)
+                        .environmentObject(authService)
+                        .environmentObject(playerManager)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Schließen") { showConversationSheet = false }
+                            }
+                        }
+                }
+            }
             .sheet(item: $previewLinkTargetFromComment) { target in
                  LinkedItemPreviewView(itemID: target.id)
                      .environmentObject(settings)
@@ -172,11 +187,21 @@ struct UserProfileSheetView: View {
                 } else { userInfoRow(label: "Registriert seit", value: "N/A") }
 
                 if let badges = info.badges, !badges.isEmpty {
-                    DisclosureGroup("Abzeichen (\(badges.count))") {
-                        badgeScrollView(badges: badges)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
-                    }
+                    badgeScrollView(badges: badges)
+                        // .listRowInsets(EdgeInsets()) // Entfernt, da das Padding jetzt in badgeScrollView gehandhabt wird
+                        .padding(.vertical, 4)
                 }
+
+                if authService.isLoggedIn && authService.currentUser?.name.lowercased() != username.lowercased() {
+                    Button {
+                        UserProfileSheetView.logger.info("Send private message button tapped for user: \(username)")
+                        showConversationSheet = true
+                    } label: {
+                        Label("Private Nachricht senden", systemImage: "paperplane.fill")
+                    }
+                    .disabled(info.user.banned != nil && info.user.banned == 1)
+                }
+
             } else {
                 Text("Keine Profilinformationen verfügbar.").foregroundColor(.secondary)
             }
@@ -214,7 +239,7 @@ struct UserProfileSheetView: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(userUploads) { item in // No .prefix here, as it's already limited in loadUserUploads
+                        ForEach(userUploads) { item in
                             Button {
                                 Task { await prepareAndShowItemDetailSheet(item.id, targetCommentID: nil) }
                             } label: {
@@ -252,7 +277,7 @@ struct UserProfileSheetView: View {
     }
 
     private func loadUserUploads(isRefresh: Bool = false, initialLoad: Bool = false) async {
-        if !initialLoad && !isRefresh && !userUploads.isEmpty { return } // Skip if already loaded and not forced
+        if !initialLoad && !isRefresh && !userUploads.isEmpty { return }
         UserProfileSheetView.logger.info("Loading uploads for \(username) (Profile Sheet - Using global filters: \(settings.apiFlags)). Refresh: \(isRefresh), Initial: \(initialLoad)")
         await MainActor.run {
             if isRefresh || initialLoad { userUploads = [] }
@@ -261,9 +286,7 @@ struct UserProfileSheetView: View {
         do {
             let flagsToFetchWith = settings.apiFlags
             let apiResponse = try await apiService.fetchItems(flags: flagsToFetchWith, user: username, olderThanId: nil)
-            // --- MODIFIED: Extract items from apiResponse ---
             let fetchedItems = apiResponse.items
-            // --- END MODIFICATION ---
             await MainActor.run { userUploads = Array(fetchedItems.prefix(uploadsPageLimit)) }
         } catch {
             UserProfileSheetView.logger.error("Failed to load uploads for \(username): \(error.localizedDescription)")
@@ -286,7 +309,7 @@ struct UserProfileSheetView: View {
             } else if userComments.isEmpty {
                 Text("\(username) hat (noch) keine Kommentare geschrieben.").foregroundColor(.secondary)
             } else {
-                ForEach(userComments) { comment in // No .prefix here, as it's limited in loadUserComments
+                ForEach(userComments) { comment in
                     Button {
                         Task { await prepareAndShowItemDetailSheet(comment.itemId, targetCommentID: comment.id) }
                     } label: {
@@ -321,7 +344,7 @@ struct UserProfileSheetView: View {
     }
 
     private func loadUserComments(isRefresh: Bool = false, initialLoad: Bool = false) async {
-        if !initialLoad && !isRefresh && !userComments.isEmpty { return } // Skip if already loaded and not forced
+        if !initialLoad && !isRefresh && !userComments.isEmpty { return }
         UserProfileSheetView.logger.info("Loading comments for \(username) (Profile Sheet - Using global filters: \(settings.apiFlags)). Refresh: \(isRefresh), Initial: \(initialLoad)")
         await MainActor.run {
             if isRefresh || initialLoad { userComments = [] }
@@ -359,7 +382,7 @@ struct UserProfileSheetView: View {
         targetCommentIDForDetailSheet = nil
 
         do {
-            let flagsToFetchWith = settings.apiFlags // Use global filters for consistency
+            let flagsToFetchWith = settings.apiFlags
             UserProfileSheetView.logger.debug("Fetching item \(id) for sheet display using global flags: \(flagsToFetchWith)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
 
@@ -374,15 +397,11 @@ struct UserProfileSheetView: View {
                 showPostDetailSheet = true
             } else {
                 UserProfileSheetView.logger.warning("Could not fetch item \(id) for sheet display (API returned nil or item does not match filters).")
-                // Optionally show an error to the user
-                // self.profileInfoError = "Post \(id) konnte nicht geladen werden oder entspricht nicht den Filtern."
             }
         } catch is CancellationError {
             UserProfileSheetView.logger.info("Item fetch for sheet display cancelled (ID: \(id)).")
         } catch {
             UserProfileSheetView.logger.error("Failed to fetch item \(id) for sheet display: \(error.localizedDescription)")
-            // Optionally show an error to the user
-            // if navigationTargetItemId == id { self.profileInfoError = "Post \(id) konnte nicht geladen werden: \(error.localizedDescription)" }
         }
         if navigationTargetItemId == id {
              isLoadingNavigationTarget = false
@@ -423,7 +442,12 @@ struct UserProfileSheetView: View {
                         .help(badge.description ?? "")
                 }
             }
-            .padding(.horizontal)
+            // --- MODIFIED: Adjust padding to align with List content ---
+            // Using .padding(.leading) on the HStack to simulate the List's default content inset.
+            // The exact value might need minor adjustments based on testing on different devices/OS versions.
+            // Common values are around 15-20.
+            .padding(.leading, 1) // Default List row content leading padding
+            // --- END MODIFICATION ---
         }
     }
 
@@ -439,7 +463,12 @@ struct UserProfileSheetView: View {
             let tempSettings = AppSettings()
             let tempAuth = AuthService(appSettings: tempSettings)
             tempAuth.isLoggedIn = true
-            tempAuth.currentUser = UserInfo(id: 1, name: "Rockabilly", registered: 1609459200, score: 12345, mark: 2, badges: [ApiBadge(image: "pr0-coin.png", description: "Test Badge", created: 0, link: nil, category: nil)], collections: [])
+            tempAuth.currentUser = UserInfo(id: 1, name: "Rockabilly", registered: 1609459200, score: 12345, mark: 2, badges: [
+                ApiBadge(image: "pr0-coin.png", description: "Test Badge 1", created: 0, link: nil, category: nil),
+                ApiBadge(image: "pr0mium-s.png", description: "Test Badge 2", created: 0, link: nil, category: nil),
+                ApiBadge(image: "comment-gold.png", description: "Test Badge 3", created: 0, link: nil, category: nil),
+                ApiBadge(image: "secret-santa-2015.png", description: "Test Badge 4", created: 0, link: nil, category: nil)
+            ], collections: [])
 
             _settings = StateObject(wrappedValue: tempSettings)
             _authService = StateObject(wrappedValue: tempAuth)
@@ -448,7 +477,7 @@ struct UserProfileSheetView: View {
         var body: some View {
             Text("Parent View")
                 .sheet(isPresented: .constant(true)) {
-                    UserProfileSheetView(username: "Rockabilly")
+                    UserProfileSheetView(username: "AnotherUser")
                         .environmentObject(authService)
                         .environmentObject(settings)
                 }
