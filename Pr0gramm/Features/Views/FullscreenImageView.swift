@@ -19,8 +19,7 @@ struct FullscreenImageView: View {
         NavigationStack { // NavigationStack wird beibehalten für die Toolbar
             ZoomableScrollView(item: item, isLoading: $isLoading, errorMessage: $errorMessage)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black) // Set background to black for fullscreen feel
-                .ignoresSafeArea() // Extend to screen edges
+                .background(Color.black) // Hintergrund füllt jetzt den gesamten Screen
                 .overlay(loadingOrErrorOverlay) // Show loading/error indicators
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
@@ -39,6 +38,7 @@ struct FullscreenImageView: View {
                 }
                 .toolbarBackground(.hidden, for: .navigationBar)
         }
+        .ignoresSafeArea()
         .preferredColorScheme(.dark)
     }
 

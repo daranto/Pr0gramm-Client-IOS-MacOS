@@ -1,10 +1,16 @@
-// Pr0gramm/Pr0gramm/Features/Views/ZoomableScrollView.swift
-// --- START OF COMPLETE FILE ---
-
 import SwiftUI
 import UIKit
 import Kingfisher // Import Kingfisher
 import os // Import os for logging
+
+// A UIScrollView subclass that notifies about layout (bounds) changes
+fileprivate class NotifyingScrollView: UIScrollView {
+    var onLayout: ((CGSize) -> Void)?
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?(bounds.size)
+    }
+}
 
 /// A UIViewRepresentable that wraps a UIScrollView to enable zooming and panning of an image.
 struct ZoomableScrollView: UIViewRepresentable {
@@ -18,7 +24,10 @@ struct ZoomableScrollView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIScrollView {
         // Configure the UIScrollView
-        let scrollView = UIScrollView()
+        let scrollView = NotifyingScrollView()
+        scrollView.onLayout = { size in
+            context.coordinator.handleBoundsChange(size)
+        }
         scrollView.delegate = context.coordinator // Set the coordinator as the delegate
         scrollView.maximumZoomScale = 4.0 // Allow zooming up to 4x
         scrollView.minimumZoomScale = 1.0
@@ -55,7 +64,7 @@ struct ZoomableScrollView: UIViewRepresentable {
 
         // Ensure minimum zoom scale is updated if the view bounds change (e.g., rotation)
         context.coordinator.updateMinZoomScaleForSize(uiView.bounds.size)
-        context.coordinator.centerImage() // Re-center after potential bounds change
+        context.coordinator.handleBoundsChange(uiView.bounds.size)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -64,6 +73,7 @@ struct ZoomableScrollView: UIViewRepresentable {
 
     // MARK: - Coordinator
     class Coordinator: NSObject, UIScrollViewDelegate {
+        private var lastSize: CGSize? = nil
         var parent: ZoomableScrollView
         weak var imageView: UIImageView?
         weak var scrollView: UIScrollView?
@@ -161,6 +171,26 @@ struct ZoomableScrollView: UIViewRepresentable {
              let validVerticalSpace = max(0, verticalSpace.isFinite ? verticalSpace : 0)
 
             scrollView.contentInset = UIEdgeInsets(top: validVerticalSpace, left: validHorizontalSpace, bottom: validVerticalSpace, right: validHorizontalSpace)
+        }
+
+        /// Adjusts content inset or offset when the scroll view size changes (e.g., on rotation).
+        func handleBoundsChange(_ size: CGSize) {
+            guard let scrollView = scrollView else { return }
+            // Only react on actual size changes
+            if lastSize != size {
+                lastSize = size
+                if scrollView.zoomScale > scrollView.minimumZoomScale {
+                    // Center zoomed image by adjusting contentOffset
+                    let offsetX = (scrollView.contentSize.width - size.width) / 2
+                    let offsetY = (scrollView.contentSize.height - size.height) / 2
+                    let clampedX = max(0, offsetX)
+                    let clampedY = max(0, offsetY)
+                    scrollView.setContentOffset(CGPoint(x: clampedX, y: clampedY), animated: false)
+                } else {
+                    // Center non-zoomed image via contentInset
+                    centerImage()
+                }
+            }
         }
 
         // --- MODIFIED: loadImage function with Fallback Logic ---
@@ -281,6 +311,7 @@ struct ZoomableScrollView: UIViewRepresentable {
 
             return zoomRect
         }
+
     }
 }
 // --- END OF COMPLETE FILE ---
