@@ -43,18 +43,24 @@ struct Pr0grammApp: App {
         Self.logger.info("Configuring AVAudioSession...")
         let audioSession = AVAudioSession.sharedInstance()
         do {
+            // Set to playback to allow hardware volume control
             try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             Self.logger.info("AVAudioSession category set to '.playback' with options '[.mixWithOthers]'.")
 
             try audioSession.setActive(true)
             Self.logger.info("AVAudioSession activated.")
 
+            // Force audio output to speaker
             do {
                 try audioSession.overrideOutputAudioPort(.speaker)
                 Self.logger.info("AVAudioSession output successfully overridden to force speaker.")
             } catch let error as NSError {
-                Self.logger.error("Failed to override output port to speaker: \(error.localizedDescription) (Code: \(error.code))")
+                // Ignore parameter errors (-50) when overriding on unsupported categories
+                if error.code != -50 {
+                    Self.logger.error("Failed to override output port to speaker: \(error.localizedDescription) (Code: \(error.code))")
+                }
             }
+
             Self.logger.info("AVAudioSession configuration complete.")
         } catch {
             Self.logger.error("Failed during AVAudioSession configuration (setCategory or setActive): \(error.localizedDescription)")
