@@ -17,12 +17,13 @@ struct CommentView: View {
     let onReply: () -> Void
     let targetCommentID: Int?
     let onHighlightCompleted: (Int) -> Void
-    // --- NEW: Callbacks für Up/Downvote ---
     let onUpvoteComment: () -> Void
     let onDownvoteComment: () -> Void
-    // --- END NEW ---
 
     @EnvironmentObject var authService: AuthService
+    // --- MODIFIED: settings hinzugefügt, um es an das Sheet weiterzugeben ---
+    @EnvironmentObject var settings: AppSettings
+    // --- END MODIFICATION ---
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CommentView")
 
     @State private var isHighlighted: Bool = false
@@ -123,9 +124,9 @@ struct CommentView: View {
         .animation(.easeInOut(duration: 0.35), value: isHighlighted)
         .opacity(isCollapsed ? 0.7 : 1.0)
         .environment(\.openURL, OpenURLAction { url in
-            if let itemID = parsePr0grammLink(url: url) {
-                CommentView.logger.info("Pr0gramm link tapped, attempting to preview item ID: \(itemID)")
-                self.previewLinkTarget = PreviewLinkTarget(id: itemID)
+            if let parsedLink = parsePr0grammLink(url: url) {
+                CommentView.logger.info("Pr0gramm link tapped, attempting to preview item ID: \(parsedLink.itemID), comment ID: \(parsedLink.commentID ?? -1)")
+                self.previewLinkTarget = PreviewLinkTarget(itemID: parsedLink.itemID, targetCommentID: parsedLink.commentID)
                 return .handled
             } else {
                 CommentView.logger.info("Non-pr0gramm link tapped: \(url). Opening in system browser.")
@@ -142,6 +143,24 @@ struct CommentView: View {
                 triggerHighlight()
             }
         }
+        // --- MODIFIED: Sheet-Aufruf für previewLinkTarget ---
+        .sheet(item: $previewLinkTarget) { target in
+            NavigationStack { // Eigener NavigationStack für das Sheet
+                LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.targetCommentID)
+                    .environmentObject(settings) // AppSettings weitergeben
+                    .environmentObject(authService) // AuthService weitergeben
+                    .navigationTitle("Vorschau: Post \(target.itemID)") // Titel hier setzen
+                    #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                    #endif
+                    .toolbar { // Toolbar hier definieren
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Fertig") { previewLinkTarget = nil }
+                        }
+                    }
+            }
+        }
+        // --- END MODIFICATION ---
     }
 
     private func triggerHighlight() {
@@ -190,7 +209,6 @@ struct CommentView: View {
 
             Divider()
 
-            // --- MODIFIED: Use new callbacks ---
             Button {
                 CommentView.logger.debug("Context Menu: Upvote button tapped for comment \(comment.id)")
                 onUpvoteComment()
@@ -206,7 +224,6 @@ struct CommentView: View {
                 Label("Downvote", systemImage: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
             }
             .disabled(isVoting)
-            // --- END MODIFICATION ---
 
             Divider()
             if let commenterName = comment.name, !commenterName.isEmpty {
@@ -220,21 +237,49 @@ struct CommentView: View {
         }
     }
 
-    private func parsePr0grammLink(url: URL) -> Int? {
+    private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
+
+        var itemID: Int?
+        var commentID: Int?
+
         let pathComponents = url.pathComponents
-        for component in pathComponents.reversed() {
-            if let itemID = Int(component) { return itemID }
+        for component in pathComponents {
+            let potentialItemIDString = component.split(separator: ":").first.map(String.init)
+            if let idString = potentialItemIDString, let id = Int(idString) {
+                itemID = id
+                if let range = component.range(of: ":comment") {
+                    let commentIdString = component[range.upperBound...]
+                    if let cID = Int(commentIdString) {
+                        commentID = cID
+                    }
+                }
+                break
+            }
         }
-        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+        
+        if itemID == nil, let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
             for item in queryItems {
-                if item.name == "id", let value = item.value, let itemID = Int(value) {
-                    return itemID
+                if item.name == "id", let value = item.value, let id = Int(value) {
+                    itemID = id
+                    break
                 }
             }
         }
-        CommentView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
-        return nil
+
+        guard let finalItemID = itemID else {
+            CommentView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+            return nil
+        }
+
+        if commentID == nil, let fragment = url.fragment, fragment.lowercased().hasPrefix("comment") {
+            if let cID = Int(fragment.dropFirst("comment".count)) {
+                commentID = cID
+            }
+        }
+        
+        CommentView.logger.debug("Parsed link \(url.absoluteString): itemID=\(finalItemID), commentID=\(commentID ?? -1)")
+        return (finalItemID, commentID)
     }
 }
 
@@ -249,7 +294,8 @@ extension String: Identifiable {
         @State var previewLinkTarget_Normal: PreviewLinkTarget? = nil
         @State var userProfileSheetTarget_Normal: UserProfileSheetTarget? = nil
         var body: some View {
-            let auth = AuthService(appSettings: AppSettings())
+            let settings = AppSettings() // Für EnvironmentObject im Sheet
+            let auth = AuthService(appSettings: settings)
             auth.isLoggedIn = true
             auth.favoritedCommentIDs = [1]
             auth.votedCommentStates = [1: 1, 4: -1]
@@ -257,7 +303,7 @@ extension String: Identifiable {
 
             return List {
                  CommentView(
-                     comment: ItemComment(id: 1, parent: 0, content: "Top comment http://pr0gramm.com/new/12345", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
+                     comment: ItemComment(id: 1, parent: 0, content: "Top comment https://pr0gramm.com/new/12345:comment67890 und noch ein Link https://pr0gramm.com/new/98765", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
                      uploaderName: uploader,
                      previewLinkTarget: $previewLinkTarget_Normal,
                      userProfileSheetTarget: $userProfileSheetTarget_Normal,
@@ -267,10 +313,8 @@ extension String: Identifiable {
                      onReply: { print("Reply Tapped") },
                      targetCommentID: 1,
                      onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                     // --- NEW: Dummy actions for preview ---
                      onUpvoteComment: { print("Preview: Upvote comment 1") },
                      onDownvoteComment: { print("Preview: Downvote comment 1") }
-                     // --- END NEW ---
                  )
                  .listRowInsets(EdgeInsets())
 
@@ -285,10 +329,8 @@ extension String: Identifiable {
                      onReply: { print("Reply Tapped") },
                      targetCommentID: nil,
                      onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                     // --- NEW: Dummy actions for preview ---
                      onUpvoteComment: { print("Preview: Upvote comment 4") },
                      onDownvoteComment: { print("Preview: Downvote comment 4") }
-                     // --- END NEW ---
                  )
                   .listRowInsets(EdgeInsets())
 
@@ -303,10 +345,8 @@ extension String: Identifiable {
                      onReply: { print("Reply Tapped") },
                      targetCommentID: nil,
                      onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                     // --- NEW: Dummy actions for preview ---
                      onUpvoteComment: { print("Preview: Upvote comment 10") },
                      onDownvoteComment: { print("Preview: Downvote comment 10") }
-                     // --- END NEW ---
                  )
                   .listRowInsets(EdgeInsets())
                  CommentView(
@@ -320,18 +360,18 @@ extension String: Identifiable {
                      onReply: { print("Reply Tapped") },
                      targetCommentID: nil,
                      onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                     // --- NEW: Dummy actions for preview ---
                      onUpvoteComment: { print("Preview: Upvote comment 11") },
                      onDownvoteComment: { print("Preview: Downvote comment 11") }
-                     // --- END NEW ---
                  )
                   .listRowInsets(EdgeInsets())
             }
             .listStyle(.plain)
             .environmentObject(auth)
+            .environmentObject(settings) // AppSettings für das Sheet
              .sheet(item: $userProfileSheetTarget_Normal) { targetUsername in
                  Text("Preview: User Profile Sheet for \(targetUsername.username)")
              }
+             // Der .sheet-Modifikator für previewLinkTarget wurde oben in CommentView.body verschoben
         }
     }
     return PreviewWrapperNormal()
@@ -353,13 +393,13 @@ extension String: Identifiable {
                 onReply: { print("Reply Tapped") },
                 targetCommentID: nil,
                 onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                // --- NEW: Dummy actions for preview ---
                 onUpvoteComment: { print("Preview: Upvote comment 2") },
                 onDownvoteComment: { print("Preview: Downvote comment 2") }
-                // --- END NEW ---
             )
             .padding()
+            .environmentObject(AppSettings()) // AppSettings für das Sheet
             .environmentObject(AuthService(appSettings: AppSettings()))
+            // Der .sheet-Modifikator für previewLinkTarget wurde oben in CommentView.body verschoben
         }
     }
     return PreviewWrapperCollapsed()
@@ -370,7 +410,8 @@ extension String: Identifiable {
         @State var previewLinkTarget_NoChildren: PreviewLinkTarget? = nil
         @State var userProfileSheetTarget_NoChildren: UserProfileSheetTarget? = nil
         var body: some View {
-             let auth = AuthService(appSettings: AppSettings())
+             let settings = AppSettings() // Für EnvironmentObject im Sheet
+             let auth = AuthService(appSettings: settings)
              auth.isLoggedIn = true
 
             return CommentView(
@@ -384,13 +425,13 @@ extension String: Identifiable {
                 onReply: { print("Reply Tapped") },
                 targetCommentID: nil,
                 onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                // --- NEW: Dummy actions for preview ---
                 onUpvoteComment: { print("Preview: Upvote comment 3") },
                 onDownvoteComment: { print("Preview: Downvote comment 3") }
-                // --- END NEW ---
             )
             .padding()
             .environmentObject(auth)
+            .environmentObject(settings) // AppSettings für das Sheet
+            // Der .sheet-Modifikator für previewLinkTarget wurde oben in CommentView.body verschoben
         }
     }
     return PreviewWrapperNoChildren()

@@ -86,9 +86,9 @@ struct UserProfileSheetView: View {
                 Task { await loadAllData(forceRefresh: true) }
             }
             .environment(\.openURL, OpenURLAction { url in
-                if let itemID = parsePr0grammLink(url: url) {
-                    UserProfileSheetView.logger.info("Pr0gramm link tapped in UserProfileSheet comment, setting previewLinkTargetFromComment.")
-                    self.previewLinkTargetFromComment = PreviewLinkTarget(id: itemID)
+                if let parsedLink = parsePr0grammLink(url: url) {
+                    UserProfileSheetView.logger.info("Pr0gramm link tapped in UserProfileSheet comment, setting previewLinkTargetFromComment. ItemID: \(parsedLink.itemID), CommentID: \(parsedLink.commentID ?? -1)")
+                    self.previewLinkTargetFromComment = PreviewLinkTarget(itemID: parsedLink.itemID, targetCommentID: parsedLink.commentID)
                     return .handled
                 } else {
                     UserProfileSheetView.logger.info("Non-pr0gramm link tapped in UserProfileSheet: \(url). Opening in system browser.")
@@ -114,8 +114,8 @@ struct UserProfileSheetView: View {
                         )
                         .environmentObject(settings)
                         .environmentObject(authService)
-                        .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showPostDetailSheet = false } } }
-                        .navigationTitle(item.user)
+                        .toolbar{ ToolbarItem(placement: .navigationBarTrailing){ Button("Schließen"){ showPostDetailSheet = false } } } // Korrigiertes Placement
+                        .navigationTitle(item.user) // Titel für das Sheet
                         #if os(iOS)
                         .navigationBarTitleDisplayMode(.inline)
                         #endif
@@ -127,7 +127,7 @@ struct UserProfileSheetView: View {
                     UserUploadsView(username: username)
                         .environmentObject(settings)
                         .environmentObject(authService)
-                        .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllUploadsSheet = false } } }
+                        .toolbar{ ToolbarItem(placement: .navigationBarTrailing){ Button("Schließen"){ showAllUploadsSheet = false } } } // Korrigiertes Placement
                 }
             }
             .sheet(isPresented: $showAllCommentsSheet) {
@@ -135,7 +135,7 @@ struct UserProfileSheetView: View {
                     UserProfileCommentsView(username: username)
                         .environmentObject(settings)
                         .environmentObject(authService)
-                        .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllCommentsSheet = false } } }
+                        .toolbar{ ToolbarItem(placement: .navigationBarTrailing){ Button("Schließen"){ showAllCommentsSheet = false } } } // Korrigiertes Placement
                 }
             }
             .sheet(isPresented: $showConversationSheet) {
@@ -145,17 +145,30 @@ struct UserProfileSheetView: View {
                         .environmentObject(authService)
                         .environmentObject(playerManager)
                         .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
+                            ToolbarItem(placement: .navigationBarTrailing) { // Korrigiertes Placement
                                 Button("Schließen") { showConversationSheet = false }
                             }
                         }
                 }
             }
+            // --- MODIFIED: Sheet-Aufruf für previewLinkTargetFromComment ---
             .sheet(item: $previewLinkTargetFromComment) { target in
-                 LinkedItemPreviewView(itemID: target.id)
-                     .environmentObject(settings)
-                     .environmentObject(authService)
+                 NavigationStack { // Eigener NavigationStack für das Sheet
+                     LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.targetCommentID)
+                         .environmentObject(settings)
+                         .environmentObject(authService)
+                         .navigationTitle("Vorschau: Post \(target.itemID)") // Titel hier setzen
+                         #if os(iOS)
+                         .navigationBarTitleDisplayMode(.inline)
+                         #endif
+                         .toolbar { // Toolbar hier definieren
+                             ToolbarItem(placement: .navigationBarTrailing) {
+                                 Button("Fertig") { previewLinkTargetFromComment = nil }
+                             }
+                         }
+                 }
             }
+            // --- END MODIFICATION ---
         }
     }
 
@@ -188,7 +201,6 @@ struct UserProfileSheetView: View {
 
                 if let badges = info.badges, !badges.isEmpty {
                     badgeScrollView(badges: badges)
-                        // .listRowInsets(EdgeInsets()) // Entfernt, da das Padding jetzt in badgeScrollView gehandhabt wird
                         .padding(.vertical, 4)
                 }
 
@@ -382,8 +394,8 @@ struct UserProfileSheetView: View {
         targetCommentIDForDetailSheet = nil
 
         do {
-            let flagsToFetchWith = settings.apiFlags
-            UserProfileSheetView.logger.debug("Fetching item \(id) for sheet display using global flags: \(flagsToFetchWith)")
+            let flagsToFetchWith = 31
+            UserProfileSheetView.logger.debug("Fetching item \(id) for sheet display using flags: \(flagsToFetchWith)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
 
             guard navigationTargetItemId == id else {
@@ -409,15 +421,48 @@ struct UserProfileSheetView: View {
         }
     }
 
-    private func parsePr0grammLink(url: URL) -> Int? {
+    private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
+        var itemID: Int?
+        var commentID: Int?
+
         let pathComponents = url.pathComponents
-        for component in pathComponents.reversed() { if let itemID = Int(component) { return itemID } }
-        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
-            for item in queryItems { if item.name == "id", let value = item.value, let itemID = Int(value) { return itemID } }
+        for component in pathComponents {
+            let potentialItemIDString = component.split(separator: ":").first.map(String.init)
+            if let idString = potentialItemIDString, let id = Int(idString) {
+                itemID = id
+                if let range = component.range(of: ":comment") {
+                    let commentIdString = component[range.upperBound...]
+                    if let cID = Int(commentIdString) {
+                        commentID = cID
+                    }
+                }
+                break
+            }
         }
-        UserProfileSheetView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
-        return nil
+        
+        if itemID == nil, let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            for item in queryItems {
+                if item.name == "id", let value = item.value, let id = Int(value) {
+                    itemID = id
+                    break
+                }
+            }
+        }
+
+        guard let finalItemID = itemID else {
+            UserProfileSheetView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+            return nil
+        }
+
+        if commentID == nil, let fragment = url.fragment, fragment.lowercased().hasPrefix("comment") {
+            if let cID = Int(fragment.dropFirst("comment".count)) {
+                commentID = cID
+            }
+        }
+        
+        UserProfileSheetView.logger.debug("Parsed link \(url.absoluteString): itemID=\(finalItemID), commentID=\(commentID ?? -1)")
+        return (finalItemID, commentID)
     }
 
     @ViewBuilder
@@ -442,12 +487,7 @@ struct UserProfileSheetView: View {
                         .help(badge.description ?? "")
                 }
             }
-            // --- MODIFIED: Adjust padding to align with List content ---
-            // Using .padding(.leading) on the HStack to simulate the List's default content inset.
-            // The exact value might need minor adjustments based on testing on different devices/OS versions.
-            // Common values are around 15-20.
-            .padding(.leading, 1) // Default List row content leading padding
-            // --- END MODIFICATION ---
+            .padding(.leading, 1)
         }
     }
 

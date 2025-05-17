@@ -26,9 +26,7 @@ struct ConversationDetailView: View {
     
     @State private var itemNavigationValue: InboxView.ItemNavigationValue? = nil
     @State private var isLoadingNavigationTarget: Bool = false
-    // --- MODIFIED: Deklaration von navigationTargetItemId hinzugefügt/sichergestellt ---
-    @State private var navigationTargetItemId: Int? = nil // ItemID für Ladeanzeige des Navigationsziels
-    // --- END MODIFICATION ---
+    @State private var navigationTargetItemId: Int? = nil
     @State private var previewLinkTargetFromMessage: PreviewLinkTarget? = nil
 
     @FocusState private var isTextEditorFocused: Bool
@@ -69,16 +67,27 @@ struct ConversationDetailView: View {
              .environmentObject(settings)
              .environmentObject(authService)
         }
+        // --- MODIFIED: Sheet-Aufruf für previewLinkTargetFromMessage ---
         .sheet(item: $previewLinkTargetFromMessage) { target in
-            LinkedItemPreviewView(itemID: target.id)
-                .environmentObject(settings)
-                .environmentObject(authService)
+            NavigationStack { // Eigener NavigationStack für das Sheet
+                LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.targetCommentID)
+                    .environmentObject(settings)
+                    .environmentObject(authService)
+                    .navigationTitle("Vorschau: Post \(target.itemID)") // Titel hier setzen
+                    #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                    #endif
+                    .toolbar { // Toolbar hier definieren
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Fertig") { previewLinkTargetFromMessage = nil }
+                        }
+                    }
+            }
         }
+        // --- END MODIFICATION ---
         .overlay {
             if isLoadingNavigationTarget {
-                // --- MODIFIED: Verwende navigationTargetItemId korrekt ---
                 ProgressView("Lade Post \(navigationTargetItemId ?? 0)...")
-                // --- END MODIFICATION ---
                     .padding().background(Material.regular).cornerRadius(10).shadow(radius: 5)
             }
         }
@@ -170,9 +179,9 @@ struct ConversationDetailView: View {
                 }
             }
             .environment(\.openURL, OpenURLAction { url in
-                if let itemID = parsePr0grammLink(url: url) {
-                    ConversationDetailView.logger.info("Pr0gramm link tapped in conversation, attempting to preview item ID: \(itemID)")
-                    self.previewLinkTargetFromMessage = PreviewLinkTarget(id: itemID)
+                if let parsedLink = parsePr0grammLink(url: url) {
+                    ConversationDetailView.logger.info("Pr0gramm link tapped in conversation, attempting to preview item ID: \(parsedLink.itemID), commentID: \(parsedLink.commentID ?? -1)")
+                    self.previewLinkTargetFromMessage = PreviewLinkTarget(itemID: parsedLink.itemID, targetCommentID: parsedLink.commentID)
                     return .handled
                 } else {
                     ConversationDetailView.logger.info("Non-pr0gramm link tapped: \(url). Opening in system browser.")
@@ -182,15 +191,48 @@ struct ConversationDetailView: View {
         }
     }
     
-    private func parsePr0grammLink(url: URL) -> Int? {
+    private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
+        var itemID: Int?
+        var commentID: Int?
+
         let pathComponents = url.pathComponents
-        for component in pathComponents.reversed() { if let itemID = Int(component) { return itemID } }
-        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
-            for item in queryItems { if item.name == "id", let value = item.value, let itemID = Int(value) { return itemID } }
+        for component in pathComponents {
+            let potentialItemIDString = component.split(separator: ":").first.map(String.init)
+            if let idString = potentialItemIDString, let id = Int(idString) {
+                itemID = id
+                if let range = component.range(of: ":comment") {
+                    let commentIdString = component[range.upperBound...]
+                    if let cID = Int(commentIdString) {
+                        commentID = cID
+                    }
+                }
+                break
+            }
         }
-        ConversationDetailView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
-        return nil
+        
+        if itemID == nil, let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            for item in queryItems {
+                if item.name == "id", let value = item.value, let id = Int(value) {
+                    itemID = id
+                    break
+                }
+            }
+        }
+
+        guard let finalItemID = itemID else {
+            ConversationDetailView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+            return nil
+        }
+
+        if commentID == nil, let fragment = url.fragment, fragment.lowercased().hasPrefix("comment") {
+            if let cID = Int(fragment.dropFirst("comment".count)) {
+                commentID = cID
+            }
+        }
+        
+        ConversationDetailView.logger.debug("Parsed link \(url.absoluteString): itemID=\(finalItemID), commentID=\(commentID ?? -1)")
+        return (finalItemID, commentID)
     }
 
     @ViewBuilder
@@ -246,9 +288,7 @@ struct ConversationDetailView: View {
         errorMessage = nil
         sendingError = nil
         isLoadingNavigationTarget = false
-        // --- MODIFIED: navigationTargetItemId auch hier zurücksetzen ---
         navigationTargetItemId = nil
-        // --- END MODIFICATION ---
     }
 
     @MainActor
@@ -425,7 +465,7 @@ struct ConversationMessageRow: View {
 
     @ViewBuilder
     private var avatarView: some View {
-        let nameForAvatar = isSentByCurrentUser ? (authService.currentUser?.name ?? "Ich") : partnerName
+        let nameForAvatar = senderDisplayName
         let initials = getInitials(from: nameForAvatar)
         let avatarBackgroundColor = Mark(rawValue: senderMarkValue).displayColor
         let initialsColor: Color = isColorLight(avatarBackgroundColor) ? .black : .white

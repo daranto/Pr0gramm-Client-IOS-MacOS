@@ -35,11 +35,7 @@ struct UserFavoritedCommentsView: View {
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserFavoritedCommentsView")
 
     var body: some View {
-        // Der NavigationStack hier ist wichtig.
-        // Wenn die übergeordnete View (z.B. ProfileView) ebenfalls einen NavigationStack hat,
-        // könnte dies zu verschachtelten Stacks führen, was manchmal Probleme macht.
-        // Oft ist es besser, den NavigationStack so weit oben wie möglich in der Hierarchie zu haben.
-        Group { // NavigationStack wurde hier entfernt, da ProfileView einen hat.
+        Group {
             commentsContentView
         }
         .navigationTitle("Favorisierte Kommentare")
@@ -50,7 +46,7 @@ struct UserFavoritedCommentsView: View {
             Button("OK") { errorMessage = nil; isLoadingNavigationTarget = false; navigationTargetItemId = nil }
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
         
-        .onChange(of: settings.apiFlags) { _, _ in Task { await refreshComments() } } // Vereinfacht
+        .onChange(of: settings.apiFlags) { _, _ in Task { await refreshComments() } }
         .navigationDestination(item: $itemNavigationValue) { navValue in
              PagedDetailViewWrapperForItem(
                  item: navValue.item,
@@ -60,17 +56,27 @@ struct UserFavoritedCommentsView: View {
              .environmentObject(settings)
              .environmentObject(authService)
              .onDisappear {
-                 // Wenn die PagedDetailView verschwindet, wird itemNavigationValue
-                 // von SwiftUI automatisch auf nil gesetzt.
-                 // Wir können hier loggen, um das zu bestätigen.
                  UserFavoritedCommentsView.logger.info("PagedDetailViewWrapperForItem disappeared. itemNavigationValue should now be nil.")
              }
         }
+        // --- MODIFIED: Sheet-Aufruf für previewLinkTargetFromComment ---
         .sheet(item: $previewLinkTargetFromComment) { target in
-            LinkedItemPreviewView(itemID: target.id)
-                .environmentObject(settings)
-                .environmentObject(authService)
+            NavigationStack { // Eigener NavigationStack für das Sheet
+                LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.targetCommentID)
+                    .environmentObject(settings)
+                    .environmentObject(authService)
+                    .navigationTitle("Vorschau: Post \(target.itemID)") // Titel hier setzen
+                    #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                    #endif
+                    .toolbar { // Toolbar hier definieren
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Fertig") { previewLinkTargetFromComment = nil }
+                        }
+                    }
+            }
         }
+        // --- END MODIFICATION ---
         .overlay {
             if isLoadingNavigationTarget {
                 ProgressView("Lade Post \(navigationTargetItemId ?? 0)...")
@@ -88,11 +94,6 @@ struct UserFavoritedCommentsView: View {
                 await refreshComments()
             }
         }
-        // --- DEBUG: Log when itemNavigationValue changes ---
-        // .onChange(of: itemNavigationValue) { oldValue, newValue in
-        //     UserFavoritedCommentsView.logger.info("itemNavigationValue changed from \(String(describing: oldValue)) to \(String(describing: newValue))")
-        // }
-        // --- END DEBUG ---
     }
 
     @ViewBuilder private var commentsContentView: some View {
@@ -152,9 +153,9 @@ struct UserFavoritedCommentsView: View {
         .listStyle(.plain)
         .refreshable { await refreshComments() }
         .environment(\.openURL, OpenURLAction { url in
-            if let itemID = parsePr0grammLink(url: url) {
-                UserFavoritedCommentsView.logger.info("Pr0gramm link tapped in favorited comment, attempting to preview item ID: \(itemID)")
-                self.previewLinkTargetFromComment = PreviewLinkTarget(id: itemID)
+            if let parsedLink = parsePr0grammLink(url: url) {
+                UserFavoritedCommentsView.logger.info("Pr0gramm link tapped in favorited comment, attempting to preview item ID: \(parsedLink.itemID), commentID: \(parsedLink.commentID ?? -1)")
+                self.previewLinkTargetFromComment = PreviewLinkTarget(itemID: parsedLink.itemID, targetCommentID: parsedLink.commentID)
                 return .handled
             } else {
                 UserFavoritedCommentsView.logger.info("Non-pr0gramm link tapped: \(url). Opening in system browser.")
@@ -163,21 +164,48 @@ struct UserFavoritedCommentsView: View {
         })
     }
 
-    private func parsePr0grammLink(url: URL) -> Int? {
+    private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
+        var itemID: Int?
+        var commentID: Int?
+
         let pathComponents = url.pathComponents
-        for component in pathComponents.reversed() {
-            if let itemID = Int(component) { return itemID }
+        for component in pathComponents {
+            let potentialItemIDString = component.split(separator: ":").first.map(String.init)
+            if let idString = potentialItemIDString, let id = Int(idString) {
+                itemID = id
+                if let range = component.range(of: ":comment") {
+                    let commentIdString = component[range.upperBound...]
+                    if let cID = Int(commentIdString) {
+                        commentID = cID
+                    }
+                }
+                break
+            }
         }
-        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+        
+        if itemID == nil, let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
             for item in queryItems {
-                if item.name == "id", let value = item.value, let itemID = Int(value) {
-                    return itemID
+                if item.name == "id", let value = item.value, let id = Int(value) {
+                    itemID = id
+                    break
                 }
             }
         }
-        UserFavoritedCommentsView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
-        return nil
+
+        guard let finalItemID = itemID else {
+            UserFavoritedCommentsView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+            return nil
+        }
+
+        if commentID == nil, let fragment = url.fragment, fragment.lowercased().hasPrefix("comment") {
+            if let cID = Int(fragment.dropFirst("comment".count)) {
+                commentID = cID
+            }
+        }
+        
+        UserFavoritedCommentsView.logger.debug("Parsed link \(url.absoluteString): itemID=\(finalItemID), commentID=\(commentID ?? -1)")
+        return (finalItemID, commentID)
     }
 
     @MainActor
@@ -196,11 +224,9 @@ struct UserFavoritedCommentsView: View {
         navigationTargetItemId = id
         errorMessage = nil
         
-        // Wichtig: itemNavigationValue wird erst gesetzt, wenn das Item erfolgreich geladen wurde.
-
         do {
-            let flagsToFetchWith = settings.apiFlags
-            UserFavoritedCommentsView.logger.debug("Fetching item \(id) for navigation using global flags: \(flagsToFetchWith)")
+            let flagsToFetchWith = 31
+            UserFavoritedCommentsView.logger.debug("Fetching item \(id) for navigation using flags: \(flagsToFetchWith)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
 
             guard navigationTargetItemId == id else {
@@ -209,10 +235,10 @@ struct UserFavoritedCommentsView: View {
             }
             if let item = fetchedItem {
                 UserFavoritedCommentsView.logger.info("Successfully fetched item \(id) for navigation.")
-                self.itemNavigationValue = ItemNavigationValue(item: item, targetCommentID: targetCommentID) // Jetzt setzen
+                self.itemNavigationValue = ItemNavigationValue(item: item, targetCommentID: targetCommentID)
             } else {
-                UserFavoritedCommentsView.logger.warning("Could not fetch item \(id) for navigation (API returned nil or filter mismatch).")
-                errorMessage = "Post \(id) konnte nicht geladen werden oder entspricht nicht den Filtern."
+                UserFavoritedCommentsView.logger.warning("Could not fetch item \(id) for navigation (API returned nil or item does not match filters).")
+                errorMessage = "Post \(id) konnte nicht geladen werden oder existiert nicht."
             }
         } catch is CancellationError {
             UserFavoritedCommentsView.logger.info("Item fetch for navigation cancelled (ID: \(id)).")
@@ -239,7 +265,7 @@ struct UserFavoritedCommentsView: View {
 
         self.isLoadingNavigationTarget = false
         self.navigationTargetItemId = nil
-        self.itemNavigationValue = nil // Wichtig: Beim Refresh zurücksetzen
+        self.itemNavigationValue = nil
         self.isLoading = true
         self.errorMessage = nil
         let initialTimestamp = Int(Date.distantFuture.timeIntervalSince1970)
@@ -415,7 +441,7 @@ struct FavoritedCommentRow: View {
         }
 
         var body: some View {
-            NavigationStack { // Wichtig: Hier den NavigationStack für die Preview hinzufügen
+            NavigationStack {
                 UserFavoritedCommentsView(username: "Daranto")
                     .environmentObject(previewSettings)
                     .environmentObject(previewAuthService)

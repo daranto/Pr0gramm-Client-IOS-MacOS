@@ -60,7 +60,7 @@ struct UserProfileCommentsView: View {
              PagedDetailViewWrapperForItem(
                  item: navValue.item,
                  playerManager: playerManager,
-                 targetCommentID: navValue.targetCommentID // Hier wird targetCommentID übergeben
+                 targetCommentID: navValue.targetCommentID
              )
              .environmentObject(settings)
              .environmentObject(authService)
@@ -68,11 +68,24 @@ struct UserProfileCommentsView: View {
                  UserProfileCommentsView.logger.info("PagedDetailViewWrapperForItem disappeared. itemNavigationValue should now be nil.")
              }
         }
+        // --- MODIFIED: Sheet-Aufruf für previewLinkTargetFromComment ---
         .sheet(item: $previewLinkTargetFromComment) { target in
-            LinkedItemPreviewView(itemID: target.id)
-                .environmentObject(settings)
-                .environmentObject(authService)
+            NavigationStack { // Eigener NavigationStack für das Sheet
+                LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.targetCommentID)
+                    .environmentObject(settings)
+                    .environmentObject(authService)
+                    .navigationTitle("Vorschau: Post \(target.itemID)") // Titel hier setzen
+                    #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                    #endif
+                    .toolbar { // Toolbar hier definieren
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Fertig") { previewLinkTargetFromComment = nil }
+                        }
+                    }
+            }
         }
+        // --- END MODIFICATION ---
         .overlay {
             if isLoadingNavigationTarget {
                 ProgressView("Lade Post \(navigationTargetItemId ?? 0)...")
@@ -112,13 +125,11 @@ struct UserProfileCommentsView: View {
         List {
             ForEach(comments) { comment in
                 Button {
-                    // --- MODIFIED: Hier wird comment.id als targetCommentID übergeben ---
                     Task { await prepareAndNavigateToItem(comment.itemId, targetCommentID: comment.id) }
-                    // --- END MODIFICATION ---
                 } label: {
-                    FavoritedCommentRow( // Wiederverwendung der FavoritedCommentRow ist hier okay
+                    FavoritedCommentRow(
                         comment: comment,
-                        overrideUsername: username, // Da es die Kommentare des Profil-Users sind
+                        overrideUsername: username,
                         overrideUserMark: profileUserMark
                     )
                 }
@@ -126,7 +137,7 @@ struct UserProfileCommentsView: View {
                 .disabled(comment.itemId == nil || isLoadingNavigationTarget)
                 .opacity(comment.itemId == nil ? 0.5 : 1.0)
                 .listRowInsets(EdgeInsets(top: 10, leading: 15, bottom: 10, trailing: 15))
-                .id(comment.id) // Wichtig für ScrollViewReader, falls direkt in dieser Liste gescrollt würde
+                .id(comment.id)
                 .onAppear {
                      if comments.count >= 2 && comment.id == comments[comments.count - 2].id && canLoadMore && !isLoadingMore {
                          UserProfileCommentsView.logger.info("End trigger appeared for comment \(comment.id).")
@@ -147,9 +158,9 @@ struct UserProfileCommentsView: View {
         .listStyle(.plain)
         .refreshable { await refreshComments() }
         .environment(\.openURL, OpenURLAction { url in
-            if let itemID = parsePr0grammLink(url: url) {
-                UserProfileCommentsView.logger.info("Pr0gramm link tapped in profile comment, attempting to preview item ID: \(itemID)")
-                self.previewLinkTargetFromComment = PreviewLinkTarget(id: itemID)
+            if let parsedLink = parsePr0grammLink(url: url) {
+                UserProfileCommentsView.logger.info("Pr0gramm link tapped in profile comment, attempting to preview item ID: \(parsedLink.itemID), commentID: \(parsedLink.commentID ?? -1)")
+                self.previewLinkTargetFromComment = PreviewLinkTarget(itemID: parsedLink.itemID, targetCommentID: parsedLink.commentID)
                 return .handled
             } else {
                 UserProfileCommentsView.logger.info("Non-pr0gramm link tapped: \(url). Opening in system browser.")
@@ -158,21 +169,48 @@ struct UserProfileCommentsView: View {
         })
     }
     
-    private func parsePr0grammLink(url: URL) -> Int? {
+    private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
+        var itemID: Int?
+        var commentID: Int?
+
         let pathComponents = url.pathComponents
-        for component in pathComponents.reversed() {
-            if let itemID = Int(component) { return itemID }
+        for component in pathComponents {
+            let potentialItemIDString = component.split(separator: ":").first.map(String.init)
+            if let idString = potentialItemIDString, let id = Int(idString) {
+                itemID = id
+                if let range = component.range(of: ":comment") {
+                    let commentIdString = component[range.upperBound...]
+                    if let cID = Int(commentIdString) {
+                        commentID = cID
+                    }
+                }
+                break
+            }
         }
-        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+        
+        if itemID == nil, let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
             for item in queryItems {
-                if item.name == "id", let value = item.value, let itemID = Int(value) {
-                    return itemID
+                if item.name == "id", let value = item.value, let id = Int(value) {
+                    itemID = id
+                    break
                 }
             }
         }
-        UserProfileCommentsView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
-        return nil
+
+        guard let finalItemID = itemID else {
+            UserProfileCommentsView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+            return nil
+        }
+
+        if commentID == nil, let fragment = url.fragment, fragment.lowercased().hasPrefix("comment") {
+            if let cID = Int(fragment.dropFirst("comment".count)) {
+                commentID = cID
+            }
+        }
+        
+        UserProfileCommentsView.logger.debug("Parsed link \(url.absoluteString): itemID=\(finalItemID), commentID=\(commentID ?? -1)")
+        return (finalItemID, commentID)
     }
 
 
@@ -193,7 +231,7 @@ struct UserProfileCommentsView: View {
         errorMessage = nil
         
         do {
-            let flagsToFetchWith = settings.apiFlags // Globale Filter verwenden
+            let flagsToFetchWith = settings.apiFlags
             UserProfileCommentsView.logger.debug("Fetching item \(id) for navigation using global flags: \(flagsToFetchWith)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
 
@@ -206,7 +244,7 @@ struct UserProfileCommentsView: View {
                 self.itemNavigationValue = ItemNavigationValue(item: item, targetCommentID: targetCommentID)
             } else {
                 UserProfileCommentsView.logger.warning("Could not fetch item \(id) for navigation (API returned nil or filter mismatch).")
-                errorMessage = "Post \(id) konnte nicht geladen werden oder entspricht nicht den Filtern."
+                errorMessage = "Post \(id) konnte nicht geladen werden oder existiert nicht."
             }
         } catch is CancellationError {
             UserProfileCommentsView.logger.info("Item fetch for navigation cancelled (ID: \(id)).")
@@ -248,12 +286,7 @@ struct UserProfileCommentsView: View {
                 if authService.currentUser?.name.lowercased() == username.lowercased() {
                     self.profileUserMark = authService.currentUser?.mark
                 } else {
-                    UserProfileCommentsView.logger.warning("User object missing in ProfileCommentsResponse for \(username). Attempting to fetch mark separately.")
-                    // Optional: Separaten API Call für Profilinfo des Users, falls nicht der eingeloggte User.
-                    // Für diese Ansicht ist es aber primär für die Darstellung der Kommentare des Users *username*.
-                    // Wenn es der eingeloggte User ist, ist authService.currentUser.mark verfügbar.
-                    // Wenn es ein anderer User ist, wird das Mark aus dem comment.mark genommen.
-                    // Hier ist die `profileUserMark` Variable eher ein kleiner Bonus.
+                    UserProfileCommentsView.logger.warning("User object missing in ProfileCommentsResponse for \(username).")
                 }
                 UserProfileCommentsView.logger.info("Set profile user mark to \(self.profileUserMark ?? -99) for \(username) (possibly via fallback).")
             }
