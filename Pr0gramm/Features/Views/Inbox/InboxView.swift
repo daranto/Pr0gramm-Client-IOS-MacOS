@@ -24,7 +24,7 @@ struct ProfileNavigationValue: Hashable, Identifiable {
 
 enum InboxViewMessageType: Int, CaseIterable, Identifiable {
     case comments = 1
-    case notifications = 2
+    case notifications = 2 // Bleibt für "System"
     case privateMessages = 3
 
     var id: Int { self.rawValue }
@@ -36,11 +36,14 @@ enum InboxViewMessageType: Int, CaseIterable, Identifiable {
         case .privateMessages: return "Privat"
         }
     }
-
-    var apiTypeString: String? {
+    
+    // Dieser apiTypeString wird jetzt nicht mehr direkt für den API-Call verwendet,
+    // sondern nur noch für die interne Logik, falls benötigt.
+    // Für .notifications enthält es "notification", da "follow" separat behandelt wird.
+    var apiTypeStringForFilter: String? {
         switch self {
         case .comments: return "comment"
-        case .notifications: return "notification"
+        case .notifications: return "notification" // Dies filtert explizit "notification" Typen
         case .privateMessages: return nil
         }
     }
@@ -122,28 +125,13 @@ struct InboxView: View {
                     conversationNavigationValue = nil
                     profileNavigationValue = nil
                     
-                    messages = []
-                    conversations = []
-                    if newType == .privateMessages {
-                        await refreshConversations()
-                    } else {
-                        await refreshMessages()
-                    }
+                    messages = [] // Immer leeren, da der API Call spezifisch wird
+                    conversations = [] // Für Privatnachrichten auch
+                    await refreshCurrentTabData()
                 }
             }
-            .task(id: authService.isLoggedIn) {
-                 if authService.isLoggedIn {
-                     if selectedMessageType == .privateMessages {
-                         await refreshConversations()
-                     } else {
-                         await refreshMessages()
-                     }
-                 } else {
-                     messages = []
-                     conversations = []
-                     errorMessage = "Bitte anmelden."
-                     conversationsError = nil
-                 }
+            .task(id: authService.isLoggedIn) { // Wird bei Login-Status Änderung getriggert
+                 await refreshCurrentTabData()
             }
             .navigationDestination(item: $itemNavigationValue) { navValue in
                  PagedDetailViewWrapperForItem(
@@ -190,6 +178,21 @@ struct InboxView: View {
         }
     }
     
+    private func refreshCurrentTabData() async {
+        if authService.isLoggedIn {
+            if selectedMessageType == .privateMessages {
+                await refreshConversations()
+            } else {
+                await refreshMessages() // Diese Funktion ruft jetzt den spezifischen Endpunkt auf
+            }
+        } else {
+            messages = []
+            conversations = []
+            errorMessage = "Bitte anmelden."
+            conversationsError = nil
+        }
+    }
+    
     private var alertErrorMessage: String? {
         if selectedMessageType == .privateMessages {
             return conversationsError
@@ -217,23 +220,23 @@ struct InboxView: View {
                     self.conversationNavigationValue = ConversationNavigationValue(conversationPartnerName: username)
                 }
             )
+        // --- MODIFIED: .comments und .notifications verwenden jetzt die gleiche View, da die API die Daten direkt liefert ---
         case .comments, .notifications:
-            generalMessagesListView
+            generalMessagesListView // `filteredMessages` ist hier nicht mehr nötig, da `messages` bereits korrekt sein sollte
+        // --- END MODIFICATION ---
         }
     }
 
-    private var filteredMessages: [InboxMessage] {
-        guard selectedMessageType != .privateMessages, let apiType = selectedMessageType.apiTypeString else {
-            return []
-        }
-        return messages.filter { $0.type == apiType || ($0.type == "follow" && selectedMessageType == .notifications) }
-    }
+    // --- REMOVED: `filteredMessages` ist nicht mehr nötig, da die API die korrekten Daten liefert ---
+    // private var filteredMessages: [InboxMessage] { ... }
+    // --- END REMOVAL ---
 
     private var generalMessagesListView: some View {
         Group {
+            // --- MODIFIED: Logik vereinfacht, da `messages` jetzt direkt die korrekten Daten enthält ---
             if isLoading && messages.isEmpty {
                 ProgressView("Lade Nachrichten...").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = errorMessage, filteredMessages.isEmpty {
+            } else if let error = errorMessage, messages.isEmpty {
                  ContentUnavailableView {
                      Label("Fehler", systemImage: "exclamationmark.triangle")
                  } description: {
@@ -242,12 +245,12 @@ struct InboxView: View {
                      Button("Erneut versuchen") { Task { await refreshMessages() } }
                  }
                  .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if filteredMessages.isEmpty && !isLoading && errorMessage == nil {
+            } else if messages.isEmpty && !isLoading && errorMessage == nil { // Verwende direkt `messages`
                 Text("Keine Nachrichten für Filter '\(selectedMessageType.displayName)' vorhanden.")
                     .foregroundColor(.secondary).padding().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
-                    ForEach(filteredMessages) { message in
+                    ForEach(messages) { message in // Verwende direkt `messages`
                         InboxMessageRow(message: message)
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -255,20 +258,16 @@ struct InboxView: View {
                                     InboxView.logger.debug("Tap ignored for message \(message.id): isLoadingNavigationTarget=\(isLoadingNavigationTarget)")
                                     return
                                 }
-                                if message.type == "notification" && selectedMessageType == .notifications {
-                                    InboxView.logger.debug("Notification message tapped on System tab, no navigation action.")
-                                    return
-                                }
                                 Task { await handleMessageTap(message) }
                             }
                         .listRowInsets(EdgeInsets(top: 10, leading: 15, bottom: 10, trailing: 15))
                         .id(message.id)
                         .onAppear {
-                            let currentList = filteredMessages
-                            if currentList.count >= 2 && message.id == currentList[currentList.count - 2].id && canLoadMore && !isLoadingMore {
+                            // Paginierung basiert weiterhin auf der `messages` Liste
+                            if messages.count >= 2 && message.id == messages[messages.count - 2].id && canLoadMore && !isLoadingMore {
                                 InboxView.logger.info("End trigger appeared for message ID: \(message.id).")
                                 Task { await loadMoreMessages() }
-                            } else if currentList.count == 1 && message.id == currentList.first?.id && canLoadMore && !isLoadingMore {
+                            } else if messages.count == 1 && message.id == messages.first?.id && canLoadMore && !isLoadingMore {
                                 InboxView.logger.info("End trigger appeared for the only message ID: \(message.id).")
                                 Task { await loadMoreMessages() }
                             }
@@ -283,6 +282,7 @@ struct InboxView: View {
                 .listStyle(.plain)
                 .refreshable { await refreshMessages() }
             }
+            // --- END MODIFICATION ---
         }
         .environment(\.openURL, OpenURLAction { url in
             if let (itemID, commentID) = parsePr0grammLink(url: url) {
@@ -352,20 +352,29 @@ struct InboxView: View {
         clearErrors()
         InboxView.logger.info("Handling tap for message ID: \(message.id), Type: \(message.type ?? "nil")")
 
-        switch message.type {
-        case "comment":
-            if let itemId = message.itemId {
-                InboxView.logger.info("Message type is 'comment', preparing navigation for item \(itemId), target comment ID: \(message.id)")
+        // --- MODIFIED: Vereinfachte Logik, da `selectedMessageType` jetzt den Kontext klarer vorgibt ---
+        switch selectedMessageType {
+        case .comments:
+            if message.type == "comment", let itemId = message.itemId {
+                InboxView.logger.info("Comment message tapped, preparing navigation for item \(itemId), target comment ID: \(message.id)")
                 await prepareAndNavigateToItem(itemId, targetCommentID: message.id)
-            } else { InboxView.logger.warning("Comment message type tapped, but itemId is nil.") }
-        case "follow":
-             if let senderName = message.name, !senderName.isEmpty {
-                 InboxView.logger.info("Message type is 'follow', setting profileNavigationValue: \(senderName)")
-                 self.profileNavigationValue = ProfileNavigationValue(username: senderName)
-             } else { InboxView.logger.warning("Follow message type tapped, but sender name is nil or empty.") }
-        default:
-            InboxView.logger.warning("Unhandled message type tapped in handleMessageTap: \(message.type ?? "nil")")
+            } else {
+                InboxView.logger.warning("Tapped on message with type '\(message.type ?? "nil")' while on Comments tab. ItemId: \(message.itemId ?? -1)")
+            }
+        case .notifications: // System Tab
+            if message.type == "follow", let senderName = message.name, !senderName.isEmpty {
+                InboxView.logger.info("Follow message tapped on System tab, setting profileNavigationValue: \(senderName)")
+                self.profileNavigationValue = ProfileNavigationValue(username: senderName)
+            } else if message.type == "notification" {
+                 InboxView.logger.debug("Tapped on a 'notification' type message on System tab. No specific navigation action defined.")
+            } else {
+                InboxView.logger.warning("Tapped on message with type '\(message.type ?? "nil")' while on System tab. This might be an unexpected message type for this tab.")
+            }
+        case .privateMessages:
+            // Sollte nicht hier landen, da private Nachrichten ihre eigene View und Tap-Handling haben.
+            InboxView.logger.error("handleMessageTap called for privateMessages type, which should be handled by ConversationsListView.")
         }
+        // --- END MODIFICATION ---
     }
 
     @MainActor
@@ -418,97 +427,132 @@ struct InboxView: View {
         }
     }
 
-      @MainActor
-      func refreshMessages() async {
-          guard selectedMessageType != .privateMessages else {
-              InboxView.logger.info("refreshMessages called, but privateMessages selected. Skipping general refresh.")
-              return
-          }
+    // --- MODIFIED: `refreshMessages` ruft jetzt spezifische API-Methoden auf ---
+    @MainActor
+    func refreshMessages() async {
+        guard selectedMessageType != .privateMessages else {
+            InboxView.logger.info("refreshMessages called, but privateMessages selected. Skipping general refresh.")
+            return
+        }
 
-          InboxView.logger.info("Refreshing general inbox messages (/inbox/all) for selected type: \(selectedMessageType.displayName)...")
+        InboxView.logger.info("Refreshing inbox messages for selected type: \(selectedMessageType.displayName)...")
 
-          guard authService.isLoggedIn else {
-              InboxView.logger.warning("Cannot refresh general inbox: User not logged in.")
-              self.messages = []; self.errorMessage = "Bitte anmelden."; self.canLoadMore = true
-              return
-          }
+        guard authService.isLoggedIn else {
+            InboxView.logger.warning("Cannot refresh inbox: User not logged in.")
+            self.messages = []; self.errorMessage = "Bitte anmelden."; self.canLoadMore = true
+            return
+        }
 
-          self.isLoadingNavigationTarget = false; self.navigationTargetId = nil
-          self.itemNavigationValue = nil; self.targetCommentIDForNavigation = nil
-          self.isLoading = true; self.errorMessage = nil
+        self.isLoadingNavigationTarget = false; self.navigationTargetId = nil
+        self.itemNavigationValue = nil; self.targetCommentIDForNavigation = nil
+        self.isLoading = true; self.errorMessage = nil
+        self.messages = [] // Nachrichten leeren, da ein neuer Typ geladen wird
 
-          defer { Task { @MainActor in self.isLoading = false } }
+        defer { Task { @MainActor in self.isLoading = false } }
 
-          do {
-              let response = try await apiService.fetchInboxMessages(older: nil)
-              guard !Task.isCancelled else { return }
+        do {
+            let response: InboxResponse
+            switch selectedMessageType {
+            case .comments:
+                response = try await apiService.fetchInboxCommentsApi(older: nil)
+            case .notifications: // System Tab
+                response = try await apiService.fetchInboxNotificationsApi(older: nil)
+            case .privateMessages:
+                // Dieser Fall sollte hier nicht auftreten, da private Nachrichten separat behandelt werden.
+                // Aber zur Sicherheit eine Warnung und leere Antwort.
+                InboxView.logger.error("refreshMessages called unexpectedly for .privateMessages type.")
+                self.isLoading = false
+                return
+            }
+            
+            guard !Task.isCancelled else { return }
 
-              self.messages = response.messages.sorted { $0.created > $1.created }
-              self.canLoadMore = !response.atEnd
-              InboxView.logger.info("Fetched \(response.messages.count) initial general inbox messages (all types). AtEnd: \(response.atEnd)")
+            let fetchedMessageTypes = Dictionary(grouping: response.messages, by: { $0.type ?? "unknown" }).mapValues { $0.count }
+            InboxView.logger.debug("API Response for \(selectedMessageType.displayName): Fetched \(response.messages.count) messages. Types: \(fetchedMessageTypes). AtEnd: \(response.atEnd)")
 
-          } catch let error as URLError where error.code == .userAuthenticationRequired {
-              InboxView.logger.error("General inbox API fetch failed: Authentication required.")
-              self.errorMessage = "Sitzung abgelaufen."; self.messages = []; self.canLoadMore = false
-              await authService.logout()
-          } catch {
-              InboxView.logger.error("General inbox API fetch failed: \(error.localizedDescription)")
-              self.errorMessage = "Fehler: \(error.localizedDescription)"; self.messages = []; self.canLoadMore = false
-          }
-      }
+            self.messages = response.messages.sorted { $0.created > $1.created }
+            self.canLoadMore = !response.atEnd
+            InboxView.logger.info("Fetched \(response.messages.count) initial messages for tab \(selectedMessageType.displayName). AtEnd: \(response.atEnd)")
 
+        } catch let error as URLError where error.code == .userAuthenticationRequired {
+            InboxView.logger.error("Inbox API fetch failed for \(selectedMessageType.displayName): Authentication required.")
+            self.errorMessage = "Sitzung abgelaufen."; self.messages = []; self.canLoadMore = false
+            await authService.logout()
+        } catch {
+            InboxView.logger.error("Inbox API fetch failed for \(selectedMessageType.displayName): \(error.localizedDescription)")
+            self.errorMessage = "Fehler: \(error.localizedDescription)"; self.messages = []; self.canLoadMore = false
+        }
+    }
+    // --- END MODIFICATION ---
+
+    // --- MODIFIED: `loadMoreMessages` ruft jetzt spezifische API-Methoden auf ---
     @MainActor
     func loadMoreMessages() async {
         guard selectedMessageType != .privateMessages else {
-            InboxView.logger.info("loadMoreMessages called, but privateMessages selected. Skipping general load more.")
+            InboxView.logger.info("loadMoreMessages called, but privateMessages selected. Skipping.")
             return
         }
 
         guard authService.isLoggedIn else { return }
         guard !isLoadingMore && canLoadMore && !isLoading else { return }
         guard let oldestMessageTimestamp = messages.last?.created else {
-             InboxView.logger.warning("Cannot load more general messages: No last message found in the full list.")
+             InboxView.logger.warning("Cannot load more messages for \(selectedMessageType.displayName): No last message found.")
              self.canLoadMore = false; return
         }
 
-        InboxView.logger.info("--- Starting loadMoreMessages (general) older than timestamp \(oldestMessageTimestamp) ---")
+        InboxView.logger.info("--- Starting loadMoreMessages for \(selectedMessageType.displayName) older than timestamp \(oldestMessageTimestamp) ---")
         self.isLoadingMore = true
 
-        defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; InboxView.logger.info("--- Finished loadMoreMessages (general) ---") } } }
+        defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; InboxView.logger.info("--- Finished loadMoreMessages for \(selectedMessageType.displayName) ---") } } }
 
         do {
-            let response = try await apiService.fetchInboxMessages(older: oldestMessageTimestamp)
+            let response: InboxResponse
+            switch selectedMessageType {
+            case .comments:
+                response = try await apiService.fetchInboxCommentsApi(older: oldestMessageTimestamp)
+            case .notifications: // System Tab
+                response = try await apiService.fetchInboxNotificationsApi(older: oldestMessageTimestamp)
+            case .privateMessages:
+                InboxView.logger.error("loadMoreMessages called unexpectedly for .privateMessages type.")
+                self.isLoadingMore = false
+                return
+            }
+
             guard !Task.isCancelled else { return }
             guard self.isLoadingMore else { return }
+            
+            let fetchedMessageTypes = Dictionary(grouping: response.messages, by: { $0.type ?? "unknown" }).mapValues { $0.count }
+            InboxView.logger.debug("API Response for \(selectedMessageType.displayName) (loadMore): Fetched \(response.messages.count) messages. Types: \(fetchedMessageTypes). AtEnd: \(response.atEnd)")
 
             if response.messages.isEmpty {
-                InboxView.logger.info("Reached end of general inbox feed.")
+                InboxView.logger.info("Reached end of inbox feed for \(selectedMessageType.displayName).")
                 self.canLoadMore = false
             } else {
                 let currentIDs = Set(self.messages.map { $0.id })
                 let uniqueNewMessages = response.messages.filter { !currentIDs.contains($0.id) }
 
                 if uniqueNewMessages.isEmpty {
-                    InboxView.logger.warning("All loaded general inbox messages were duplicates.")
-                    self.canLoadMore = !response.atEnd
+                    InboxView.logger.warning("All loaded messages for \(selectedMessageType.displayName) were duplicates.")
+                    self.canLoadMore = !response.atEnd // API entscheidet, ob es wirklich das Ende ist
                 } else {
                     self.messages.append(contentsOf: uniqueNewMessages)
                     self.messages.sort { $0.created > $1.created }
-                    InboxView.logger.info("Appended \(uniqueNewMessages.count) unique general inbox messages. Total: \(self.messages.count)")
+                    InboxView.logger.info("Appended \(uniqueNewMessages.count) unique messages for \(selectedMessageType.displayName). Total: \(self.messages.count)")
                     self.canLoadMore = !response.atEnd
                 }
             }
         } catch let error as URLError where error.code == .userAuthenticationRequired {
-            InboxView.logger.error("General inbox API fetch failed during loadMore: Authentication required.")
+            InboxView.logger.error("Inbox API fetch failed during loadMore for \(selectedMessageType.displayName): Authentication required.")
             self.errorMessage = "Sitzung abgelaufen."; self.canLoadMore = false
             await authService.logout()
         } catch {
-            InboxView.logger.error("General inbox API fetch failed during loadMore: \(error.localizedDescription)")
+            InboxView.logger.error("Inbox API fetch failed during loadMore for \(selectedMessageType.displayName): \(error.localizedDescription)")
             guard self.isLoadingMore else { return }
             if self.messages.isEmpty { self.errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" }
             self.canLoadMore = false
         }
     }
+    // --- END MODIFICATION ---
     
     @MainActor
     func refreshConversations() async {
@@ -606,7 +650,7 @@ struct InboxMessageRow: View {
         switch message.type {
         case "comment": return message.name ?? "Kommentar"
         case "notification": return "Systemnachricht"
-        case "message": return message.name ?? "Nachricht"
+        case "message": return message.name ?? "Nachricht" // Sollte hier nicht mehr vorkommen
         case "follow": return "\(message.name ?? "Jemand") folgt dir"
         default: return "Unbekannt (\(message.type ?? "N/A"))"
         }
@@ -650,7 +694,7 @@ struct InboxMessageRow: View {
                  Image(systemName: "person.crop.circle.fill")
                      .resizable().scaledToFit().frame(width: 50, height: 50)
                      .foregroundColor(.secondary)
-            } else {
+            } else { // Fallback für "notification" oder unerwartete Typen
                  Image(systemName: "bell.circle.fill")
                     .resizable().scaledToFit().frame(width: 50, height: 50)
                     .foregroundColor(.secondary)
@@ -683,10 +727,6 @@ struct InboxMessageRow: View {
     }
 }
 
-// --- MODIFIED: ConversationMessageRow hier global definiert ---
-// (Normalerweise wäre dies in einer eigenen Datei oder in ConversationDetailView.swift,
-// aber um den Fehler schnell zu beheben, füge ich es hier ein.
-// Es ist besser, Code-Strukturen in eigenen Dateien zu organisieren.)
 struct ConversationMessageRow: View {
     let message: PrivateMessage
     let isSentByCurrentUser: Bool
@@ -837,8 +877,6 @@ struct ConversationMessageRow: View {
         }
     }
 }
-// --- END MODIFICATION ---
-
 
 #Preview {
     InboxPreviewWrapper()

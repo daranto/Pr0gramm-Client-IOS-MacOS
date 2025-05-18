@@ -58,9 +58,7 @@ struct ApiResponse: Codable {
     let atStart: Bool? // Keep for completeness, though not always used by client
     let hasOlder: Bool? // Alternative to atEnd, specific to some API versions/contexts
     let hasNewer: Bool? // Alternative to atStart
-    // --- NEW: Error field for general API errors ---
     let error: String? // For errors like "nothingFound" or "tooShort"
-    // --- END NEW ---
 }
 /// Response structure for the `/user/login` endpoint.
 struct LoginResponse: Codable {
@@ -186,7 +184,7 @@ struct ProfileCommentsResponse: Codable {
 struct InboxResponse: Codable {
     let messages: [InboxMessage]
     let atEnd: Bool
-    let queue: InboxQueueInfo?
+    let queue: InboxQueueInfo? // Behalten für Kompatibilität mit /inbox/all, falls es mal gemischt verwendet wird
 }
 
 struct InboxQueueInfo: Codable {
@@ -335,7 +333,6 @@ class APIService {
         return encodedParametersString.data(using: .utf8)
     }
 
-    // --- MODIFIED: fetchItems now returns ApiResponse ---
     func fetchItems(
         flags: Int,
         promoted: Int? = nil,
@@ -345,7 +342,7 @@ class APIService {
         collectionNameForUser: String? = nil,
         isOwnCollection: Bool = false,
         showJunkParameter: Bool = false
-    ) async throws -> ApiResponse { // Changed return type
+    ) async throws -> ApiResponse {
         let endpoint = "/items/get"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
             throw URLError(.badURL)
@@ -397,19 +394,14 @@ class APIService {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: ApiResponse = try handleApiResponse(data: data, response: response, endpoint: "\(endpoint) (\(logDescription))")
-            // --- NEW: Check for API-level error in response ---
             if let apiError = apiResponse.error {
                 Self.logger.error("API returned error for [\(logDescription)]: \(apiError)")
-                // Specific error handling if "nothingFound" or "tooShort"
                 if apiError == "nothingFound" {
-                    // Return an empty successful response, as it's not a network/decode error
                     return ApiResponse(items: [], atEnd: true, atStart: nil, hasOlder: false, hasNewer: nil, error: apiError)
                 } else if apiError == "tooShort" {
                      throw NSError(domain: "APIService.fetchItems", code: 2, userInfo: [NSLocalizedDescriptionKey: "Suchbegriff zu kurz (mind. 2 Zeichen)."])
                 }
-                // For other API errors, we might just return them in the ApiResponse
             }
-            // --- END NEW ---
             Self.logger.info("API fetch completed for [\(logDescription)]: \(apiResponse.items.count) items received. atEnd: \(apiResponse.atEnd ?? false)")
             return apiResponse
         } catch {
@@ -417,11 +409,7 @@ class APIService {
             throw error
         }
     }
-    // --- END MODIFICATION ---
 
-    // fetchItem is less critical for this change, but for consistency, it should also return ApiResponse.
-    // For now, I'll leave it as is to focus on the search pagination.
-    // If it becomes an issue, we can refactor it similarly.
     func fetchItem(id: Int, flags: Int) async throws -> Item? {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent("items/get"), resolvingAgainstBaseURL: false) else {
             throw URLError(.badURL)
@@ -868,7 +856,10 @@ class APIService {
         }
     }
 
-    func fetchInboxMessages(older: Int? = nil) async throws -> InboxResponse {
+    // --- MODIFIED: `fetchInboxMessages` is now private and specific to the old /inbox/all behavior ---
+    // --- It should only be called if absolutely necessary or as a fallback.
+    // --- The new public methods will be `fetchInboxCommentsApi` and `fetchInboxNotificationsApi`.
+    private func fetchInboxMessagesAll(older: Int? = nil) async throws -> InboxResponse {
         let endpoint = "/inbox/all"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
             throw URLError(.badURL)
@@ -888,16 +879,74 @@ class APIService {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: InboxResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint + (older == nil ? " (initial)" : " (older: \(older!))"))
-            Self.logger.info("Successfully fetched \(apiResponse.messages.count) general inbox messages. AtEnd: \(apiResponse.atEnd)")
+            Self.logger.info("Successfully fetched \(apiResponse.messages.count) general inbox messages from /inbox/all. AtEnd: \(apiResponse.atEnd)")
             return apiResponse
         } catch {
-            Self.logger.error("Error fetching general inbox messages: \(error.localizedDescription)")
+            Self.logger.error("Error fetching general inbox messages from /inbox/all: \(error.localizedDescription)")
             if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
-                 Self.logger.warning("Fetching general inbox messages failed: User authentication required.")
+                 Self.logger.warning("Fetching general inbox messages from /inbox/all failed: User authentication required.")
             }
             throw error
         }
     }
+    // --- END MODIFICATION ---
+
+
+    // --- NEW: Method to fetch only comments from /inbox/comments ---
+    func fetchInboxCommentsApi(older: Int? = nil) async throws -> InboxResponse {
+        let endpoint = "/inbox/comments"
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        if let olderTimestamp = older {
+            urlComponents.queryItems = [URLQueryItem(name: "older", value: String(olderTimestamp))]
+            Self.logger.info("Fetching inbox comments from '\(endpoint)' older than timestamp: \(olderTimestamp)")
+        } else {
+            Self.logger.info("Fetching initial inbox comments from '\(endpoint)'.")
+        }
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        let request = URLRequest(url: url)
+        logRequestDetails(request, for: endpoint)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: InboxResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint)
+            Self.logger.info("Successfully fetched \(apiResponse.messages.count) comments from \(endpoint). AtEnd: \(apiResponse.atEnd)")
+            return apiResponse
+        } catch {
+            Self.logger.error("Error fetching comments from \(endpoint): \(error.localizedDescription)")
+            throw error
+        }
+    }
+    // --- END NEW ---
+
+    // --- NEW: Method to fetch only notifications from /inbox/notifications ---
+    func fetchInboxNotificationsApi(older: Int? = nil) async throws -> InboxResponse {
+        let endpoint = "/inbox/notifications"
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        if let olderTimestamp = older {
+            urlComponents.queryItems = [URLQueryItem(name: "older", value: String(olderTimestamp))]
+            Self.logger.info("Fetching inbox notifications from '\(endpoint)' older than timestamp: \(olderTimestamp)")
+        } else {
+            Self.logger.info("Fetching initial inbox notifications from '\(endpoint)'.")
+        }
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        let request = URLRequest(url: url)
+        logRequestDetails(request, for: endpoint)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let apiResponse: InboxResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint)
+            // Die API liefert hier auch "follow" Nachrichten mit, was für den "System" Tab passt.
+            Self.logger.info("Successfully fetched \(apiResponse.messages.count) notifications/follows from \(endpoint). AtEnd: \(apiResponse.atEnd)")
+            return apiResponse
+        } catch {
+            Self.logger.error("Error fetching notifications/follows from \(endpoint): \(error.localizedDescription)")
+            throw error
+        }
+    }
+    // --- END NEW ---
+
 
     func fetchInboxConversations() async throws -> InboxConversationsResponse {
         let endpoint = "/inbox/conversations"
@@ -995,21 +1044,14 @@ class APIService {
             let responseBody = String(data: data, encoding: .utf8) ?? "No body"
             Self.logger.error("API Error (\(endpoint)): Invalid HTTP status code: \(httpResponse.statusCode). Body: \(responseBody)")
             if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 { throw URLError(.userAuthenticationRequired, userInfo: [NSLocalizedDescriptionKey: "Authentication failed for \(endpoint)"]) }
-            // --- NEW: Decode error from body if possible ---
             if let apiErrorResponse = try? decoder.decode(ApiResponse.self, from: data), let apiError = apiErrorResponse.error {
                  if apiError == "tooShort" {
                      throw NSError(domain: "APIService.\(endpoint.replacingOccurrences(of: "/", with: "."))", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Suchbegriff zu kurz (mind. 2 Zeichen)."])
                  } else if apiError == "nothingFound" {
-                     // For "nothingFound", we might want to return an empty successful response T.
-                     // This requires T to have an "empty" state or be optional.
-                     // For ApiResponse itself, it's handled in fetchItems.
-                     // For other T, this is more complex. For now, throw a generic error.
                      Self.logger.warning("API returned error '\(apiError)' for endpoint \(endpoint). This might need specific handling in the caller.")
                  }
-                 // Generic error for other API-reported errors
                  throw NSError(domain: "APIService.\(endpoint.replacingOccurrences(of: "/", with: "."))", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: apiError])
             }
-            // --- END NEW ---
             throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(httpResponse.statusCode) for \(endpoint). Body: \(responseBody)"])
         }
         do { return try decoder.decode(T.self, from: data) }
