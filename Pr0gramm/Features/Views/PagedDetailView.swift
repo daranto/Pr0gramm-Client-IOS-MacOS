@@ -6,7 +6,18 @@ import os
 import AVKit
 import Kingfisher
 
-struct PreviewLinkTarget: Identifiable, Equatable { let id: Int }
+// --- MODIFIED: PreviewLinkTarget erweitert ---
+struct PreviewLinkTarget: Identifiable, Equatable {
+    let itemID: Int
+    let commentID: Int? // Optional comment ID
+    var id: Int { itemID } // ID remains itemID for sheet uniqueness based on item
+
+    static func == (lhs: PreviewLinkTarget, rhs: PreviewLinkTarget) -> Bool {
+        return lhs.itemID == rhs.itemID && lhs.commentID == rhs.commentID
+    }
+}
+// --- END MODIFICATION ---
+
 struct FullscreenImageTarget: Identifiable, Equatable {
     let item: Item; var id: Int { item.id }
     static func == (lhs: FullscreenImageTarget, rhs: FullscreenImageTarget) -> Bool { lhs.item.id == rhs.item.id }
@@ -76,7 +87,6 @@ struct PagedDetailTabViewItem: View {
     let addTagsAction: (String) async -> String?
     let upvoteCommentAction: (Int) -> Void
     let downvoteCommentAction: (Int) -> Void
-    // --- NEW: Callback für Tag-Tap im Sheet ---
     let onTagTappedInSheetCallback: ((String) -> Void)?
 
 
@@ -122,7 +132,6 @@ struct PagedDetailTabViewItem: View {
             addTagsAction: addTagsAction,
             upvoteCommentAction: upvoteCommentAction,
             downvoteCommentAction: downvoteCommentAction,
-            // --- NEW: Übergabe der Callback an DetailViewContent ---
             onTagTappedInSheetCallback: onTagTappedInSheetCallback
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -181,7 +190,6 @@ struct PagedDetailView: View {
     @State private var currentItemTargetCommentID: Int?
 
     let loadMoreAction: () async -> Void
-    // --- NEW: Callback für Tag-Tap im Sheet ---
     let onTagTappedInSheetCallback: ((String) -> Void)?
 
     let commentMaxDepth = 5
@@ -191,37 +199,37 @@ struct PagedDetailView: View {
 
     @State private var imagePrefetcher = ImagePrefetcher(urls: [])
     
-    // --- MODIFIED: Initializer mit neuer Callback ---
     init(
         items: Binding<[Item]>,
         selectedIndex: Int,
         playerManager: VideoPlayerManager,
         loadMoreAction: @escaping () async -> Void,
         initialTargetCommentID: Int? = nil,
-        onTagTappedInSheetCallback: ((String) -> Void)? = nil // Neuer optionaler Parameter
+        onTagTappedInSheetCallback: ((String) -> Void)? = nil
     ) {
         self._items = items
         self._selectedIndex = State(initialValue: selectedIndex)
         self.playerManager = playerManager
         self.loadMoreAction = loadMoreAction
         self._currentItemTargetCommentID = State(initialValue: initialTargetCommentID)
-        self.onTagTappedInSheetCallback = onTagTappedInSheetCallback // Zuweisen
+        self.onTagTappedInSheetCallback = onTagTappedInSheetCallback
 
         if selectedIndex >= 0 && selectedIndex < items.wrappedValue.count {
             self._previouslySelectedItemForMarking = State(initialValue: items.wrappedValue[selectedIndex])
         }
         PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex), initialTargetCommentID: \(initialTargetCommentID ?? -1), onTagTappedInSheetCallback is \(onTagTappedInSheetCallback == nil ? "nil" : "set")")
     }
-    // --- END MODIFICATION ---
 
 
     var body: some View {
         tabViewContent
         .background(KeyCommandView(handler: keyboardActionHandler))
+        // --- MODIFIED: Updated sheet call for LinkedItemPreviewWrapperView ---
         .sheet(item: $previewLinkTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
-             LinkedItemPreviewWrapperView(itemID: targetWrapper.id)
+             LinkedItemPreviewWrapperView(itemID: targetWrapper.itemID, targetCommentID: targetWrapper.commentID) // Pass commentID
                  .environmentObject(settings).environmentObject(authService)
         }
+        // --- END MODIFICATION ---
         .sheet(item: $userProfileSheetTarget, onDismiss: resumePlayerIfNeeded) { target in
             UserProfileSheetView(username: target.username)
                 .environmentObject(authService)
@@ -442,7 +450,6 @@ struct PagedDetailView: View {
                  },
                  upvoteCommentAction: { commentId in Task { await handleCommentVoteTap(commentId: commentId, voteType: 1) } },
                  downvoteCommentAction: { commentId in Task { await handleCommentVoteTap(commentId: commentId, voteType: -1) } },
-                 // --- NEW: Übergabe der Callback an PagedDetailTabViewItem ---
                  onTagTappedInSheetCallback: self.onTagTappedInSheetCallback,
                  previewLinkTarget: $previewLinkTarget,
                  userProfileSheetTarget: $userProfileSheetTarget,
@@ -1041,15 +1048,25 @@ struct PagedDetailView: View {
 }
 
 @MainActor
+// --- MODIFIED: LinkedItemPreviewWrapperView angepasst ---
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
+    let targetCommentID: Int? // Hinzugefügt
+
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
     @Environment(\.dismiss) var dismiss
 
+    init(itemID: Int, targetCommentID: Int? = nil) { // Initializer angepasst
+        self.itemID = itemID
+        self.targetCommentID = targetCommentID
+        PagedDetailView.logger.debug("LinkedItemPreviewWrapperView init. itemID: \(itemID), targetCommentID: \(targetCommentID ?? -1)")
+    }
+
     var body: some View {
         NavigationStack {
-            LinkedItemPreviewView(itemID: itemID)
+            // Übergebe targetCommentID an LinkedItemPreviewView
+            LinkedItemPreviewView(itemID: itemID, targetCommentID: targetCommentID)
                 .environmentObject(settings).environmentObject(authService)
                 .navigationTitle("Vorschau")
                 #if os(iOS)
@@ -1059,6 +1076,8 @@ struct LinkedItemPreviewWrapperView: View {
         }
     }
 }
+// --- END MODIFICATION ---
+
 
 #Preview {
     struct PreviewWrapper: View {
@@ -1105,7 +1124,7 @@ struct LinkedItemPreviewWrapperView: View {
                     playerManager: previewPlayerManager,
                     loadMoreAction: dummyLoadMore,
                     initialTargetCommentID: nil,
-                    onTagTappedInSheetCallback: { tag in // Dummy-Callback für Preview
+                    onTagTappedInSheetCallback: { tag in
                         print("Preview PagedDetailView: Tag '\(tag)' tapped in sheet context.")
                     }
                  )

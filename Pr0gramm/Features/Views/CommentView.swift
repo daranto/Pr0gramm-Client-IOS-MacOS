@@ -17,10 +17,8 @@ struct CommentView: View {
     let onReply: () -> Void
     let targetCommentID: Int?
     let onHighlightCompleted: (Int) -> Void
-    // --- NEW: Callbacks für Up/Downvote ---
     let onUpvoteComment: () -> Void
     let onDownvoteComment: () -> Void
-    // --- END NEW ---
 
     @EnvironmentObject var authService: AuthService
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CommentView")
@@ -122,16 +120,18 @@ struct CommentView: View {
         .background(isHighlighted ? Color.accentColor.opacity(0.3) : Color.clear)
         .animation(.easeInOut(duration: 0.35), value: isHighlighted)
         .opacity(isCollapsed ? 0.7 : 1.0)
+        // --- MODIFIED: parsePr0grammLink Aufruf ---
         .environment(\.openURL, OpenURLAction { url in
-            if let itemID = parsePr0grammLink(url: url) {
-                CommentView.logger.info("Pr0gramm link tapped, attempting to preview item ID: \(itemID)")
-                self.previewLinkTarget = PreviewLinkTarget(id: itemID)
+            if let (itemID, commentID) = parsePr0grammLink(url: url) {
+                CommentView.logger.info("Pr0gramm link tapped, attempting to preview item ID: \(itemID), comment ID: \(commentID ?? -1)")
+                self.previewLinkTarget = PreviewLinkTarget(itemID: itemID, commentID: commentID)
                 return .handled
             } else {
                 CommentView.logger.info("Non-pr0gramm link tapped: \(url). Opening in system browser.")
                 return .systemAction
             }
         })
+        // --- END MODIFICATION ---
         .onChange(of: authService.favoritedCommentIDs) { _, _ in }
         .onChange(of: authService.votedCommentStates) { _, _ in }
         .contextMenu { contextMenuContent }
@@ -190,7 +190,6 @@ struct CommentView: View {
 
             Divider()
 
-            // --- MODIFIED: Use new callbacks ---
             Button {
                 CommentView.logger.debug("Context Menu: Upvote button tapped for comment \(comment.id)")
                 onUpvoteComment()
@@ -206,7 +205,6 @@ struct CommentView: View {
                 Label("Downvote", systemImage: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
             }
             .disabled(isVoting)
-            // --- END MODIFICATION ---
 
             Divider()
             if let commenterName = comment.name, !commenterName.isEmpty {
@@ -220,22 +218,60 @@ struct CommentView: View {
         }
     }
 
-    private func parsePr0grammLink(url: URL) -> Int? {
+    // --- MODIFIED: parsePr0grammLink gibt jetzt (Int, Int?)? zurück ---
+    private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
-        let pathComponents = url.pathComponents
-        for component in pathComponents.reversed() {
-            if let itemID = Int(component) { return itemID }
-        }
-        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
-            for item in queryItems {
-                if item.name == "id", let value = item.value, let itemID = Int(value) {
-                    return itemID
+
+        let path = url.path
+        let components = path.components(separatedBy: "/")
+
+        // Suchen nach /new/ITEM_ID oder /ITEM_ID
+        var itemID: Int? = nil
+        for (index, component) in components.enumerated() {
+            if let id = Int(component) {
+                if index > 0 && (components[index-1] == "new" || components[index-1] == "top") {
+                    itemID = id
+                    break
+                } else if index == components.count - 1 { // Potenziell /ITEM_ID:comment...
+                    // Nichts tun, wird unten behandelt
                 }
             }
         }
-        CommentView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+
+        // Suchen nach :commentCOMMENT_ID
+        var commentID: Int? = nil
+        if let lastComponent = components.last, lastComponent.contains(":comment") {
+            let parts = lastComponent.split(separator: ":")
+            if parts.count == 2, let idPart = Int(parts[0]), parts[1].starts(with: "comment"), let cID = Int(parts[1].dropFirst("comment".count)) {
+                itemID = idPart // Item ID ist der Teil vor :comment
+                commentID = cID
+            }
+        } else if let lastComponent = components.last, let id = Int(lastComponent) {
+             // Fall: /new/ITEM_ID ohne Kommentar-ID
+             if itemID == nil { // Nur setzen, wenn nicht schon durch :comment... gesetzt
+                 itemID = id
+             }
+        }
+
+
+        // Fallback für query parameter ?id=ITEM_ID
+        if itemID == nil, let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            for item in queryItems {
+                if item.name == "id", let value = item.value, let id = Int(value) {
+                    itemID = id
+                    break
+                }
+            }
+        }
+
+        if let itemID = itemID {
+            return (itemID, commentID)
+        }
+
+        CommentView.logger.warning("Could not parse item or comment ID from pr0gramm link: \(url.absoluteString)")
         return nil
     }
+    // --- END MODIFICATION ---
 }
 
 extension String: Identifiable {
@@ -257,7 +293,7 @@ extension String: Identifiable {
 
             return List {
                  CommentView(
-                     comment: ItemComment(id: 1, parent: 0, content: "Top comment http://pr0gramm.com/new/12345", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
+                     comment: ItemComment(id: 1, parent: 0, content: "Top comment http://pr0gramm.com/new/12345:comment67890", created: Int(Date().timeIntervalSince1970)-100, up: 15, down: 1, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
                      uploaderName: uploader,
                      previewLinkTarget: $previewLinkTarget_Normal,
                      userProfileSheetTarget: $userProfileSheetTarget_Normal,
@@ -267,15 +303,13 @@ extension String: Identifiable {
                      onReply: { print("Reply Tapped") },
                      targetCommentID: 1,
                      onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                     // --- NEW: Dummy actions for preview ---
                      onUpvoteComment: { print("Preview: Upvote comment 1") },
                      onDownvoteComment: { print("Preview: Downvote comment 1") }
-                     // --- END NEW ---
                  )
                  .listRowInsets(EdgeInsets())
 
                  CommentView(
-                     comment: ItemComment(id: 4, parent: 0, content: "RIP neben msn und icq.", created: Int(Date().timeIntervalSince1970)-150, up: 152, down: 3, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
+                     comment: ItemComment(id: 4, parent: 0, content: "RIP http://pr0gramm.com/new/55555 neben msn und icq.", created: Int(Date().timeIntervalSince1970)-150, up: 152, down: 3, confidence: 0.9, name: "S0ulreaver", mark: 2, itemId: 54321),
                      uploaderName: uploader,
                      previewLinkTarget: $previewLinkTarget_Normal,
                      userProfileSheetTarget: $userProfileSheetTarget_Normal,
@@ -285,10 +319,8 @@ extension String: Identifiable {
                      onReply: { print("Reply Tapped") },
                      targetCommentID: nil,
                      onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                     // --- NEW: Dummy actions for preview ---
                      onUpvoteComment: { print("Preview: Upvote comment 4") },
                      onDownvoteComment: { print("Preview: Downvote comment 4") }
-                     // --- END NEW ---
                  )
                   .listRowInsets(EdgeInsets())
 
@@ -303,10 +335,8 @@ extension String: Identifiable {
                      onReply: { print("Reply Tapped") },
                      targetCommentID: nil,
                      onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                     // --- NEW: Dummy actions for preview ---
                      onUpvoteComment: { print("Preview: Upvote comment 10") },
                      onDownvoteComment: { print("Preview: Downvote comment 10") }
-                     // --- END NEW ---
                  )
                   .listRowInsets(EdgeInsets())
                  CommentView(
@@ -320,10 +350,8 @@ extension String: Identifiable {
                      onReply: { print("Reply Tapped") },
                      targetCommentID: nil,
                      onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                     // --- NEW: Dummy actions for preview ---
                      onUpvoteComment: { print("Preview: Upvote comment 11") },
                      onDownvoteComment: { print("Preview: Downvote comment 11") }
-                     // --- END NEW ---
                  )
                   .listRowInsets(EdgeInsets())
             }
@@ -353,10 +381,8 @@ extension String: Identifiable {
                 onReply: { print("Reply Tapped") },
                 targetCommentID: nil,
                 onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                // --- NEW: Dummy actions for preview ---
                 onUpvoteComment: { print("Preview: Upvote comment 2") },
                 onDownvoteComment: { print("Preview: Downvote comment 2") }
-                // --- END NEW ---
             )
             .padding()
             .environmentObject(AuthService(appSettings: AppSettings()))
@@ -384,10 +410,8 @@ extension String: Identifiable {
                 onReply: { print("Reply Tapped") },
                 targetCommentID: nil,
                 onHighlightCompleted: { id in print("Preview: Highlight completed for \(id)") },
-                // --- NEW: Dummy actions for preview ---
                 onUpvoteComment: { print("Preview: Upvote comment 3") },
                 onDownvoteComment: { print("Preview: Downvote comment 3") }
-                // --- END NEW ---
             )
             .padding()
             .environmentObject(auth)

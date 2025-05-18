@@ -4,7 +4,6 @@
 import SwiftUI
 import os
 
-/// Displays the messages within a specific private conversation and allows the user to send new messages.
 struct ConversationDetailView: View {
     let partnerUsername: String
 
@@ -24,11 +23,9 @@ struct ConversationDetailView: View {
 
     @State private var conversationPartner: InboxConversationUser? = nil
     
-    @State private var itemNavigationValue: InboxView.ItemNavigationValue? = nil
+    @State private var itemNavigationValue: ItemNavigationValue? = nil
     @State private var isLoadingNavigationTarget: Bool = false
-    // --- MODIFIED: Deklaration von navigationTargetItemId hinzugefügt/sichergestellt ---
-    @State private var navigationTargetItemId: Int? = nil // ItemID für Ladeanzeige des Navigationsziels
-    // --- END MODIFICATION ---
+    @State private var navigationTargetItemId: Int? = nil
     @State private var previewLinkTargetFromMessage: PreviewLinkTarget? = nil
 
     @FocusState private var isTextEditorFocused: Bool
@@ -70,15 +67,13 @@ struct ConversationDetailView: View {
              .environmentObject(authService)
         }
         .sheet(item: $previewLinkTargetFromMessage) { target in
-            LinkedItemPreviewView(itemID: target.id)
+            LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
                 .environmentObject(settings)
                 .environmentObject(authService)
         }
         .overlay {
             if isLoadingNavigationTarget {
-                // --- MODIFIED: Verwende navigationTargetItemId korrekt ---
                 ProgressView("Lade Post \(navigationTargetItemId ?? 0)...")
-                // --- END MODIFICATION ---
                     .padding().background(Material.regular).cornerRadius(10).shadow(radius: 5)
             }
         }
@@ -108,88 +103,130 @@ struct ConversationDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .refreshable { await refreshMessages() }
         } else {
-            messageList
+            messageList // Verwendet jetzt die aufgeteilte View-Funktion
         }
     }
 
-    private var messageList: some View {
-        ScrollViewReader { proxy in
-            List {
-                if isLoadingMore {
-                    HStack { Spacer(); ProgressView("Lade ältere..."); Spacer() }
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets())
-                        .padding(.vertical, 8)
-                }
-                ForEach(messages) { message in
-                    ConversationMessageRow(
-                        message: message,
-                        isSentByCurrentUser: message.sent == 1,
-                        currentUserMark: authService.currentUser?.mark ?? 0,
-                        partnerMark: conversationPartner?.mark ?? 0,
-                        partnerName: conversationPartner?.name ?? partnerUsername
-                    )
+    // --- MODIFIED: messageList in eine eigene Funktion ausgelagert ---
+    @ViewBuilder
+    private func messageListBody(proxy: ScrollViewProxy) -> some View {
+        List {
+            if isLoadingMore {
+                HStack { Spacer(); ProgressView("Lade ältere..."); Spacer() }
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
-                    .id(message.id)
-                    .onAppear {
-                        if message.id == messages.first?.id && canLoadMore && !isLoadingMore && !isLoading {
-                            ConversationDetailView.logger.info("Near top of conversation (message \(message.id)), loading older messages.")
-                            Task {
-                                try? await Task.sleep(for: .milliseconds(200))
-                                await loadMoreMessages()
-                            }
+                    .listRowInsets(EdgeInsets())
+                    .padding(.vertical, 8)
+            }
+            ForEach(messages) { message in
+                ConversationMessageRow(
+                    message: message,
+                    isSentByCurrentUser: message.sent == 1,
+                    currentUserMark: authService.currentUser?.mark ?? 0,
+                    partnerMark: conversationPartner?.mark ?? 0,
+                    partnerName: conversationPartner?.name ?? partnerUsername
+                )
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
+                .id(message.id)
+                .onAppear {
+                    if message.id == messages.first?.id && canLoadMore && !isLoadingMore && !isLoading {
+                        ConversationDetailView.logger.info("Near top of conversation (message \(message.id)), loading older messages.")
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(200))
+                            await loadMoreMessages()
                         }
                     }
                 }
             }
-            .listStyle(.plain)
-            .background(Color.clear)
-            .scrollContentBackground(.hidden)
-            .refreshable { await refreshMessages() }
-            .onAppear {
-                if let lastMessageId = messages.last?.id {
-                    proxy.scrollTo(lastMessageId, anchor: .bottom)
-                }
+        }
+        .listStyle(.plain)
+        .background(Color.clear)
+        .scrollContentBackground(.hidden)
+        .refreshable { await refreshMessages() }
+        .onAppear {
+            if let lastMessageId = messages.last?.id {
+                proxy.scrollTo(lastMessageId, anchor: .bottom)
             }
-            .onChange(of: messages.count) { oldValue, newValue in
-                if newValue > oldValue, let lastMessageId = messages.last?.id {
+        }
+        .onChange(of: messages.count) { oldValue, newValue in
+            if newValue > oldValue, let lastMessageId = messages.last?.id {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation(.smooth(duration: 0.2)) {
+                        proxy.scrollTo(lastMessageId, anchor: .bottom)
+                    }
+                }
+            } else if newValue < oldValue {
+                 if let lastMessageId = messages.last?.id {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         withAnimation(.smooth(duration: 0.2)) {
                             proxy.scrollTo(lastMessageId, anchor: .bottom)
                         }
                     }
-                } else if newValue < oldValue {
-                     if let lastMessageId = messages.last?.id {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            withAnimation(.smooth(duration: 0.2)) {
-                                proxy.scrollTo(lastMessageId, anchor: .bottom)
-                            }
-                        }
-                     }
-                }
+                 }
             }
-            .environment(\.openURL, OpenURLAction { url in
-                if let itemID = parsePr0grammLink(url: url) {
-                    ConversationDetailView.logger.info("Pr0gramm link tapped in conversation, attempting to preview item ID: \(itemID)")
-                    self.previewLinkTargetFromMessage = PreviewLinkTarget(id: itemID)
-                    return .handled
-                } else {
-                    ConversationDetailView.logger.info("Non-pr0gramm link tapped: \(url). Opening in system browser.")
-                    return .systemAction
-                }
-            })
+        }
+        .environment(\.openURL, OpenURLAction { url in
+            if let (itemID, commentID) = parsePr0grammLink(url: url) {
+                ConversationDetailView.logger.info("Pr0gramm link tapped in conversation, attempting to preview item ID: \(itemID), commentID: \(commentID ?? -1)")
+                self.previewLinkTargetFromMessage = PreviewLinkTarget(itemID: itemID, commentID: commentID)
+                return .handled
+            } else {
+                ConversationDetailView.logger.info("Non-pr0gramm link tapped: \(url). Opening in system browser.")
+                return .systemAction
+            }
+        })
+    }
+
+    private var messageList: some View {
+        ScrollViewReader { proxy in
+            messageListBody(proxy: proxy) // Aufruf der neuen Funktion
         }
     }
+    // --- END MODIFICATION ---
     
-    private func parsePr0grammLink(url: URL) -> Int? {
+    private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
-        let pathComponents = url.pathComponents
-        for component in pathComponents.reversed() { if let itemID = Int(component) { return itemID } }
-        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
-            for item in queryItems { if item.name == "id", let value = item.value, let itemID = Int(value) { return itemID } }
+
+        let path = url.path
+        let components = path.components(separatedBy: "/")
+        var itemID: Int? = nil
+        var commentID: Int? = nil
+
+        if let lastPathComponent = components.last {
+            if lastPathComponent.contains(":comment") {
+                let parts = lastPathComponent.split(separator: ":")
+                if parts.count == 2, let idPart = Int(parts[0]), parts[1].starts(with: "comment"), let cID = Int(parts[1].dropFirst("comment".count)) {
+                    itemID = idPart
+                    commentID = cID
+                }
+            } else {
+                var potentialItemIDIndex: Int? = nil
+                if let idx = components.lastIndex(where: { $0 == "new" || $0 == "top" }), idx + 1 < components.count {
+                    potentialItemIDIndex = idx + 1
+                } else if components.count > 1 && Int(components.last!) != nil {
+                    potentialItemIDIndex = components.count - 1
+                }
+                
+                if let idx = potentialItemIDIndex, let id = Int(components[idx]) {
+                    itemID = id
+                }
+            }
         }
-        ConversationDetailView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+        
+        if itemID == nil, let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            for item in queryItems {
+                if item.name == "id", let value = item.value, let id = Int(value) {
+                    itemID = id
+                    break
+                }
+            }
+        }
+        
+        if let itemID = itemID {
+            return (itemID, commentID)
+        }
+
+        ConversationDetailView.logger.warning("Could not parse item or comment ID from pr0gramm link: \(url.absoluteString)")
         return nil
     }
 
@@ -246,9 +283,7 @@ struct ConversationDetailView: View {
         errorMessage = nil
         sendingError = nil
         isLoadingNavigationTarget = false
-        // --- MODIFIED: navigationTargetItemId auch hier zurücksetzen ---
         navigationTargetItemId = nil
-        // --- END MODIFICATION ---
     }
 
     @MainActor
@@ -369,158 +404,7 @@ struct ConversationDetailView: View {
     }
 }
 
-
-struct ConversationMessageRow: View {
-    let message: PrivateMessage
-    let isSentByCurrentUser: Bool
-    let currentUserMark: Int
-    let partnerMark: Int
-    let partnerName: String
-
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ConversationMessageRow")
-    @EnvironmentObject var authService: AuthService
-
-    private var backgroundColor: Color {
-        isSentByCurrentUser ? Color.accentColor : Color(uiColor: .systemGray5)
-    }
-
-    private var textColorForBubble: Color {
-        isSentByCurrentUser ? .white : .primary
-    }
-    
-    private var senderDisplayName: String {
-        return message.name
-    }
-    private var senderMarkValue: Int {
-        return message.mark
-    }
-    
-    private func getInitials(from name: String) -> String {
-        let parts = name.uppercased().components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        var initials = ""
-        if let first = parts.first?.first {
-            initials.append(first)
-        }
-        if parts.count > 1, let second = parts.last?.first {
-            initials.append(second)
-        } else if initials.count == 1 && (parts.first?.count ?? 0) > 1, let secondChar = parts.first?.dropFirst().first {
-             initials.append(secondChar)
-        }
-        if initials.count > 2 {
-            initials = String(initials.prefix(2))
-        }
-        if initials.count == 1 && (parts.first?.count ?? 0) == 1 {
-        }
-        return initials.isEmpty ? "?" : initials
-    }
-
-    private func isColorLight(_ color: Color) -> Bool {
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        guard UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a) else {
-            return false
-        }
-        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        return luminance > 0.6
-    }
-
-    @ViewBuilder
-    private var avatarView: some View {
-        let nameForAvatar = isSentByCurrentUser ? (authService.currentUser?.name ?? "Ich") : partnerName
-        let initials = getInitials(from: nameForAvatar)
-        let avatarBackgroundColor = Mark(rawValue: senderMarkValue).displayColor
-        let initialsColor: Color = isColorLight(avatarBackgroundColor) ? .black : .white
-        
-        ZStack {
-            Circle()
-                .fill(avatarBackgroundColor)
-                .frame(width: 36, height: 36)
-                .overlay(Circle().stroke(Color.secondary.opacity(0.4), lineWidth: 0.5))
-            Text(initials)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(initialsColor)
-        }
-    }
-
-    private var attributedMessageContent: AttributedString {
-        var attributedString = AttributedString(message.message ?? "")
-        let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont)
-        attributedString.font = baseUIFont
-        attributedString.foregroundColor = textColorForBubble
-
-        do {
-            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-            let matches = detector.matches(in: message.message ?? "", options: [], range: NSRange(location: 0, length: (message.message ?? "").utf16.count))
-            for match in matches {
-                guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
-                attributedString[range].link = url
-                attributedString[range].foregroundColor = isSentByCurrentUser ? .white.opacity(0.85) : Color.accentColor
-                attributedString[range].underlineStyle = .single
-                attributedString[range].font = baseUIFont
-            }
-        } catch {
-            ConversationMessageRow.logger.error("Error creating NSDataDetector in ConversationMessageRow: \(error.localizedDescription)")
-        }
-        return attributedString
-    }
-
-    private func formattedTimestamp(for created: Int) -> String {
-        let date = Date(timeIntervalSince1970: TimeInterval(created))
-        let calendar = Calendar.current
-
-        let timeFormatter = DateFormatter()
-        timeFormatter.dateFormat = "HH:mm"
-        let timeString = timeFormatter.string(from: date)
-
-        if calendar.isDateInToday(date) {
-            return timeString
-        } else if calendar.isDateInYesterday(date) {
-            return "Gestern, \(timeString)"
-        } else {
-            let dateFormatter = DateFormatter()
-            if calendar.isDate(date, equalTo: Date(), toGranularity: .year) {
-                dateFormatter.dateFormat = "d. MMMM"
-            } else {
-                dateFormatter.dateFormat = "dd.MM.yy"
-            }
-            let dateString = dateFormatter.string(from: date)
-            return "\(dateString), \(timeString)"
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 0) {
-            if !isSentByCurrentUser {
-                avatarView
-                    .padding(.trailing, 6)
-            } else {
-                Spacer(minLength: 36 + 6)
-            }
-
-            VStack(alignment: isSentByCurrentUser ? .trailing : .leading, spacing: 2) {
-                Text(attributedMessageContent)
-                    .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-                    .background(backgroundColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
-                    .frame(minWidth: 40)
-
-                HStack(spacing: 4) {
-                    Text(formattedTimestamp(for: message.created))
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                }
-                .padding(.horizontal, 0)
-                .padding(.top, 2)
-            }
-            
-            if isSentByCurrentUser {
-                 Spacer().frame(width: 36 + 6, height: 0)
-            } else {
-                Spacer(minLength: 36 + 6)
-            }
-        }
-    }
-}
-
+// ConversationMessageRow sollte jetzt global in InboxView.swift definiert sein.
 
 // MARK: - Preview
 #Preview {
@@ -553,5 +437,4 @@ struct ConversationMessageRow: View {
     }
     return PreviewWrapper()
 }
-
 // --- END OF COMPLETE FILE ---

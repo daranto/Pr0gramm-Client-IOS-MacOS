@@ -55,7 +55,7 @@ struct UserProfileSheetView: View {
     }()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack { // Der NavigationStack hier ist wichtig für die .toolbar und .navigationTitle
             List {
                 profileInfoSection()
                 userUploadsSection()
@@ -65,7 +65,7 @@ struct UserProfileSheetView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbar {
+            .toolbar { // Diese Toolbar sollte jetzt eindeutig sein.
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Fertig") { dismiss() }
                 }
@@ -86,9 +86,9 @@ struct UserProfileSheetView: View {
                 Task { await loadAllData(forceRefresh: true) }
             }
             .environment(\.openURL, OpenURLAction { url in
-                if let itemID = parsePr0grammLink(url: url) {
-                    UserProfileSheetView.logger.info("Pr0gramm link tapped in UserProfileSheet comment, setting previewLinkTargetFromComment.")
-                    self.previewLinkTargetFromComment = PreviewLinkTarget(id: itemID)
+                if let (itemID, commentID) = parsePr0grammLink(url: url) {
+                    UserProfileSheetView.logger.info("Pr0gramm link tapped in UserProfileSheet comment, setting previewLinkTargetFromComment. itemID: \(itemID), commentID: \(commentID ?? -1)")
+                    self.previewLinkTargetFromComment = PreviewLinkTarget(itemID: itemID, commentID: commentID)
                     return .handled
                 } else {
                     UserProfileSheetView.logger.info("Non-pr0gramm link tapped in UserProfileSheet: \(url). Opening in system browser.")
@@ -152,7 +152,7 @@ struct UserProfileSheetView: View {
                 }
             }
             .sheet(item: $previewLinkTargetFromComment) { target in
-                 LinkedItemPreviewView(itemID: target.id)
+                 LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
                      .environmentObject(settings)
                      .environmentObject(authService)
             }
@@ -188,7 +188,6 @@ struct UserProfileSheetView: View {
 
                 if let badges = info.badges, !badges.isEmpty {
                     badgeScrollView(badges: badges)
-                        // .listRowInsets(EdgeInsets()) // Entfernt, da das Padding jetzt in badgeScrollView gehandhabt wird
                         .padding(.vertical, 4)
                 }
 
@@ -409,14 +408,49 @@ struct UserProfileSheetView: View {
         }
     }
 
-    private func parsePr0grammLink(url: URL) -> Int? {
+    private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
-        let pathComponents = url.pathComponents
-        for component in pathComponents.reversed() { if let itemID = Int(component) { return itemID } }
-        if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
-            for item in queryItems { if item.name == "id", let value = item.value, let itemID = Int(value) { return itemID } }
+
+        let path = url.path
+        let components = path.components(separatedBy: "/")
+        var itemID: Int? = nil
+        var commentID: Int? = nil
+
+        if let lastPathComponent = components.last {
+            if lastPathComponent.contains(":comment") {
+                let parts = lastPathComponent.split(separator: ":")
+                if parts.count == 2, let idPart = Int(parts[0]), parts[1].starts(with: "comment"), let cID = Int(parts[1].dropFirst("comment".count)) {
+                    itemID = idPart
+                    commentID = cID
+                }
+            } else {
+                var potentialItemIDIndex: Int? = nil
+                if let idx = components.lastIndex(where: { $0 == "new" || $0 == "top" }), idx + 1 < components.count {
+                    potentialItemIDIndex = idx + 1
+                } else if components.count > 1 && Int(components.last!) != nil {
+                    potentialItemIDIndex = components.count - 1
+                }
+                
+                if let idx = potentialItemIDIndex, let id = Int(components[idx]) {
+                    itemID = id
+                }
+            }
         }
-        UserProfileSheetView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
+        
+        if itemID == nil, let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            for item in queryItems {
+                if item.name == "id", let value = item.value, let id = Int(value) {
+                    itemID = id
+                    break
+                }
+            }
+        }
+        
+        if let itemID = itemID {
+            return (itemID, commentID)
+        }
+
+        UserProfileSheetView.logger.warning("Could not parse item or comment ID from pr0gramm link: \(url.absoluteString)")
         return nil
     }
 
@@ -442,12 +476,7 @@ struct UserProfileSheetView: View {
                         .help(badge.description ?? "")
                 }
             }
-            // --- MODIFIED: Adjust padding to align with List content ---
-            // Using .padding(.leading) on the HStack to simulate the List's default content inset.
-            // The exact value might need minor adjustments based on testing on different devices/OS versions.
-            // Common values are around 15-20.
-            .padding(.leading, 1) // Default List row content leading padding
-            // --- END MODIFICATION ---
+            .padding(.leading, 1)
         }
     }
 
