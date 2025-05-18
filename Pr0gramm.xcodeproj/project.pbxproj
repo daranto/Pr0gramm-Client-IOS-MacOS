@@ -14,9 +14,22 @@
 		005113402DB5899600C48DF1 /* Pr0gramm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pr0gramm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		00A544432DD9DCFF000B4B0C /* Exceptions for "Pr0gramm" folder in "Pr0gramm" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 0051133F2DB5899600C48DF1 /* Pr0gramm */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		005113422DB5899600C48DF1 /* Pr0gramm */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				00A544432DD9DCFF000B4B0C /* Exceptions for "Pr0gramm" folder in "Pr0gramm" target */,
+			);
 			path = Pr0gramm;
 			sourceTree = "<group>";
 		};
