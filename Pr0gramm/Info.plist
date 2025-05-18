@@ -1,5 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLIconFile</key>
+			<string>logo_cut</string>
+			<key>CFBundleURLName</key>
+			<string>com.aetherium.Pr0gramm.pr0grammurl</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>pr0grammapp</string>
+			</array>
+		</dict>
+	</array>
+</dict>
 </plist>

@@ -8,10 +8,36 @@
 
 /* Begin PBXBuildFile section */
 		0070BE932DBB8D6500949D28 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 0070BE922DBB8D6500949D28 /* Kingfisher */; };
+		00F25C632DDA2E2600635841 /* Pr0grammRedirector.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 00F25C4B2DDA2E2600635841 /* Pr0grammRedirector.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		00F25C612DDA2E2600635841 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 005113382DB5899600C48DF1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 00F25C4A2DDA2E2600635841;
+			remoteInfo = Pr0grammRedirector;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		00F25C212DDA201100635841 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				00F25C632DDA2E2600635841 /* Pr0grammRedirector.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		005113402DB5899600C48DF1 /* Pr0gramm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pr0gramm.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		00F25C4B2DDA2E2600635841 /* Pr0grammRedirector.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = Pr0grammRedirector.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -22,6 +48,13 @@
 			);
 			target = 0051133F2DB5899600C48DF1 /* Pr0gramm */;
 		};
+		00F25C672DDA2E2600635841 /* Exceptions for "Pr0grammRedirector" folder in "Pr0grammRedirector" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 00F25C4A2DDA2E2600635841 /* Pr0grammRedirector */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +64,18 @@
 				0089CC4D2DD9E4D2009E773B /* Exceptions for "Pr0gramm" folder in "Pr0gramm" target */,
 			);
 			path = Pr0gramm;
+			sourceTree = "<group>";
+		};
+		00F25C4C2DDA2E2600635841 /* Pr0grammRedirector */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				00F25C672DDA2E2600635841 /* Exceptions for "Pr0grammRedirector" folder in "Pr0grammRedirector" target */,
+			);
+			explicitFolders = (
+				Resources/_locales,
+				Resources/images,
+			);
+			path = Pr0grammRedirector;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -44,6 +89,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		00F25C482DDA2E2600635841 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -51,6 +103,7 @@
 			isa = PBXGroup;
 			children = (
 				005113422DB5899600C48DF1 /* Pr0gramm */,
+				00F25C4C2DDA2E2600635841 /* Pr0grammRedirector */,
 				005113412DB5899600C48DF1 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -59,6 +112,7 @@
 			isa = PBXGroup;
 			children = (
 				005113402DB5899600C48DF1 /* Pr0gramm.app */,
+				00F25C4B2DDA2E2600635841 /* Pr0grammRedirector.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -73,10 +127,12 @@
 				0051133C2DB5899600C48DF1 /* Sources */,
 				0051133D2DB5899600C48DF1 /* Frameworks */,
 				0051133E2DB5899600C48DF1 /* Resources */,
+				00F25C212DDA201100635841 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				00F25C622DDA2E2600635841 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				005113422DB5899600C48DF1 /* Pr0gramm */,
@@ -89,6 +145,28 @@
 			productReference = 005113402DB5899600C48DF1 /* Pr0gramm.app */;
 			productType = "com.apple.product-type.application";
 		};
+		00F25C4A2DDA2E2600635841 /* Pr0grammRedirector */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 00F25C642DDA2E2600635841 /* Build configuration list for PBXNativeTarget "Pr0grammRedirector" */;
+			buildPhases = (
+				00F25C472DDA2E2600635841 /* Sources */,
+				00F25C482DDA2E2600635841 /* Frameworks */,
+				00F25C492DDA2E2600635841 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				00F25C4C2DDA2E2600635841 /* Pr0grammRedirector */,
+			);
+			name = Pr0grammRedirector;
+			packageProductDependencies = (
+			);
+			productName = Pr0grammRedirector;
+			productReference = 00F25C4B2DDA2E2600635841 /* Pr0grammRedirector.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -100,6 +178,9 @@
 				LastUpgradeCheck = 1630;
 				TargetAttributes = {
 					0051133F2DB5899600C48DF1 = {
+						CreatedOnToolsVersion = 16.3;
+					};
+					00F25C4A2DDA2E2600635841 = {
 						CreatedOnToolsVersion = 16.3;
 					};
 				};
@@ -122,12 +203,20 @@
 			projectRoot = "";
 			targets = (
 				0051133F2DB5899600C48DF1 /* Pr0gramm */,
+				00F25C4A2DDA2E2600635841 /* Pr0grammRedirector */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		0051133E2DB5899600C48DF1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		00F25C492DDA2E2600635841 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -144,7 +233,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		00F25C472DDA2E2600635841 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		00F25C622DDA2E2600635841 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 00F25C4A2DDA2E2600635841 /* Pr0grammRedirector */;
+			targetProxy = 00F25C612DDA2E2600635841 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		0051134A2DB5899800C48DF1 /* Debug */ = {
@@ -353,6 +457,69 @@
 			};
 			name = Release;
 		};
+		00F25C652DDA2E2600635841 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5Q3BPTF4NY;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Pr0grammRedirector/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Pr0grammRedirector;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.aetherium.Pr0gramm.Pr0grammRedirector;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		00F25C662DDA2E2600635841 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5Q3BPTF4NY;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Pr0grammRedirector/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Pr0grammRedirector;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.4;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.aetherium.Pr0gramm.Pr0grammRedirector;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -370,6 +537,15 @@
 			buildConfigurations = (
 				0051134D2DB5899800C48DF1 /* Debug */,
 				0051134E2DB5899800C48DF1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		00F25C642DDA2E2600635841 /* Build configuration list for PBXNativeTarget "Pr0grammRedirector" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				00F25C652DDA2E2600635841 /* Debug */,
+				00F25C662DDA2E2600635841 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
