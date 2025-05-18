@@ -8,9 +8,9 @@ import os
 /// and displaying a single item referenced by its ID (typically from a link in a comment).
 struct LinkedItemPreviewView: View {
     let itemID: Int // The ID of the item to fetch and display
-    // --- MODIFIED: targetCommentID hinzugefügt ---
-    let targetCommentID: Int? // Optional: Die ID des Kommentars, zu dem gescrollt werden soll
-    // --- END MODIFICATION ---
+    // --- NEW: Add targetCommentID ---
+    let targetCommentID: Int? // Optional comment ID to scroll to
+    // --- END NEW ---
 
     // MARK: - Environment & State
     @EnvironmentObject var settings: AppSettings
@@ -21,28 +21,26 @@ struct LinkedItemPreviewView: View {
     @State private var isLoading = false
     @State private var errorMessage: String? = nil
 
-    // ADD PlayerManager StateObject for the preview
     @StateObject private var playerManager = VideoPlayerManager()
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "LinkedItemPreviewView")
-    
-    // --- MODIFIED: Initializer aktualisiert ---
+
+    // --- NEW: Initializer to accept targetCommentID ---
     init(itemID: Int, targetCommentID: Int? = nil) {
         self.itemID = itemID
         self.targetCommentID = targetCommentID
-        LinkedItemPreviewView.logger.info("LinkedItemPreviewView init with itemID: \(itemID), targetCommentID: \(targetCommentID ?? -1)")
+        LinkedItemPreviewView.logger.debug("LinkedItemPreviewView init. itemID: \(itemID), targetCommentID: \(targetCommentID ?? -1)")
     }
-    // --- END MODIFICATION ---
+    // --- END NEW ---
 
     // MARK: - Body
     var body: some View {
         Group {
             if isLoading {
                 ProgressView("Lade Vorschau für \(itemID)...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the progress view
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = errorMessage {
-                // Display error state with retry option
                 VStack {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.largeTitle)
@@ -56,38 +54,33 @@ struct LinkedItemPreviewView: View {
                         .multilineTextAlignment(.center)
                         .padding()
                     Button("Erneut versuchen") {
-                        Task { await loadItem() } // Retry loading on button tap
+                        Task { await loadItem() }
                     }
                     .buttonStyle(.bordered)
                     .padding(.top)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity) // Center the error view
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let item = fetchedItem {
-                // --- MODIFIED: targetCommentID an PagedDetailViewWrapperForItem übergeben ---
+                // --- MODIFIED: Pass targetCommentID to PagedDetailViewWrapperForItem ---
                 PagedDetailViewWrapperForItem(
                     item: item,
                     playerManager: playerManager,
-                    targetCommentID: self.targetCommentID // Hier wird es übergeben
+                    targetCommentID: self.targetCommentID // Pass it here
                 )
                 // --- END MODIFICATION ---
-                // Environment objects (settings, authService) are passed down automatically
             } else {
-                // Fallback if not loading, no error, but no item (initial state or unexpected issue)
                  Text("Vorschau wird vorbereitet...")
                      .foregroundColor(.secondary)
                      .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task { // Use .task for automatic loading AND manager configuration
-             // Configure the local player manager when the task starts
+        .task {
              playerManager.configure(settings: settings)
-             // Load the item data
              await loadItem()
          }
     }
 
     // MARK: - Data Loading
-    /// Fetches the item data from the API using the provided `itemID`.
     private func loadItem() async {
         if fetchedItem != nil || isLoading {
             LinkedItemPreviewView.logger.trace("loadItem skipped: Already loaded (\(fetchedItem != nil)) or already loading (\(isLoading)).")
@@ -101,23 +94,16 @@ struct LinkedItemPreviewView: View {
         LinkedItemPreviewView.logger.info("Fetching preview item with ID: \(itemID)")
 
         do {
-            // --- MODIFIED: Flags für Detailansicht (z.B. alle) ---
-            // Normalerweise möchte man hier alle Flags (31) verwenden, um sicherzustellen, dass das Item geladen wird,
-            // unabhängig von den globalen Filtern des Nutzers, da es direkt verlinkt wurde.
-            let flagsToFetchWith = 31 // SFW, NSFW, NSFL, NSFP, POL
-            // --- END MODIFICATION ---
-            let item = try await apiService.fetchItem(id: itemID, flags: flagsToFetchWith)
+            let currentFlags = settings.apiFlags
+            let item = try await apiService.fetchItem(id: itemID, flags: currentFlags)
 
             await MainActor.run {
                 if let fetched = item {
                     self.fetchedItem = fetched
                     LinkedItemPreviewView.logger.info("Successfully fetched preview item \(itemID)")
                 } else {
-                    // --- MODIFIED: Fehlerbehandlung, wenn Item nicht gefunden/Filter nicht passen ---
-                    // Selbst mit allen Flags könnte ein Item nicht existieren (gelöscht etc.)
-                    self.errorMessage = "Post konnte nicht gefunden werden."
-                    LinkedItemPreviewView.logger.warning("Could not fetch preview item \(itemID). API returned nil even with all flags.")
-                    // --- END MODIFICATION ---
+                    self.errorMessage = "Post konnte nicht gefunden werden oder entspricht nicht deinen Filtern."
+                    LinkedItemPreviewView.logger.warning("Could not fetch preview item \(itemID). API returned nil or filter mismatch.")
                 }
                 isLoading = false
             }
@@ -141,16 +127,19 @@ struct LinkedItemPreviewView: View {
 // MARK: - Previews
 
 #Preview("Loading") {
-    // Directly instantiate LinkedItemPreviewView and provide environment objects
-    LinkedItemPreviewView(itemID: 12345, targetCommentID: 67890) // Mit targetCommentID für Test
+    // --- MODIFIED: Preview initialisiert mit targetCommentID ---
+    LinkedItemPreviewView(itemID: 12345, targetCommentID: 67890) // Beispielhafte commentID
         .environmentObject(AppSettings())
         .environmentObject(AuthService(appSettings: AppSettings()))
+    // --- END MODIFICATION ---
 }
 
 #Preview("Error") {
     let settings = AppSettings()
     let auth = AuthService(appSettings: settings)
-    LinkedItemPreviewView(itemID: 999)
+    // --- MODIFIED: Preview initialisiert mit targetCommentID (auch wenn Fehler) ---
+    LinkedItemPreviewView(itemID: 999, targetCommentID: nil)
+    // --- END MODIFICATION ---
         .environmentObject(settings)
         .environmentObject(auth)
 }

@@ -5,6 +5,23 @@ import SwiftUI
 import os
 import Kingfisher
 
+struct ItemNavigationValue: Hashable, Identifiable {
+    let item: Item
+    let targetCommentID: Int?
+    var id: Int { item.id }
+}
+
+struct ConversationNavigationValue: Hashable, Identifiable {
+    let conversationPartnerName: String
+    var id: String { conversationPartnerName }
+}
+
+struct ProfileNavigationValue: Hashable, Identifiable {
+    let username: String
+    var id: String { username }
+}
+
+
 enum InboxViewMessageType: Int, CaseIterable, Identifiable {
     case comments = 1
     case notifications = 2
@@ -39,15 +56,11 @@ struct InboxView: View {
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
-    // --- MODIFIED: targetCommentIDForNavigation hier auch deklarieren ---
     @State private var targetCommentIDForNavigation: Int? = nil
-    // --- END MODIFICATION ---
     @State private var isLoadingNavigationTarget: Bool = false
     @State private var navigationTargetId: Int? = nil
 
-    // --- MODIFIED: previewLinkTargetFromMessage kann jetzt targetCommentID enthalten ---
     @State private var previewLinkTargetFromMessage: PreviewLinkTarget? = nil
-    // --- END MODIFICATION ---
 
     @StateObject private var playerManager = VideoPlayerManager()
 
@@ -60,24 +73,9 @@ struct InboxView: View {
 
     private let apiService = APIService()
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "InboxView")
-
-    struct ItemNavigationValue: Hashable, Identifiable {
-        let item: Item
-        let targetCommentID: Int?
-        var id: Int { item.id }
-    }
-    @State private var itemNavigationValue: ItemNavigationValue? = nil
     
-    struct ConversationNavigationValue: Hashable, Identifiable {
-        let conversationPartnerName: String
-        var id: String { conversationPartnerName }
-    }
+    @State private var itemNavigationValue: ItemNavigationValue? = nil
     @State private var conversationNavigationValue: ConversationNavigationValue? = nil
-
-    struct ProfileNavigationValue: Hashable, Identifiable {
-        let username: String
-        var id: String { username }
-    }
     @State private var profileNavigationValue: ProfileNavigationValue? = nil
 
 
@@ -123,7 +121,6 @@ struct InboxView: View {
                     itemNavigationValue = nil
                     conversationNavigationValue = nil
                     profileNavigationValue = nil
-                    targetCommentIDForNavigation = nil // Beim Tab-Wechsel zurücksetzen
                     
                     messages = []
                     conversations = []
@@ -146,14 +143,13 @@ struct InboxView: View {
                      conversations = []
                      errorMessage = "Bitte anmelden."
                      conversationsError = nil
-                     targetCommentIDForNavigation = nil // Auch hier zurücksetzen
                  }
             }
             .navigationDestination(item: $itemNavigationValue) { navValue in
                  PagedDetailViewWrapperForItem(
                      item: navValue.item,
                      playerManager: playerManager,
-                     targetCommentID: navValue.targetCommentID // targetCommentID übergeben
+                     targetCommentID: navValue.targetCommentID
                  )
                  .environmentObject(settings)
                  .environmentObject(authService)
@@ -171,19 +167,19 @@ struct InboxView: View {
             }
             .sheet(item: $previewLinkTargetFromMessage) { target in
                 NavigationStack {
-                    LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.targetCommentID)
-                        .environmentObject(settings)
-                        .environmentObject(authService)
+                    LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
+                        .navigationTitle("Vorschau")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Fertig") {
+                                    previewLinkTargetFromMessage = nil
+                                }
+                            }
+                        }
                 }
-                .navigationTitle("Vorschau: Post \(target.itemID)")
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-                #endif
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Fertig") { previewLinkTargetFromMessage = nil }
-                    }
-                }
+                .environmentObject(settings)
+                .environmentObject(authService)
             }
             .overlay {
                 if isLoadingNavigationTarget {
@@ -206,7 +202,6 @@ struct InboxView: View {
         conversationsError = nil
         isLoadingNavigationTarget = false
         navigationTargetId = nil
-        targetCommentIDForNavigation = nil // Fehler löschen setzt auch das Ziel zurück
     }
 
 
@@ -264,9 +259,7 @@ struct InboxView: View {
                                     InboxView.logger.debug("Notification message tapped on System tab, no navigation action.")
                                     return
                                 }
-                                // --- MODIFIED: targetCommentID wird hier direkt aus der message ID genommen, wenn Typ "comment" ---
-                                Task { await handleMessageTap(message, targetCommentID: (message.type == "comment" ? message.id : nil)) }
-                                // --- END MODIFICATION ---
+                                Task { await handleMessageTap(message) }
                             }
                         .listRowInsets(EdgeInsets(top: 10, leading: 15, bottom: 10, trailing: 15))
                         .id(message.id)
@@ -292,37 +285,44 @@ struct InboxView: View {
             }
         }
         .environment(\.openURL, OpenURLAction { url in
-            // --- MODIFIED: parsePr0grammLink verwenden und targetCommentID setzen ---
-            if let parsedLink = parsePr0grammLink(url: url) {
-                InboxView.logger.info("Pr0gramm link tapped in inbox message, attempting to preview item ID: \(parsedLink.itemID), commentID: \(parsedLink.commentID ?? -1)")
-                self.previewLinkTargetFromMessage = PreviewLinkTarget(itemID: parsedLink.itemID, targetCommentID: parsedLink.commentID)
+            if let (itemID, commentID) = parsePr0grammLink(url: url) {
+                InboxView.logger.info("Pr0gramm link tapped in inbox message, attempting to preview item ID: \(itemID), commentID: \(commentID ?? -1)")
+                self.previewLinkTargetFromMessage = PreviewLinkTarget(itemID: itemID, commentID: commentID)
                 return .handled
             } else {
                 InboxView.logger.info("Non-pr0gramm link tapped in inbox: \(url). Opening in system browser.")
                 return .systemAction
             }
-            // --- END MODIFICATION ---
         })
     }
     
-    // --- MODIFIED: parsePr0grammLink gibt jetzt ein Tupel zurück ---
+
     private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
-        var itemID: Int?
-        var commentID: Int?
 
-        let pathComponents = url.pathComponents
-        for component in pathComponents {
-            let potentialItemIDString = component.split(separator: ":").first.map(String.init)
-            if let idString = potentialItemIDString, let id = Int(idString) {
-                itemID = id
-                if let range = component.range(of: ":comment") {
-                    let commentIdString = component[range.upperBound...]
-                    if let cID = Int(commentIdString) {
-                        commentID = cID
-                    }
+        let path = url.path
+        let components = path.components(separatedBy: "/")
+        var itemID: Int? = nil
+        var commentID: Int? = nil
+
+        if let lastPathComponent = components.last {
+            if lastPathComponent.contains(":comment") {
+                let parts = lastPathComponent.split(separator: ":")
+                if parts.count == 2, let idPart = Int(parts[0]), parts[1].starts(with: "comment"), let cID = Int(parts[1].dropFirst("comment".count)) {
+                    itemID = idPart
+                    commentID = cID
                 }
-                break
+            } else {
+                var potentialItemIDIndex: Int? = nil
+                if let idx = components.lastIndex(where: { $0 == "new" || $0 == "top" }), idx + 1 < components.count {
+                    potentialItemIDIndex = idx + 1
+                } else if components.count > 1 && Int(components.last!) != nil {
+                    potentialItemIDIndex = components.count - 1
+                }
+                
+                if let idx = potentialItemIDIndex, let id = Int(components[idx]) {
+                    itemID = id
+                }
             }
         }
         
@@ -334,41 +334,29 @@ struct InboxView: View {
                 }
             }
         }
-
-        guard let finalItemID = itemID else {
-            InboxView.logger.warning("Could not parse item ID from pr0gramm link: \(url.absoluteString)")
-            return nil
-        }
-
-        if commentID == nil, let fragment = url.fragment, fragment.lowercased().hasPrefix("comment") {
-            if let cID = Int(fragment.dropFirst("comment".count)) {
-                commentID = cID
-            }
-        }
         
-        InboxView.logger.debug("Parsed link \(url.absoluteString): itemID=\(finalItemID), commentID=\(commentID ?? -1)")
-        return (finalItemID, commentID)
+        if let itemID = itemID {
+            return (itemID, commentID)
+        }
+
+        InboxView.logger.warning("Could not parse item or comment ID from pr0gramm link: \(url.absoluteString)")
+        return nil
     }
-    // --- END MODIFICATION ---
 
     @MainActor
-    // --- MODIFIED: handleMessageTap nimmt jetzt targetCommentID als Parameter ---
-    private func handleMessageTap(_ message: InboxMessage, targetCommentID: Int?) async {
-    // --- END MODIFICATION ---
+    private func handleMessageTap(_ message: InboxMessage) async {
         guard !isLoadingNavigationTarget else {
             InboxView.logger.debug("handleMessageTap skipped for \(message.id): Already loading target.")
             return
         }
         clearErrors()
-        InboxView.logger.info("Handling tap for message ID: \(message.id), Type: \(message.type ?? "nil"), TargetCommentID from tap: \(targetCommentID ?? -1)")
+        InboxView.logger.info("Handling tap for message ID: \(message.id), Type: \(message.type ?? "nil")")
 
         switch message.type {
         case "comment":
             if let itemId = message.itemId {
-                // --- MODIFIED: targetCommentID hier übergeben ---
-                InboxView.logger.info("Message type is 'comment', preparing navigation for item \(itemId), target comment ID: \(targetCommentID ?? -1)")
-                await prepareAndNavigateToItem(itemId, targetCommentID: targetCommentID)
-                // --- END MODIFICATION ---
+                InboxView.logger.info("Message type is 'comment', preparing navigation for item \(itemId), target comment ID: \(message.id)")
+                await prepareAndNavigateToItem(itemId, targetCommentID: message.id)
             } else { InboxView.logger.warning("Comment message type tapped, but itemId is nil.") }
         case "follow":
              if let senderName = message.name, !senderName.isEmpty {
@@ -395,42 +383,36 @@ struct InboxView: View {
         self.isLoadingNavigationTarget = true
         self.navigationTargetId = id
         self.errorMessage = nil
-        self.targetCommentIDForNavigation = targetCommentID // Speichere die ID für die Navigation
+        self.targetCommentIDForNavigation = targetCommentID
 
         do {
-            // --- MODIFIED: Flags für Detailansicht (z.B. alle) ---
-            let flagsToFetchWith = 31 // SFW, NSFW, NSFL, NSFP, POL
-            // --- END MODIFICATION ---
+            let flagsToFetchWith = 31
             InboxView.logger.debug("Fetching item \(id) for navigation using flags: \(flagsToFetchWith)")
             let fetchedItem = try await apiService.fetchItem(id: id, flags: flagsToFetchWith)
 
-            guard self.navigationTargetId == id else { // Stelle sicher, dass das Ziel sich nicht geändert hat
+            guard self.navigationTargetId == id else {
                  InboxView.logger.info("Navigation target changed while item \(id) was loading (current target: \(String(describing: self.navigationTargetId))). Discarding result.")
                  self.isLoadingNavigationTarget = false; self.navigationTargetId = nil; self.targetCommentIDForNavigation = nil; return
             }
             if let item = fetchedItem {
                  InboxView.logger.info("Successfully fetched item \(id) for navigation.")
-                 // --- MODIFIED: targetCommentIDForNavigation beim Setzen des Navigationswerts übergeben ---
                  self.itemNavigationValue = ItemNavigationValue(item: item, targetCommentID: self.targetCommentIDForNavigation)
-                 // --- END MODIFICATION ---
             } else {
-                 // --- MODIFIED: Fehlermeldung angepasst ---
                  InboxView.logger.warning("Could not fetch item \(id) for navigation (API returned nil or filter mismatch).")
-                 self.errorMessage = "Post \(id) konnte nicht geladen werden oder existiert nicht."
-                 self.targetCommentIDForNavigation = nil // Ziel zurücksetzen, wenn Item nicht geladen werden konnte
-                 // --- END MODIFICATION ---
+                 self.errorMessage = "Post \(id) konnte nicht geladen werden oder entspricht nicht den Filtern."
+                 self.targetCommentIDForNavigation = nil
             }
         } catch is CancellationError {
              InboxView.logger.info("Item fetch for navigation cancelled (ID: \(id)).")
              self.targetCommentIDForNavigation = nil
         } catch {
             InboxView.logger.error("Failed to fetch item \(id) for navigation: \(error.localizedDescription)")
-            if self.navigationTargetId == id { // Nur Fehlermeldung setzen, wenn es noch das aktuelle Ziel ist
+            if self.navigationTargetId == id {
                 self.errorMessage = "Post \(id) konnte nicht geladen werden: \(error.localizedDescription)"
             }
             self.targetCommentIDForNavigation = nil
         }
-        if self.navigationTargetId == id { // Nur zurücksetzen, wenn es noch das aktuelle Ziel ist
+        if self.navigationTargetId == id {
              self.isLoadingNavigationTarget = false
              self.navigationTargetId = nil
         }
@@ -442,11 +424,12 @@ struct InboxView: View {
               InboxView.logger.info("refreshMessages called, but privateMessages selected. Skipping general refresh.")
               return
           }
+
           InboxView.logger.info("Refreshing general inbox messages (/inbox/all) for selected type: \(selectedMessageType.displayName)...")
 
           guard authService.isLoggedIn else {
               InboxView.logger.warning("Cannot refresh general inbox: User not logged in.")
-              self.messages = []; self.errorMessage = "Bitte anmelden."; self.canLoadMore = true; self.targetCommentIDForNavigation = nil
+              self.messages = []; self.errorMessage = "Bitte anmelden."; self.canLoadMore = true
               return
           }
 
@@ -480,6 +463,7 @@ struct InboxView: View {
             InboxView.logger.info("loadMoreMessages called, but privateMessages selected. Skipping general load more.")
             return
         }
+
         guard authService.isLoggedIn else { return }
         guard !isLoadingMore && canLoadMore && !isLoading else { return }
         guard let oldestMessageTimestamp = messages.last?.created else {
@@ -699,6 +683,163 @@ struct InboxMessageRow: View {
     }
 }
 
+// --- MODIFIED: ConversationMessageRow hier global definiert ---
+// (Normalerweise wäre dies in einer eigenen Datei oder in ConversationDetailView.swift,
+// aber um den Fehler schnell zu beheben, füge ich es hier ein.
+// Es ist besser, Code-Strukturen in eigenen Dateien zu organisieren.)
+struct ConversationMessageRow: View {
+    let message: PrivateMessage
+    let isSentByCurrentUser: Bool
+    let currentUserMark: Int
+    let partnerMark: Int
+    let partnerName: String
+
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ConversationMessageRowGlobal")
+    @EnvironmentObject var authService: AuthService
+
+    private var backgroundColor: Color {
+        isSentByCurrentUser ? Color.accentColor : Color(uiColor: .systemGray5)
+    }
+
+    private var textColorForBubble: Color {
+        isSentByCurrentUser ? .white : .primary
+    }
+    
+    private var senderDisplayName: String {
+        return message.name
+    }
+    private var senderMarkValue: Int {
+        return message.mark
+    }
+    
+    private func getInitials(from name: String) -> String {
+        let parts = name.uppercased().components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        var initials = ""
+        if let first = parts.first?.first {
+            initials.append(first)
+        }
+        if parts.count > 1, let second = parts.last?.first {
+            initials.append(second)
+        } else if initials.count == 1 && (parts.first?.count ?? 0) > 1, let secondChar = parts.first?.dropFirst().first {
+             initials.append(secondChar)
+        }
+        if initials.count > 2 {
+            initials = String(initials.prefix(2))
+        }
+        if initials.count == 1 && (parts.first?.count ?? 0) == 1 {
+        }
+        return initials.isEmpty ? "?" : initials
+    }
+
+    private func isColorLight(_ color: Color) -> Bool {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a) else {
+            return false
+        }
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        return luminance > 0.6
+    }
+
+    @ViewBuilder
+    private var avatarView: some View {
+        let nameForAvatar = isSentByCurrentUser ? (authService.currentUser?.name ?? "Ich") : partnerName
+        let initials = getInitials(from: nameForAvatar)
+        let avatarBackgroundColor = Mark(rawValue: senderMarkValue).displayColor
+        let initialsColor: Color = isColorLight(avatarBackgroundColor) ? .black : .white
+        
+        ZStack {
+            Circle()
+                .fill(avatarBackgroundColor)
+                .frame(width: 36, height: 36)
+                .overlay(Circle().stroke(Color.secondary.opacity(0.4), lineWidth: 0.5))
+            Text(initials)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(initialsColor)
+        }
+    }
+
+    private var attributedMessageContent: AttributedString {
+        var attributedString = AttributedString(message.message ?? "")
+        let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont)
+        attributedString.font = baseUIFont
+        attributedString.foregroundColor = textColorForBubble
+
+        do {
+            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+            let matches = detector.matches(in: message.message ?? "", options: [], range: NSRange(location: 0, length: (message.message ?? "").utf16.count))
+            for match in matches {
+                guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
+                attributedString[range].link = url
+                attributedString[range].foregroundColor = isSentByCurrentUser ? .white.opacity(0.85) : Color.accentColor
+                attributedString[range].underlineStyle = .single
+                attributedString[range].font = baseUIFont
+            }
+        } catch {
+            Self.logger.error("Error creating NSDataDetector in ConversationMessageRow: \(error.localizedDescription)")
+        }
+        return attributedString
+    }
+
+    private func formattedTimestamp(for created: Int) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(created))
+        let calendar = Calendar.current
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "HH:mm"
+        let timeString = timeFormatter.string(from: date)
+
+        if calendar.isDateInToday(date) {
+            return timeString
+        } else if calendar.isDateInYesterday(date) {
+            return "Gestern, \(timeString)"
+        } else {
+            let dateFormatter = DateFormatter()
+            if calendar.isDate(date, equalTo: Date(), toGranularity: .year) {
+                dateFormatter.dateFormat = "d. MMMM"
+            } else {
+                dateFormatter.dateFormat = "dd.MM.yy"
+            }
+            let dateString = dateFormatter.string(from: date)
+            return "\(dateString), \(timeString)"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            if !isSentByCurrentUser {
+                avatarView
+                    .padding(.trailing, 6)
+            } else {
+                Spacer(minLength: 36 + 6)
+            }
+
+            VStack(alignment: isSentByCurrentUser ? .trailing : .leading, spacing: 2) {
+                Text(attributedMessageContent)
+                    .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                    .background(backgroundColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .frame(minWidth: 40)
+
+                HStack(spacing: 4) {
+                    Text(formattedTimestamp(for: message.created))
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+                .padding(.horizontal, 0)
+                .padding(.top, 2)
+            }
+            
+            if isSentByCurrentUser {
+                 Spacer().frame(width: 36 + 6, height: 0)
+            } else {
+                Spacer(minLength: 36 + 6)
+            }
+        }
+    }
+}
+// --- END MODIFICATION ---
+
+
 #Preview {
     InboxPreviewWrapper()
 }
@@ -722,7 +863,7 @@ private struct InboxPreviewWrapper: View {
             InboxConversation(name: "UserBeta", mark: 10, lastMessage: Int(Date().timeIntervalSince1970 - 36000), unreadCount: 0, blocked: 0, canReceiveMessages: 1)
         ]
         
-        let msg1 = InboxMessage(id: 1, type: "comment", itemId: 123, thumb: "thumb1.jpg", flags: 1, name: "UserA", mark: 2, senderId: 101, score: 5, created: Int(Date().timeIntervalSince1970 - 600), message: "Das ist ein Kommentar https://pr0gramm.com/new/543210:comment7890 zur Benachrichtigung.", read: 0, blocked: 0, sent: 0)
+        let msg1 = InboxMessage(id: 1, type: "comment", itemId: 123, thumb: "thumb1.jpg", flags: 1, name: "UserA", mark: 2, senderId: 101, score: 5, created: Int(Date().timeIntervalSince1970 - 600), message: "Das ist ein Kommentar http://pr0gramm.com/new/543210:comment123 zur Benachrichtigung.", read: 0, blocked: 0, sent: 0)
         let msg2 = InboxMessage(id: 2, type: "notification", itemId: nil, thumb: nil, flags: nil, name: nil, mark: nil, senderId: 0, score: 0, created: Int(Date().timeIntervalSince1970 - 3600), message: "Systemnachricht: Dein pr0mium läuft bald ab!", read: 1, blocked: 0, sent: nil)
         let msg3 = InboxMessage(id: 3, type: "follow", itemId: nil, thumb: nil, flags: nil, name: "FollowerUser", mark: 1, senderId: 102, score: 0, created: Int(Date().timeIntervalSince1970 - 7200), message: nil, read: 0, blocked: 0, sent: nil)
 

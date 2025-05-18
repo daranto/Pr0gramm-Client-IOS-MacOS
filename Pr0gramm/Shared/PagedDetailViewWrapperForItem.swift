@@ -10,12 +10,12 @@ import os
 struct PagedDetailViewWrapperForItem: View {
     @State var items: [Item] // State variable holding the array with the single item.
     @ObservedObject var playerManager: VideoPlayerManager // Pass down the player manager.
-    // --- MODIFIED: Add targetCommentID ---
+    // --- NEW: Add targetCommentID ---
     let targetCommentID: Int?
-    // --- END MODIFICATION ---
+    // --- END NEW ---
 
     /// Initializes the wrapper with the single item and the player manager.
-    // --- MODIFIED: Update initializer to accept targetCommentID ---
+    // --- MODIFIED: Update initializer ---
     init(item: Item, playerManager: VideoPlayerManager, targetCommentID: Int? = nil) {
         self._items = State(initialValue: [item]) // Initialize @State array
         self.playerManager = playerManager
@@ -39,9 +39,9 @@ struct PagedDetailViewWrapperForItem: View {
             selectedIndex: 0, // Always index 0 for the single item
             playerManager: playerManager,
             loadMoreAction: dummyLoadMore, // Pass the dummy action
-            // --- MODIFIED: Pass targetCommentID to PagedDetailView ---
+            // --- NEW: Pass targetCommentID ---
             initialTargetCommentID: targetCommentID
-            // --- END MODIFICATION ---
+            // --- END NEW ---
         )
         // Environment objects like settings and authService should be passed
         // by the parent view where this wrapper is used.

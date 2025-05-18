@@ -6,15 +6,17 @@ import os
 import AVKit
 import Kingfisher
 
+// --- MODIFIED: PreviewLinkTarget erweitert ---
 struct PreviewLinkTarget: Identifiable, Equatable {
     let itemID: Int
-    let targetCommentID: Int?
-    var id: Int { itemID }
-    
+    let commentID: Int? // Optional comment ID
+    var id: Int { itemID } // ID remains itemID for sheet uniqueness based on item
+
     static func == (lhs: PreviewLinkTarget, rhs: PreviewLinkTarget) -> Bool {
-        return lhs.itemID == rhs.itemID && lhs.targetCommentID == rhs.targetCommentID
+        return lhs.itemID == rhs.itemID && lhs.commentID == rhs.commentID
     }
 }
+// --- END MODIFICATION ---
 
 struct FullscreenImageTarget: Identifiable, Equatable {
     let item: Item; var id: Int { item.id }
@@ -222,10 +224,12 @@ struct PagedDetailView: View {
     var body: some View {
         tabViewContent
         .background(KeyCommandView(handler: keyboardActionHandler))
+        // --- MODIFIED: Updated sheet call for LinkedItemPreviewWrapperView ---
         .sheet(item: $previewLinkTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
-             LinkedItemPreviewWrapperView(itemID: targetWrapper.itemID, targetCommentID: targetWrapper.targetCommentID)
+             LinkedItemPreviewWrapperView(itemID: targetWrapper.itemID, targetCommentID: targetWrapper.commentID) // Pass commentID
                  .environmentObject(settings).environmentObject(authService)
         }
+        // --- END MODIFICATION ---
         .sheet(item: $userProfileSheetTarget, onDismiss: resumePlayerIfNeeded) { target in
             UserProfileSheetView(username: target.username)
                 .environmentObject(authService)
@@ -1044,30 +1048,36 @@ struct PagedDetailView: View {
 }
 
 @MainActor
+// --- MODIFIED: LinkedItemPreviewWrapperView angepasst ---
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
-    let targetCommentID: Int?
+    let targetCommentID: Int? // Hinzugefügt
+
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
     @Environment(\.dismiss) var dismiss
 
+    init(itemID: Int, targetCommentID: Int? = nil) { // Initializer angepasst
+        self.itemID = itemID
+        self.targetCommentID = targetCommentID
+        PagedDetailView.logger.debug("LinkedItemPreviewWrapperView init. itemID: \(itemID), targetCommentID: \(targetCommentID ?? -1)")
+    }
+
     var body: some View {
         NavigationStack {
+            // Übergebe targetCommentID an LinkedItemPreviewView
             LinkedItemPreviewView(itemID: itemID, targetCommentID: targetCommentID)
-                .environmentObject(settings)
-                .environmentObject(authService)
-        }
-        .navigationTitle("Vorschau: Post \(itemID)")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Fertig") { dismiss() }
-            }
+                .environmentObject(settings).environmentObject(authService)
+                .navigationTitle("Vorschau")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } } }
         }
     }
 }
+// --- END MODIFICATION ---
+
 
 #Preview {
     struct PreviewWrapper: View {

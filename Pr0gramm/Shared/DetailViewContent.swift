@@ -656,8 +656,19 @@ struct DetailViewContent: View {
             Button("Medium teilen/speichern") {
                 Task { await prepareAndShareMedia() }
             }
-            Button("Post-Link (pr0gramm.com)") { let urlString = "https://pr0gramm.com/new/\(item.id)"; UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)") }
-            Button("Direkter Medien-Link") { if let urlString = item.imageUrl?.absoluteString { UIPasteboard.general.string = urlString; DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)") } else { DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)") } }
+            Button("Post-Link (pr0gramm.com)") {
+                let urlString = "https://pr0gramm.com/new/\(item.id)"
+                UIPasteboard.general.string = urlString
+                DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)")
+            }
+            Button("Direkter Medien-Link") {
+                if let urlString = item.imageUrl?.absoluteString {
+                    UIPasteboard.general.string = urlString
+                    DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)")
+                } else {
+                    DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)")
+                }
+            }
         } message: { Text("Wähle eine Aktion:") }
         .sheet(item: $itemToShare, onDismiss: {
             if let tempUrl = itemToShare?.temporaryFileUrlToDelete {
@@ -677,19 +688,15 @@ struct DetailViewContent: View {
         .sheet(isPresented: $showingAddTagSheet) {
             addTagSheetContent()
         }
-        // --- MODIFIED: .sheet(item: $tagForSheetSearch) ---
         .sheet(item: $tagForSheetSearch, onDismiss: resumePlayerIfNeeded) { tappedTagString in
              TagSearchViewWrapper(initialTag: tappedTagString, onNewTagSelected: { newTagFromSheet in
                  DetailViewContent.logger.info("Received new tag '\(newTagFromSheet)' from TagSearchViewWrapper. Updating tagForSheetSearch.")
-                 // --- ADDED: Pause player before updating tag for sheet ---
                  pausePlayerForSheet()
-                 // --- END ADDED ---
                  self.tagForSheetSearch = newTagFromSheet
              })
              .environmentObject(settings)
              .environmentObject(authService)
          }
-         // --- END MODIFICATION ---
     }
     
     struct TagSearchViewWrapper: View {
