@@ -8,11 +8,10 @@ import Kingfisher
 import CloudKit // Needed for NSUbiquitousKeyValueStore
 import SwiftUI // Needed for ColorScheme, Color
 
-// --- MODIFIED: FeedType Enum erweitert ---
 enum FeedType: Int, CaseIterable, Identifiable {
     case new = 0
     case promoted = 1
-    case junk = 2 // Neuer Typ für Müll
+    case junk = 2
 
     var id: Int { self.rawValue }
 
@@ -20,11 +19,10 @@ enum FeedType: Int, CaseIterable, Identifiable {
         switch self {
         case .new: return "Neu"
         case .promoted: return "Beliebt"
-        case .junk: return "Müll" // Anzeigename für Müll
+        case .junk: return "Müll"
         }
     }
 }
-// --- END MODIFICATION ---
 
 enum CommentSortOrder: Int, CaseIterable, Identifiable {
     case date = 0, score = 1
@@ -303,7 +301,6 @@ class AppSettings: ObservableObject {
     }
 
     // MARK: - Computed Properties for API Usage
-    // --- MODIFIED: apiFlags Logik korrigiert ---
     var apiFlags: Int {
         get {
             let loggedIn = self.isUserLoggedInForApiFlags
@@ -329,33 +326,24 @@ class AppSettings: ObservableObject {
                 if showNSFL {
                     flags |= 4 // NSFL
                 }
-                // showNSFP wird hier nicht mehr separat geprüft, da es an showSFW gekoppelt ist.
-                // Wenn SFW aus ist, ist showNSFP (intern) auch aus.
-                // Wenn SFW an ist, ist Flag 8 (NSFP) bereits in `flags` durch `flags |= 8` enthalten.
 
                 if showPOL {
                     flags |= 16 // POL
                 }
 
-                // Wenn keine der spezifischen Kategorien (SFW, NSFW, NSFL) aktiv ist,
+                // --- KORRIGIERTE LOGIK ---
+                // Wenn keine der Filter (SFW, NSFW, NSFL, POL) aktiv ist,
                 // dann als Default reines SFW (Flag 1) verwenden.
-                // Dies stellt sicher, dass immer mindestens ein Flag gesetzt ist, wenn POL allein aktiv wäre.
-                if flags == 0 || (flags == 16 && !showSFW && !showNSFW && !showNSFL) { // POL allein aktiv oder alles aus
-                    return 1 | (showPOL ? 16 : 0) // SFW + ggf. POL
+                // Ansonsten die exakte Kombination der ausgewählten Flags.
+                if flags == 0 {
+                    return 1 // Default auf SFW, wenn gar nichts ausgewählt ist
                 }
+                // --- ENDE KORRIGIERTE LOGIK ---
                 
-                // Wenn nur SFW aktiv ist (und damit NSFP), aber showSFW UI-seitig false ist,
-                // aber showNSFP noch true (aus altem Zustand), dann könnte hier ein Konflikt entstehen.
-                // Da der NSFP-Toggle für eingeloggte User aber entfernt wird, sollte dieser Fall
-                // nicht mehr durch die UI herbeigeführt werden.
-                // Die `onChange` Logik für `showSFW` in FilterView stellt sicher, dass `showNSFP`
-                // konsistent mit `showSFW` bleibt.
-
                 return flags
             }
         }
     }
-    // --- END MODIFICATION ---
 
 
     var apiPromoted: Int? {
@@ -375,11 +363,8 @@ class AppSettings: ObservableObject {
     var hasActiveContentFilter: Bool {
         if feedType == .junk { return true }
         if isUserLoggedInForApiFlags {
-            // Wenn irgendein Filter aktiv ist (SFW, NSFW, NSFL, POL)
-            // Beachte: Wenn SFW aktiv ist, ist NSFP implizit mit drin.
             return showSFW || showNSFW || showNSFL || showPOL
         } else {
-            // Ausgeloggt wird immer SFW (Flag 1) angezeigt, also ist ein Filter aktiv.
             return true
         }
     }
@@ -473,8 +458,6 @@ class AppSettings: ObservableObject {
             self.showSFW = true
             self.showNSFW = false
             self.showNSFL = false
-            // NSFP wird nicht mehr explizit gesetzt, da es von SFW abhängt, wenn eingeloggt.
-            // Die apiFlags Logik handhabt dies.
             self.showPOL = false
         } else {
             AppSettings.logger.info("Filter reset on app open is disabled.")
