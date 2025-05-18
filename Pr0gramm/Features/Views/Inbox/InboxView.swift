@@ -166,9 +166,20 @@ struct InboxView: View {
                     .environmentObject(playerManager)
             }
             .sheet(item: $previewLinkTargetFromMessage) { target in
-                LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
-                    .environmentObject(settings)
-                    .environmentObject(authService)
+                NavigationStack {
+                    LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
+                        .navigationTitle("Vorschau")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Fertig") {
+                                    previewLinkTargetFromMessage = nil
+                                }
+                            }
+                        }
+                }
+                .environmentObject(settings)
+                .environmentObject(authService)
             }
             .overlay {
                 if isLoadingNavigationTarget {
