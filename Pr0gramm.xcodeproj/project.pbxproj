@@ -15,7 +15,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		00A544432DD9DCFF000B4B0C /* Exceptions for "Pr0gramm" folder in "Pr0gramm" target */ = {
+		0089CC4D2DD9E4D2009E773B /* Exceptions for "Pr0gramm" folder in "Pr0gramm" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -28,7 +28,7 @@
 		005113422DB5899600C48DF1 /* Pr0gramm */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				00A544432DD9DCFF000B4B0C /* Exceptions for "Pr0gramm" folder in "Pr0gramm" target */,
+				0089CC4D2DD9E4D2009E773B /* Exceptions for "Pr0gramm" folder in "Pr0gramm" target */,
 			);
 			path = Pr0gramm;
 			sourceTree = "<group>";
