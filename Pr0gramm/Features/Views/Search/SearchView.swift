@@ -48,6 +48,32 @@ struct SearchView: View {
         return Array(repeating: GridItem(.adaptive(minimum: minItemWidth), spacing: 3), count: numberOfColumns)
     }
 
+    private var apiFlagsForSearch: Int {
+        let loggedIn = authService.isLoggedIn
+        if !loggedIn { return 1 } // SFW
+
+        if self.searchFeedType == .junk { return 9 } // SFW + NSFP
+
+        var flags = 0
+        if settings.showSFW { flags |= 1; flags |= 8 } // SFW includes NSFP for logged-in users
+        if settings.showNSFW { flags |= 2 }
+        if settings.showNSFL { flags |= 4 }
+        if settings.showPOL { flags |= 16 }
+        return flags == 0 ? 1 : flags
+    }
+
+    private var apiPromotedForSearch: Int? {
+        switch self.searchFeedType {
+        case .new: return 0
+        case .promoted: return 1
+        case .junk: return nil
+        }
+    }
+
+    private var apiShowJunkForSearch: Bool {
+        return self.searchFeedType == .junk
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             VStack(spacing: 0) {
@@ -75,7 +101,7 @@ struct SearchView: View {
             }
             .task { playerManager.configure(settings: settings) }
             .sheet(isPresented: $showingFilterSheet) {
-                 FilterView(hideFeedOptions: true, showHideSeenItemsToggle: false)
+                 FilterView(relevantFeedTypeForFilterBehavior: self.searchFeedType, hideFeedOptions: true, showHideSeenItemsToggle: false)
                      .environmentObject(settings)
                      .environmentObject(authService)
             }
@@ -123,12 +149,17 @@ struct SearchView: View {
                       Task { await performSearch(isInitialSearch: true) }
                  }
             }
-            .onChange(of: settings.apiFlags) { _, _ in
-                 if !isLoading && !isBenisSliderEditing && (hasSearched || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minBenisScore > 0) {
-                      SearchView.logger.info("Global API flags changed, re-running search.")
-                      Task { await performSearch(isInitialSearch: true) }
-                 }
-            }
+            .onChange(of: settings.showSFW) { _, _ in triggerSearchOnFilterChange() }
+            .onChange(of: settings.showNSFW) { _, _ in triggerSearchOnFilterChange() }
+            .onChange(of: settings.showNSFL) { _, _ in triggerSearchOnFilterChange() }
+            .onChange(of: settings.showPOL) { _, _ in triggerSearchOnFilterChange() }
+        }
+    }
+    
+    private func triggerSearchOnFilterChange() {
+        if !isLoading && !isBenisSliderEditing && (hasSearched || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || minBenisScore > 0) {
+             SearchView.logger.info("Global SFW/NSFW/NSFL/POL filter changed, re-running search.")
+             Task { await performSearch(isInitialSearch: true) }
         }
     }
     
@@ -370,7 +401,7 @@ struct SearchView: View {
         
         if isInitialSearch {
             isLoading = true; errorMessage = nil; items = []; self.hasSearched = true; canLoadMore = true;
-            SearchView.logger.info("Performing INITIAL search: API Tags='\(effectiveSearchQueryForAPITags)', User Text='\(userEnteredSearchText)', FeedType=\(searchFeedType.displayName), Flags=\(settings.apiFlags), MinScore UI=\(currentMinScoreInt)");
+            SearchView.logger.info("Performing INITIAL search: API Tags='\(effectiveSearchQueryForAPITags)', User Text='\(userEnteredSearchText)', FeedType=\(searchFeedType.displayName), Flags=\(apiFlagsForSearch), MinScore UI=\(currentMinScoreInt)");
         } else {
             guard !isLoadingMore && canLoadMore else { SearchView.logger.debug("Load more skipped."); return }
             isLoadingMore = true
@@ -389,8 +420,11 @@ struct SearchView: View {
             }
 
             let apiResponse = try await apiService.fetchItems(
-                flags: settings.apiFlags, promoted: searchFeedType.rawValue, tags: effectiveSearchQueryForAPITags,
-                olderThanId: olderThanIdForAPI, showJunkParameter: searchFeedType == .junk
+                flags: apiFlagsForSearch, // Use calculated flags
+                promoted: apiPromotedForSearch, // Use calculated promoted value
+                tags: effectiveSearchQueryForAPITags,
+                olderThanId: olderThanIdForAPI,
+                showJunkParameter: apiShowJunkForSearch // Use calculated junk value
             )
             
             let currentUserSearchTextAfterFetch = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)

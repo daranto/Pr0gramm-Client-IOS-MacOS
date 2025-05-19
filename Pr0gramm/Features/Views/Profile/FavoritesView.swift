@@ -49,12 +49,27 @@ struct FavoritesView: View {
         let selectedCollection = authService.userCollections.first { $0.id == collectionId }
         guard let keyword = selectedCollection?.keyword else {
             FavoritesView.logger.warning("Could not find keyword for selected favorite collection ID \(collectionId). Using ID in cache key.")
-            return "favorites_\(username)_collectionID_\(collectionId)"
+            return "favorites_\(username)_collectionID_\(collectionId)_flags_\(apiFlagsForFavorites)" // Include flags
         }
-        return "favorites_\(username)_collection_\(keyword.replacingOccurrences(of: " ", with: "_"))"
+        return "favorites_\(username)_collection_\(keyword.replacingOccurrences(of: " ", with: "_"))_flags_\(apiFlagsForFavorites)" // Include flags
     }
 
-    // Helper to get a display name for logging
+    // --- NEW: Computed property for API flags specific to FavoritesView ---
+    private var apiFlagsForFavorites: Int {
+        let loggedIn = authService.isLoggedIn
+        if !loggedIn { return 1 } // SFW only if not logged in (should not happen for favorites)
+
+        // Favorites should not be affected by the global feedType being .junk
+        var flags = 0
+        if settings.showSFW { flags |= 1; flags |= 8 } // SFW includes NSFP for logged-in users
+        if settings.showNSFW { flags |= 2 }
+        if settings.showNSFL { flags |= 4 }
+        if settings.showPOL { flags |= 16 }
+        // If no filters selected, default to SFW. Otherwise, use the exact combination.
+        return flags == 0 ? 1 : flags
+    }
+    // --- END NEW ---
+
     private func tabDisplayName(for tab: Tab) -> String {
         switch tab {
         case .feed: return "Feed"
@@ -98,15 +113,15 @@ struct FavoritesView: View {
             Button("OK") { errorMessage = nil }
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
         .sheet(isPresented: $showingFilterSheet) {
-            FilterView(hideFeedOptions: true, showHideSeenItemsToggle: false)
+            // --- MODIFIED: Pass relevantFeedTypeForFilterBehavior as nil ---
+            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
+            // --- END MODIFICATION ---
                 .environmentObject(settings)
                 .environmentObject(authService)
         }
         .onAppear {
             playerManager.configure(settings: settings)
-            // --- MODIFIED: Logging mit helper ---
             FavoritesView.logger.info("FavoritesView onAppear. Current tab: \(tabDisplayName(for: navigationService.selectedTab)). needsDataRefresh: \(needsDataRefresh)")
-            // --- END MODIFICATION ---
             if navigationService.selectedTab == .favorites && needsDataRefresh {
                 Task {
                     FavoritesView.logger.info("FavoritesView onAppear: Triggering initial data load because tab is active and needs refresh.")
@@ -124,15 +139,16 @@ struct FavoritesView: View {
         .task(id: settings.selectedCollectionIdForFavorites) {
             await handleCollectionChange()
         }
-        .task(id: settings.apiFlags) {
-            await handleApiFlagsChange()
-        }
+        // --- MODIFIED: React to global filter changes using apiFlagsForFavorites ---
+        .onChange(of: settings.showSFW) { _, _ in handleApiFlagsChange() }
+        .onChange(of: settings.showNSFW) { _, _ in handleApiFlagsChange() }
+        .onChange(of: settings.showNSFL) { _, _ in handleApiFlagsChange() }
+        .onChange(of: settings.showPOL) { _, _ in handleApiFlagsChange() }
+        // --- END MODIFICATION ---
     }
     
     private func handleTabChange(newTab: Tab) async {
-        // --- MODIFIED: Logging mit helper ---
         FavoritesView.logger.info("FavoritesView: selectedTab changed to \(tabDisplayName(for: newTab)).")
-        // --- END MODIFICATION ---
         if newTab == .favorites {
             if needsDataRefresh {
                 FavoritesView.logger.info("Tab changed to Favorites and refresh needed. Calling performActualDataRefresh.")
@@ -167,13 +183,15 @@ struct FavoritesView: View {
         }
     }
     
-    private func handleApiFlagsChange() async {
-        FavoritesView.logger.info("FavoritesView: apiFlags changed. Setting needsDataRefresh to true.")
+    private func handleApiFlagsChange() {
+        FavoritesView.logger.info("FavoritesView: Relevant global filter flag changed. Setting needsDataRefresh to true.")
         needsDataRefresh = true
         if navigationService.selectedTab == .favorites {
-            FavoritesView.logger.info("API flags changed while Favorites tab is active. Calling performActualDataRefresh.")
-            await performActualDataRefresh()
-            needsDataRefresh = false
+            FavoritesView.logger.info("A global filter flag changed while Favorites tab is active. Calling performActualDataRefresh.")
+            Task { // Fire and forget, no need to await here as it's a reaction
+                await performActualDataRefresh()
+                needsDataRefresh = false
+            }
         }
     }
 
@@ -348,11 +366,17 @@ struct FavoritesView: View {
         }
         self.showNoCollectionSelectedMessage = false
 
-        guard settings.hasActiveContentFilter else {
-            FavoritesView.logger.warning("Refresh favorites blocked: No active content filter selected.")
+        // --- MODIFIED: Use apiFlagsForFavorites ---
+        let currentApiFlags = apiFlagsForFavorites
+        // --- END MODIFICATION ---
+        
+        // Check if filters allow any content
+        if currentApiFlags == 0 { // Or a more sophisticated check if 0 could be valid in some edge case
+            FavoritesView.logger.warning("Refresh favorites blocked: No active content filter selected (apiFlagsForFavorites is 0).")
             self.items = []; self.showNoFilterMessage = true; self.canLoadMore = false; self.isLoadingMore = false; self.errorMessage = nil
             return
         }
+        
         guard let cacheKey = favoritesCacheKey else {
             FavoritesView.logger.error("Cannot refresh favorites: Cache key error."); self.errorMessage = "Interner Fehler (Cache Key)."
             return
@@ -375,12 +399,14 @@ struct FavoritesView: View {
              else { FavoritesView.logger.info("No usable cache for favorites in collection '\(collectionKeyword)'.") }
         }
         
-        FavoritesView.logger.info("Performing API fetch for favorites refresh (Collection Keyword: '\(collectionKeyword)', User: \(username), Flags: \(settings.apiFlags))...")
+        // --- MODIFIED: Pass apiFlagsForFavorites ---
+        FavoritesView.logger.info("Performing API fetch for favorites refresh (Collection Keyword: '\(collectionKeyword)', User: \(username), Flags: \(currentApiFlags))...");
+        // --- END MODIFICATION ---
         do {
             let apiResponse = try await apiService.fetchFavorites(
                 username: username,
                 collectionKeyword: collectionKeyword,
-                flags: settings.apiFlags
+                flags: currentApiFlags // Use calculated flags
             )
             let fetchedItemsFromAPI = apiResponse.items
             FavoritesView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) fresh favorites for collection '\(collectionKeyword)'.");
@@ -427,7 +453,14 @@ struct FavoritesView: View {
 
     @MainActor
     func loadMoreFavorites() async {
-        guard settings.hasActiveContentFilter else { FavoritesView.logger.warning("Skipping loadMore: No active filter."); self.canLoadMore = false; return }
+        // --- MODIFIED: Use apiFlagsForFavorites for content filter check ---
+        let currentApiFlags = apiFlagsForFavorites
+        if currentApiFlags == 0 { // Or a more sophisticated check if 0 could be valid
+            FavoritesView.logger.warning("Skipping loadMore: No active filter (apiFlagsForFavorites is 0).")
+            self.canLoadMore = false; return
+        }
+        // --- END MODIFICATION ---
+        
         guard authService.isLoggedIn, let username = authService.currentUser?.name else { return }
         guard let selectedCollectionID = settings.selectedCollectionIdForFavorites,
               let selectedCollection = authService.userCollections.first(where: { $0.id == selectedCollectionID }),
@@ -446,7 +479,7 @@ struct FavoritesView: View {
             let apiResponse = try await apiService.fetchFavorites(
                 username: username,
                 collectionKeyword: collectionKeyword,
-                flags: settings.apiFlags,
+                flags: currentApiFlags, // Use calculated flags
                 olderThanId: lastItemId
             )
             let newItems = apiResponse.items

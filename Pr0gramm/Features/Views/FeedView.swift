@@ -100,7 +100,7 @@ struct FeedView: View {
                 feedContentView
             }
             .sheet(isPresented: $showingFilterSheet) {
-                 FilterView(hideFeedOptions: true, showHideSeenItemsToggle: true)
+                 FilterView(relevantFeedTypeForFilterBehavior: settings.feedType, hideFeedOptions: true, showHideSeenItemsToggle: true)
                      .environmentObject(settings)
                      .environmentObject(authService)
             }
