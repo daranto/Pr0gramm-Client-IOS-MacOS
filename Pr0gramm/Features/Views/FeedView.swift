@@ -52,7 +52,7 @@ struct FeedView: View {
             let isMac = ProcessInfo.processInfo.isiOSAppOnMac
             let currentHorizontalSizeClass: UserInterfaceSizeClass? = isMac ? .regular : .compact
             let numberOfColumns = settings.gridSize.columns(for: currentHorizontalSizeClass, isMac: isMac)
-            let minItemWidth: CGFloat = isMac ? 150 : (numberOfColumns <= 3 ? 100 : 80)
+            let minItemWidth: CGFloat = isMac ? 400 : (numberOfColumns <= 3 ? 100 : 80)
             return Array(repeating: GridItem(.adaptive(minimum: minItemWidth), spacing: 3), count: numberOfColumns)
         }
 
