@@ -16,8 +16,11 @@ class AuthService: ObservableObject {
 
     // MARK: - Keychain & UserDefaults Keys
     private let sessionCookieKey = "pr0grammSessionCookie_v1"
+    private let ppCookieKey = "pr0grammPpCookie_v1"
     private let sessionUsernameKey = "pr0grammUsername_v1"
     private let sessionCookieName = "me"
+    private let ppCookieName = "pp"
+
     private let userVotesKey = "pr0grammUserVotes_v1"
     private let favoritedCommentsKey = "pr0grammFavoritedComments_v1"
     private let userCommentVotesKey = "pr0grammUserCommentVotes_v1"
@@ -25,11 +28,21 @@ class AuthService: ObservableObject {
 
     // MARK: - Published Properties
     @Published var isLoggedIn: Bool = false {
-        // --- MODIFIED: Update AppSettings on login status change ---
         didSet {
             appSettings.updateUserLoginStatusForApiFlags(isLoggedIn: isLoggedIn)
+            if isLoggedIn {
+                startUnreadCountSyncTimer()
+            } else {
+                stopUnreadCountSyncTimer()
+                // Reset individual counts on logout
+                unreadCommentCount = 0
+                unreadMentionCount = 0
+                unreadSystemNotificationCount = 0
+                unreadFollowCount = 0
+                unreadPrivateMessageCount = 0
+                unreadInboxTotal = 0
+            }
         }
-        // --- END MODIFICATION ---
     }
     @Published var currentUser: UserInfo? = nil
     @Published var userNonce: String? = nil
@@ -53,6 +66,20 @@ class AuthService: ObservableObject {
     @Published private(set) var isVotingTag: [Int: Bool] = [:]
     
     @Published private(set) var userCollections: [ApiCollection] = []
+    
+    @Published private(set) var unreadInboxTotal: Int = 0
+    // --- NEW: Individual unread counts ---
+    @Published private(set) var unreadCommentCount: Int = 0
+    @Published private(set) var unreadMentionCount: Int = 0 // Mentions werden oft mit Kommentaren gruppiert
+    @Published private(set) var unreadSystemNotificationCount: Int = 0
+    @Published private(set) var unreadFollowCount: Int = 0
+    @Published private(set) var unreadPrivateMessageCount: Int = 0
+    // --- END NEW ---
+
+
+    private var unreadCountSyncTimer: Timer?
+    private let unreadCountSyncInterval: TimeInterval = 60
+
 
     nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AuthService")
 
@@ -63,12 +90,7 @@ class AuthService: ObservableObject {
         loadVotedCommentStates()
         loadVotedTagStates()
         AuthService.logger.info("AuthService initialized. Loaded \(self.votedItemStates.count) item vote states, \(self.votedCommentStates.count) comment vote states, \(self.favoritedCommentIDs.count) favorited comment IDs, and \(self.votedTagStates.count) tag vote states.")
-        // --- NEW: Set initial login status for AppSettings ---
-        // Da isLoggedIn bei Init false ist, wird hier der korrekte Status gesetzt.
-        // Die checkInitialLoginStatus Methode wird später `isLoggedIn` aktualisieren,
-        // was dann den didSet-Observer erneut auslöst.
         appSettings.updateUserLoginStatusForApiFlags(isLoggedIn: self.isLoggedIn)
-        // --- END NEW ---
     }
 
     #if DEBUG
@@ -76,6 +98,100 @@ class AuthService: ObservableObject {
         self.userCollections = collections
     }
     #endif
+
+    func fetchUnreadCounts() async {
+        guard isLoggedIn else {
+            AuthService.logger.trace("Skipping unread count fetch: User not logged in (isLoggedIn is false).")
+            if unreadInboxTotal != 0 { // Reset all counts if user is not logged in but somehow they are non-zero
+                await MainActor.run {
+                    unreadCommentCount = 0
+                    unreadMentionCount = 0
+                    unreadSystemNotificationCount = 0
+                    unreadFollowCount = 0
+                    unreadPrivateMessageCount = 0
+                    unreadInboxTotal = 0
+                }
+            }
+            return
+        }
+        AuthService.logger.info("Fetching unread inbox counts...")
+        do {
+            let syncResponse = try await apiService.syncUser(offset: 0)
+            
+            var newTotal = 0
+            var comments = 0
+            var mentions = 0
+            var messages = 0
+            var notifications = 0
+            var follows = 0
+
+            if let inboxData = syncResponse.inbox {
+                comments = inboxData.comments ?? 0
+                mentions = inboxData.mentions ?? 0 // Beachten, dass Mentions auch Kommentare sein können
+                messages = inboxData.messages ?? 0
+                notifications = inboxData.notifications ?? 0
+                follows = inboxData.follows ?? 0
+                
+                // Gesamtanzahl für das Tab-Badge
+                newTotal = comments + mentions + messages + notifications + follows
+            }
+            
+            if self.userNonce == nil, let nonceFromSync = syncResponse.likeNonce {
+                await MainActor.run { self.userNonce = nonceFromSync }
+                 AuthService.logger.info("Updated userNonce from sync: \(nonceFromSync)")
+            }
+
+            await MainActor.run {
+                // Update individual counts
+                self.unreadCommentCount = comments + mentions // Mentions sind meist spezielle Kommentare
+                self.unreadMentionCount = mentions // Behalte es separat, falls du es später brauchst
+                self.unreadPrivateMessageCount = messages
+                // "System" fasst Notifications und Follows zusammen
+                self.unreadSystemNotificationCount = notifications + follows
+                self.unreadFollowCount = follows // Behalte es separat
+
+                self.unreadInboxTotal = newTotal
+            }
+            AuthService.logger.info("Unread inbox counts updated. Total: \(newTotal), Comments: \(self.unreadCommentCount), Messages: \(self.unreadPrivateMessageCount), System: \(self.unreadSystemNotificationCount)")
+
+        } catch {
+            AuthService.logger.error("Failed to fetch unread counts: \(error.localizedDescription)")
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                await MainActor.run {
+                    unreadCommentCount = 0
+                    unreadMentionCount = 0
+                    unreadSystemNotificationCount = 0
+                    unreadFollowCount = 0
+                    unreadPrivateMessageCount = 0
+                    unreadInboxTotal = 0
+                }
+                await logout()
+            }
+        }
+    }
+
+    private func startUnreadCountSyncTimer() {
+        guard isLoggedIn else {
+            AuthService.logger.info("Skipped starting unread count timer: User not logged in.")
+            return
+        }
+        stopUnreadCountSyncTimer()
+        AuthService.logger.info("Starting unread count sync timer (interval: \(self.unreadCountSyncInterval)s).")
+        unreadCountSyncTimer = Timer.scheduledTimer(withTimeInterval: self.unreadCountSyncInterval, repeats: true) { [weak self] _ in
+            guard let strongSelf = self else { return }
+            AuthService.logger.trace("Unread count sync timer fired.")
+            Task { await strongSelf.fetchUnreadCounts() }
+        }
+        Task { await fetchUnreadCounts() }
+    }
+
+    private func stopUnreadCountSyncTimer() {
+        if unreadCountSyncTimer != nil {
+            AuthService.logger.info("Stopping unread count sync timer.")
+            unreadCountSyncTimer?.invalidate()
+            unreadCountSyncTimer = nil
+        }
+    }
 
 
     func fetchInitialCaptcha() async {
@@ -93,6 +209,12 @@ class AuthService: ObservableObject {
             self.votedCommentStates = [:]; self.isVotingComment = [:]
             self.votedTagStates = [:]; self.isVotingTag = [:]
             self.userCollections = []
+            self.unreadCommentCount = 0
+            self.unreadMentionCount = 0
+            self.unreadSystemNotificationCount = 0
+            self.unreadFollowCount = 0
+            self.unreadPrivateMessageCount = 0
+            self.unreadInboxTotal = 0
             AuthService.logger.debug("Resetting user-specific states for login.")
         }
 
@@ -123,6 +245,11 @@ class AuthService: ObservableObject {
                 let profileAndCollectionsLoaded = await loadProfileInfoAndCollections(username: username, setLoadingState: false)
                 var favoritesLoaded = false
 
+                if profileAndCollectionsLoaded && self.userNonce != nil {
+                     await MainActor.run { self.isLoggedIn = true }
+                }
+
+
                 if profileAndCollectionsLoaded {
                     if let defaultCollection = self.userCollections.first(where: { $0.isActuallyDefault }) {
                         self.appSettings.selectedCollectionIdForFavorites = defaultCollection.id
@@ -134,9 +261,6 @@ class AuthService: ObservableObject {
                         self.appSettings.selectedCollectionIdForFavorites = nil
                         AuthService.logger.warning("No collections found for user. selectedCollectionIdForFavorites set to nil.")
                     }
-                    // --- MODIFIED: isLoggedIn wird hier gesetzt, was den didSet-Observer auslöst ---
-                    await MainActor.run { self.isLoggedIn = true }
-                    // --- END MODIFICATION ---
 
                     if self.appSettings.selectedCollectionIdForFavorites != nil {
                         favoritesLoaded = await loadInitialFavorites()
@@ -152,17 +276,18 @@ class AuthService: ObservableObject {
                 }
 
                 let finalLoginSuccess = profileAndCollectionsLoaded && favoritesLoaded && self.userNonce != nil
-                await MainActor.run { self.isLoggedIn = finalLoginSuccess } // Erneutes Setzen, falls ein Schritt fehlschlug
+                await MainActor.run { self.isLoggedIn = finalLoginSuccess }
 
                 if finalLoginSuccess {
                     AuthService.logger.debug("[LOGIN SUCCESS] Cookies BEFORE saving to Keychain:")
                     await logAllCookiesForPr0gramm()
-                    let cookieSaved = await findAndSaveSessionCookie()
+                    let meCookieSaved = await findAndSaveSpecificCookie(cookieName: sessionCookieName, keychainKey: sessionCookieKey)
+                    let ppCookieSaved = await findAndSaveSpecificCookie(cookieName: ppCookieName, keychainKey: ppCookieKey)
                     let usernameSaved = keychainService.saveUsername(username, forKey: sessionUsernameKey)
 
                     await MainActor.run {
-                        if cookieSaved && usernameSaved { AuthService.logger.info("Session cookie and username saved to keychain.") }
-                        else { AuthService.logger.warning("Failed to save session cookie (\(cookieSaved)) or username (\(usernameSaved)) to keychain.") }
+                        if meCookieSaved && ppCookieSaved && usernameSaved { AuthService.logger.info("Session cookies ('me', 'pp') and username saved to keychain.") }
+                        else { AuthService.logger.warning("Failed to save 'me' cookie (\(meCookieSaved)), 'pp' cookie (\(ppCookieSaved)), or username (\(usernameSaved)) to keychain.") }
                         self.needsCaptcha = false; self.captchaToken = nil; self.captchaImage = nil
                         AuthService.logger.info("User \(self.currentUser!.name) is now logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), TagVotes: \(self.votedTagStates.count), Collections: \(self.userCollections.count)")
                     }
@@ -226,8 +351,12 @@ class AuthService: ObservableObject {
         AuthService.logger.info("Checking initial login status...")
         await MainActor.run {
             isLoading = true; self.userNonce = nil; self.favoritedItemIDs = []
-            // isLoggedIn wird hier noch nicht gesetzt, erst am Ende, um den didSet nicht mehrfach auszulösen.
-            // Der initiale Wert von isLoggedIn (false) wurde bereits an AppSettings übergeben.
+            self.unreadCommentCount = 0
+            self.unreadMentionCount = 0
+            self.unreadSystemNotificationCount = 0
+            self.unreadFollowCount = 0
+            self.unreadPrivateMessageCount = 0
+            self.unreadInboxTotal = 0
         }
 
         var profileAndCollectionsLoaded = false
@@ -238,17 +367,24 @@ class AuthService: ObservableObject {
         AuthService.logger.debug("[SESSION RESTORE START] Cookies BEFORE restoring from Keychain:")
         await logAllCookiesForPr0gramm()
 
-        if await loadAndRestoreSessionCookie(), let username = keychainService.loadUsername(forKey: sessionUsernameKey) {
-             AuthService.logger.info("Session cookie and username ('\(username)') restored from keychain.")
+        let meCookieRestored = await loadAndRestoreSpecificCookie(keychainKey: sessionCookieKey, cookieName: sessionCookieName)
+        let ppCookieRestored = await loadAndRestoreSpecificCookie(keychainKey: ppCookieKey, cookieName: ppCookieName)
+
+        if meCookieRestored, let username = keychainService.loadUsername(forKey: sessionUsernameKey) {
+             AuthService.logger.info("Session cookie 'me' and username ('\(username)') restored from keychain. 'pp' cookie restored: \(ppCookieRestored)")
              AuthService.logger.debug("[SESSION RESTORE] Cookies AFTER restoring from Keychain (BEFORE nonce extraction):")
              await logAllCookiesForPr0gramm()
              let extractedNonce = await extractNonceFromCookieStorage()
              await MainActor.run { self.userNonce = extractedNonce }
              nonceAvailable = (self.userNonce != nil)
+            
+            if nonceAvailable {
+                await MainActor.run { self.isLoggedIn = true }
+            }
+
 
              profileAndCollectionsLoaded = await loadProfileInfoAndCollections(username: username, setLoadingState: false)
              if profileAndCollectionsLoaded && nonceAvailable {
-                 // Temporäres isLoggedIn für die folgende Logik, endgültiges Setzen am Ende
                  finalIsLoggedIn = true
 
                  if self.appSettings.selectedCollectionIdForFavorites == nil {
@@ -273,18 +409,22 @@ class AuthService: ObservableObject {
                  }
                  
                  finalIsLoggedIn = profileAndCollectionsLoaded && favoritesLoaded && nonceAvailable
+             } else {
+                 finalIsLoggedIn = false
              }
+        } else {
+             AuthService.logger.info("Failed to restore 'me' cookie (\(meCookieRestored)) or username from keychain. 'pp' cookie restoration: \(ppCookieRestored).")
+             finalIsLoggedIn = false
         }
         
+        await MainActor.run { self.isLoggedIn = finalIsLoggedIn }
+
         if !finalIsLoggedIn {
             AuthService.logger.info("Initial login check determined user is NOT logged in or session data incomplete.")
-            await performLogoutCleanup() // Stellt sicher, dass isLoggedIn auf false gesetzt wird
+            await performLogoutCleanup()
         }
 
          await MainActor.run {
-             // --- MODIFIED: isLoggedIn hier endgültig setzen, löst didSet aus ---
-             self.isLoggedIn = finalIsLoggedIn
-             // --- END MODIFICATION ---
              if self.isLoggedIn {
                   AuthService.logger.info("Initial check: User \(self.currentUser!.name) is logged in. Nonce: \(self.userNonce != nil), SelectedFavColID: \(self.appSettings.selectedCollectionIdForFavorites ?? -1), Badges: \(self.currentUser?.badges?.count ?? 0), ItemFavs: \(self.favoritedItemIDs.count), Votes: \(self.votedItemStates.count), CommentFavs: \(self.favoritedCommentIDs.count), CommentVotes: \(self.votedCommentStates.count), TagVotes: \(self.votedTagStates.count), Collections: \(self.userCollections.count)")
              } else {
@@ -576,7 +716,7 @@ class AuthService: ObservableObject {
         var allFavorites: [Item] = []
         var olderThanId: Int? = nil
         var fetchError: Error? = nil
-        let maxPages = 10 // Limit initial load to prevent excessive API calls
+        let maxPages = 10
         var pagesFetched = 0
 
         do {
@@ -585,7 +725,7 @@ class AuthService: ObservableObject {
                 let apiResponse = try await apiService.fetchFavorites(
                     username: username,
                     collectionKeyword: collectionKeyword,
-                    flags: 1, // Default flags for initial favorite ID load
+                    flags: 1,
                     olderThanId: olderThanId
                 )
                 let fetchedItems = apiResponse.items
@@ -610,7 +750,7 @@ class AuthService: ObservableObject {
         let finalIDs = Set(allFavorites.map { $0.id })
         await MainActor.run { self.favoritedItemIDs = finalIDs }
         AuthService.logger.info("Finished loading initial favorites for collection '\(collectionKeyword)'. Loaded \(finalIDs.count) IDs across \(pagesFetched) pages. Error encountered: \(fetchError != nil)")
-        return fetchError == nil || !finalIDs.isEmpty // Consider successful if some IDs loaded, even with partial error
+        return fetchError == nil || !finalIDs.isEmpty
     }
 
     @discardableResult
@@ -709,9 +849,7 @@ class AuthService: ObservableObject {
         let collectionIdToClearCache = self.appSettings.selectedCollectionIdForFavorites
 
         await MainActor.run {
-            // --- MODIFIED: isLoggedIn hier setzen, löst didSet aus ---
             self.isLoggedIn = false;
-            // --- END MODIFICATION ---
             self.currentUser = nil; self.userNonce = nil;
             self.needsCaptcha = false; self.captchaToken = nil;
             self.captchaImage = nil; self.favoritedItemIDs = [];
@@ -721,11 +859,16 @@ class AuthService: ObservableObject {
             self.votedTagStates = [:]; self.isVotingTag = [:]
             self.userCollections = []
             self.appSettings.selectedCollectionIdForFavorites = nil
-            // Filter werden beim Logout nicht mehr automatisch auf SFW zurückgesetzt, das macht `applyFilterResetOnAppOpenIfNeeded`
-            // oder der Nutzer manuell. Hier wird nur der Login-Status in AppSettings aktualisiert.
+            self.unreadCommentCount = 0
+            self.unreadMentionCount = 0
+            self.unreadSystemNotificationCount = 0
+            self.unreadFollowCount = 0
+            self.unreadPrivateMessageCount = 0
+            self.unreadInboxTotal = 0
         }
         await clearCookies()
         _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey)
+        _ = keychainService.deleteCookieProperties(forKey: ppCookieKey)
         _ = keychainService.deleteUsername(forKey: sessionUsernameKey)
         UserDefaults.standard.removeObject(forKey: userVotesKey)
         UserDefaults.standard.removeObject(forKey: favoritedCommentsKey)
@@ -733,7 +876,7 @@ class AuthService: ObservableObject {
         UserDefaults.standard.removeObject(forKey: userTagVotesKey)
         
         await self.appSettings.clearFavoritesCache(username: usernameToClearCache, collectionId: collectionIdToClearCache)
-        AuthService.logger.info("Reset content filters to SFW-only and cleared persisted item votes, comment favorites, comment votes, and tag votes. Cleared collections data and favorites cache.")
+        AuthService.logger.info("Cleared all session data including cookies, keychain entries, and user defaults for votes/favorites.")
     }
 
     private func clearCookies() async {
@@ -751,26 +894,57 @@ class AuthService: ObservableObject {
     }
 
     @discardableResult
-    private func findAndSaveSessionCookie() async -> Bool {
-         AuthService.logger.debug("Attempting to find and save session cookie '\(self.sessionCookieName)'...")
-         guard let url = URL(string: "https://pr0gramm.com") else { return false }
-         guard let sessionCookie = await MainActor.run(body: { HTTPCookieStorage.shared.cookies(for: url)?.first(where: { $0.name == self.sessionCookieName }) }) else { AuthService.logger.warning("Could not retrieve cookies or session cookie '\(self.sessionCookieName)' not found."); return false }
-        let cookieValue = sessionCookie.value; let parts = cookieValue.split(separator: ":")
-        if parts.count != 2 { AuthService.logger.warning("Session cookie '\(self.sessionCookieName)' found but value '\(cookieValue.prefix(50))...' does NOT have expected 'id:nonce' format! Saving it anyway.") } else { AuthService.logger.info("Found session cookie '\(self.sessionCookieName)' with expected format. Value: '\(cookieValue.prefix(50))...'.") }
-        guard let properties = sessionCookie.properties else { AuthService.logger.warning("Could not get properties from session cookie '\(self.sessionCookieName)'."); return false }
-         AuthService.logger.info("Saving cookie properties to keychain...")
-         return keychainService.saveCookieProperties(properties, forKey: sessionCookieKey)
+    private func findAndSaveSpecificCookie(cookieName: String, keychainKey: String) async -> Bool {
+        AuthService.logger.debug("Attempting to find and save cookie '\(cookieName)' to keychain key '\(keychainKey)'...")
+        guard let url = URL(string: "https://pr0gramm.com") else {
+            AuthService.logger.error("Failed to create URL for cookie '\(cookieName)'.")
+            return false
+        }
+        guard let specificCookie = await MainActor.run(body: { HTTPCookieStorage.shared.cookies(for: url)?.first(where: { $0.name == cookieName }) }) else {
+            AuthService.logger.warning("Cookie '\(cookieName)' not found in HTTPCookieStorage.")
+            return false
+        }
+        AuthService.logger.info("Found cookie '\(cookieName)' with value '\(specificCookie.value.prefix(50))...'.")
+        guard let properties = specificCookie.properties else {
+            AuthService.logger.warning("Could not get properties from cookie '\(cookieName)'.")
+            return false
+        }
+        AuthService.logger.info("Saving cookie '\(cookieName)' properties to keychain key '\(keychainKey)'...")
+        return keychainService.saveCookieProperties(properties, forKey: keychainKey)
     }
-
-    private func loadAndRestoreSessionCookie() async -> Bool {
-        AuthService.logger.debug("Attempting to load and restore session cookie from keychain...")
-        guard let loadedProperties = keychainService.loadCookieProperties(forKey: sessionCookieKey) else { return false }
-        guard let restoredCookie = HTTPCookie(properties: loadedProperties) else { AuthService.logger.error("Failed to create HTTPCookie from keychain properties."); _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey); return false }
-        if let expiryDate = restoredCookie.expiresDate, expiryDate < Date() { AuthService.logger.info("Restored cookie from keychain has expired."); _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey); return false }
-         await MainActor.run { HTTPCookieStorage.shared.setCookie(restoredCookie) }
-         AuthService.logger.info("Successfully restored session cookie '\(restoredCookie.name)' with value '\(restoredCookie.value.prefix(50))...' into HTTPCookieStorage.")
+    
+    @discardableResult
+    private func loadAndRestoreSpecificCookie(keychainKey: String, cookieName: String) async -> Bool {
+        AuthService.logger.debug("Attempting to load and restore cookie '\(cookieName)' from keychain key '\(keychainKey)'...")
+        guard let loadedProperties = keychainService.loadCookieProperties(forKey: keychainKey) else {
+            AuthService.logger.info("No data found in keychain for cookie '\(cookieName)' (key: \(keychainKey)).")
+            return false
+        }
+        guard let restoredCookie = HTTPCookie(properties: loadedProperties) else {
+            AuthService.logger.error("Failed to create HTTPCookie '\(cookieName)' from keychain properties. Deleting invalid entry from keychain.")
+            _ = keychainService.deleteCookieProperties(forKey: keychainKey)
+            return false
+        }
+        if let expiryDate = restoredCookie.expiresDate, expiryDate < Date() {
+            AuthService.logger.info("Restored cookie '\(cookieName)' from keychain has expired. Deleting from keychain.")
+            _ = keychainService.deleteCookieProperties(forKey: keychainKey)
+            return false
+        }
+        await MainActor.run { HTTPCookieStorage.shared.setCookie(restoredCookie) }
+        AuthService.logger.info("Successfully restored cookie '\(restoredCookie.name)' with value '\(restoredCookie.value.prefix(50))...' into HTTPCookieStorage.")
         return true
     }
+
+    @available(*, deprecated, message: "Use findAndSaveSpecificCookie instead")
+    private func findAndSaveSessionCookie() async -> Bool {
+        return await findAndSaveSpecificCookie(cookieName: sessionCookieName, keychainKey: sessionCookieKey)
+    }
+
+    @available(*, deprecated, message: "Use loadAndRestoreSpecificCookie instead")
+    private func loadAndRestoreSessionCookie() async -> Bool {
+        return await loadAndRestoreSpecificCookie(keychainKey: sessionCookieKey, cookieName: sessionCookieName)
+    }
+
 
     private func extractNonceFromCookieStorage() async -> String? {
         AuthService.logger.debug("Attempting to extract nonce from cookie storage (trying JSON format first, then shorten)...")
@@ -796,6 +970,14 @@ class AuthService: ObservableObject {
         if let cookies = cookies, !cookies.isEmpty { for cookie in cookies { AuthService.logger.debug("- Name: \(cookie.name), Value: \(cookie.value.prefix(60))..., Expires: \(cookie.expiresDate?.description ?? "Session"), Path: \(cookie.path), Secure: \(cookie.isSecure), HTTPOnly: \(cookie.isHTTPOnly)") } }
         else { AuthService.logger.debug("(No cookies found for domain)") }
          AuthService.logger.debug("--- End Cookie List ---")
+    }
+    
+    deinit {
+        let timer = self.unreadCountSyncTimer
+        Task { @MainActor [timer] in
+            timer?.invalidate()
+            AuthService.logger.debug("AuthService deinit. Unread count sync timer invalidated via Task.")
+        }
     }
 }
 // --- END OF COMPLETE FILE ---

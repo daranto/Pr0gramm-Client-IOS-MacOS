@@ -24,7 +24,7 @@ struct ProfileNavigationValue: Hashable, Identifiable {
 
 enum InboxViewMessageType: Int, CaseIterable, Identifiable {
     case comments = 1
-    case notifications = 2 // Bleibt für "System"
+    case notifications = 2
     case privateMessages = 3
 
     var id: Int { self.rawValue }
@@ -44,7 +44,59 @@ enum InboxViewMessageType: Int, CaseIterable, Identifiable {
         case .privateMessages: return nil
         }
     }
+    
+    @MainActor
+    func unreadCount(from authService: AuthService) -> Int {
+        switch self {
+        case .comments:
+            return authService.unreadCommentCount
+        case .notifications:
+            return authService.unreadSystemNotificationCount
+        case .privateMessages:
+            return authService.unreadPrivateMessageCount
+        }
+    }
 }
+
+// --- NEW: Label View für den Picker ---
+@MainActor
+struct InboxPickerSegmentLabel: View {
+    let type: InboxViewMessageType
+    let isSelected: Bool
+    @EnvironmentObject var authService: AuthService // Zugriff auf AuthService für die Zähler
+
+    private var unreadCount: Int {
+        type.unreadCount(from: authService)
+    }
+
+    private var displayText: String {
+        if unreadCount > 0 {
+            return "\(type.displayName) (\(unreadCount))"
+        }
+        return type.displayName
+    }
+
+    private var textColor: Color {
+        if isSelected {
+            // Wenn ausgewählt, verwendet der Picker normalerweise eine Kontrastfarbe (oft weiß oder schwarz, je nach Akzentfarbe)
+            // Wir können versuchen, dies zu respektieren oder eine feste Farbe zu setzen.
+            // Für den Standard-SegmentedControl ist es am besten, die Systemfarbe zu lassen oder .primary/.white.
+            return Color(UIColor.label) // Passt sich Hell/Dunkel-Modus an, aber Akzentfarbe überschreibt es oft.
+                                        // Oder .white, wenn der Picker-Hintergrund immer dunkel ist.
+        } else {
+            // Wenn nicht ausgewählt und ungelesen, dann rot. Sonst Standard.
+            return unreadCount > 0 ? .red : Color(UIColor.label)
+        }
+    }
+
+    var body: some View {
+        Text(displayText)
+            .foregroundColor(textColor)
+            // Wichtig: .tag hier im Picker-Loop setzen, nicht im Label selbst,
+            // damit der Picker die Auswahl korrekt verwalten kann.
+    }
+}
+// --- END NEW ---
 
 
 struct InboxView: View {
@@ -78,10 +130,8 @@ struct InboxView: View {
     @State private var conversationNavigationValue: ConversationNavigationValue? = nil
     @State private var profileNavigationValue: ProfileNavigationValue? = nil
 
-    // --- NEW: Task Properties für besseres Management ---
     @State private var currentRefreshTask: Task<Void, Never>? = nil
     @State private var currentLoadMoreTask: Task<Void, Never>? = nil
-    // --- END NEW ---
 
 
     init(
@@ -100,14 +150,17 @@ struct InboxView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                // --- MODIFIED: Standard-Picker mit custom Label View ---
                 Picker("Nachrichten Typ", selection: $selectedMessageType) {
                     ForEach(InboxViewMessageType.allCases) { type in
-                        Text(type.displayName).tag(type)
+                        InboxPickerSegmentLabel(type: type, isSelected: selectedMessageType == type)
+                            .tag(type) // Das .tag muss hier sein!
                     }
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
                 .padding(.vertical, 8)
+                // --- END MODIFICATION ---
 
                 contentView
             }
@@ -115,17 +168,15 @@ struct InboxView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .alert("Fehler", isPresented: .constant(alertErrorMessage != nil && !isLoading && !isLoadingConversations && !isCancellationError(alertErrorMessage))) { // --- MODIFIED: CancellationError nicht als Alert ---
+            .alert("Fehler", isPresented: .constant(alertErrorMessage != nil && !isLoading && !isLoadingConversations && !isCancellationError(alertErrorMessage))) {
                 Button("OK") { clearErrors() }
             } message: { Text(alertErrorMessage ?? "Unbekannter Fehler") }
             .task {
                 playerManager.configure(settings: settings)
             }
             .onChange(of: selectedMessageType) { _, newType in
-                // --- MODIFIED: Cancel existing tasks before switching tab data ---
                 currentRefreshTask?.cancel()
                 currentLoadMoreTask?.cancel()
-                // --- END MODIFICATION ---
                 Task {
                     itemNavigationValue = nil
                     conversationNavigationValue = nil
@@ -137,10 +188,8 @@ struct InboxView: View {
                 }
             }
             .task(id: authService.isLoggedIn) {
-                 // --- MODIFIED: Cancel existing tasks on login status change ---
                  currentRefreshTask?.cancel()
                  currentLoadMoreTask?.cancel()
-                 // --- END MODIFICATION ---
                  await refreshCurrentTabData()
             }
             .navigationDestination(item: $itemNavigationValue) { navValue in
@@ -185,40 +234,35 @@ struct InboxView: View {
                         .padding().background(Material.regular).cornerRadius(10).shadow(radius: 5)
                 }
             }
-            // --- NEW: Cancel tasks on disappear ---
             .onDisappear {
                 currentRefreshTask?.cancel()
                 currentLoadMoreTask?.cancel()
                 InboxView.logger.debug("InboxView disappeared. Cancelled ongoing refresh/loadMore tasks.")
             }
-            // --- END NEW ---
         }
     }
-    
-    // --- NEW: Helper to check for cancellation error string ---
+        
     private func isCancellationError(_ message: String?) -> Bool {
         return message?.lowercased().contains("cancelled") == true
     }
-    // --- END NEW ---
     
     private func refreshCurrentTabData() async {
-        // --- MODIFIED: Cancel existing tasks ---
         currentRefreshTask?.cancel()
         currentLoadMoreTask?.cancel()
-        // --- END MODIFICATION ---
 
         if authService.isLoggedIn {
+            await authService.fetchUnreadCounts()
             if selectedMessageType == .privateMessages {
-                currentRefreshTask = Task { await refreshConversations() } // Assign task
+                currentRefreshTask = Task { await refreshConversations() }
             } else {
-                currentRefreshTask = Task { await refreshMessages() } // Assign task
+                currentRefreshTask = Task { await refreshMessages() }
             }
         } else {
             messages = []
             conversations = []
             errorMessage = "Bitte anmelden."
             conversationsError = nil
-            canLoadMore = true // Reset for potential future login
+            canLoadMore = true
         }
     }
     
@@ -245,10 +289,8 @@ struct InboxView: View {
                 isLoading: $isLoadingConversations,
                 errorMessage: $conversationsError,
                 onRefresh: {
-                    // --- MODIFIED: Cancel existing tasks ---
                     currentRefreshTask?.cancel()
                     currentLoadMoreTask?.cancel()
-                    // --- END MODIFICATION ---
                     currentRefreshTask = Task { await refreshConversations() }
                 },
                 onSelectConversation: { username in
@@ -264,17 +306,15 @@ struct InboxView: View {
         Group {
             if isLoading && messages.isEmpty {
                 ProgressView("Lade Nachrichten...").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = errorMessage, messages.isEmpty, !isCancellationError(error) { // --- MODIFIED: Don't show ContentUnavailableView for cancellation ---
+            } else if let error = errorMessage, messages.isEmpty, !isCancellationError(error) {
                  ContentUnavailableView {
                      Label("Fehler", systemImage: "exclamationmark.triangle")
                  } description: {
                      Text(error)
                  } actions: {
                      Button("Erneut versuchen") {
-                         // --- MODIFIED: Cancel existing tasks ---
                          currentRefreshTask?.cancel()
                          currentLoadMoreTask?.cancel()
-                         // --- END MODIFICATION ---
                          currentRefreshTask = Task { await refreshMessages() }
                     }
                  }
@@ -299,15 +339,11 @@ struct InboxView: View {
                         .onAppear {
                             if messages.count >= 2 && message.id == messages[messages.count - 2].id && canLoadMore && !isLoadingMore {
                                 InboxView.logger.info("End trigger appeared for message ID: \(message.id).")
-                                // --- MODIFIED: Cancel existing loadMore task ---
                                 currentLoadMoreTask?.cancel()
-                                // --- END MODIFICATION ---
                                 currentLoadMoreTask = Task { await loadMoreMessages() }
                             } else if messages.count == 1 && message.id == messages.first?.id && canLoadMore && !isLoadingMore {
                                 InboxView.logger.info("End trigger appeared for the only message ID: \(message.id).")
-                                // --- MODIFIED: Cancel existing loadMore task ---
                                 currentLoadMoreTask?.cancel()
-                                // --- END MODIFICATION ---
                                 currentLoadMoreTask = Task { await loadMoreMessages() }
                             }
                         }
@@ -320,10 +356,8 @@ struct InboxView: View {
                 }
                 .listStyle(.plain)
                 .refreshable {
-                    // --- MODIFIED: Cancel existing tasks ---
                     currentRefreshTask?.cancel()
                     currentLoadMoreTask?.cancel()
-                    // --- END MODIFICATION ---
                     currentRefreshTask = Task { await refreshMessages() }
                 }
             }
@@ -410,7 +444,7 @@ struct InboxView: View {
                 self.profileNavigationValue = ProfileNavigationValue(username: senderName)
             } else if message.type == "notification" {
                  InboxView.logger.debug("Tapped on a 'notification' type message on System tab. No specific navigation action defined.")
-            } else if message.type == "comment", let itemId = message.itemId { // Fallback falls Kommentare doch hier landen
+            } else if message.type == "comment", let itemId = message.itemId {
                 InboxView.logger.warning("Comment message tapped while on System tab, preparing navigation for item \(itemId), target comment ID: \(message.id)")
                 await prepareAndNavigateToItem(itemId, targetCommentID: message.id)
             }
@@ -461,12 +495,12 @@ struct InboxView: View {
              self.targetCommentIDForNavigation = nil
         } catch {
             InboxView.logger.error("Failed to fetch item \(id) for navigation: \(error.localizedDescription)")
-            if self.navigationTargetId == id { // Nur Fehler setzen, wenn es noch der aktuelle Ladevorgang ist
+            if self.navigationTargetId == id {
                 self.errorMessage = "Post \(id) konnte nicht geladen werden: \(error.localizedDescription)"
             }
             self.targetCommentIDForNavigation = nil
         }
-        if self.navigationTargetId == id { // Nur zurücksetzen, wenn es der aktuelle Ladevorgang war
+        if self.navigationTargetId == id {
              self.isLoadingNavigationTarget = false
              self.navigationTargetId = nil
         }
@@ -478,9 +512,7 @@ struct InboxView: View {
             InboxView.logger.info("refreshMessages called, but privateMessages selected. Skipping general refresh.")
             return
         }
-        // --- MODIFIED: Cancel existing refresh task ---
         currentRefreshTask?.cancel()
-        // --- END MODIFICATION ---
 
         InboxView.logger.info("Refreshing inbox messages for selected type: \(selectedMessageType.displayName)...")
 
@@ -495,7 +527,6 @@ struct InboxView: View {
         self.isLoading = true; self.errorMessage = nil
         self.messages = []
 
-        // --- MODIFIED: Assign task to state property ---
         currentRefreshTask = Task {
             defer { Task { @MainActor in self.isLoading = false } }
 
@@ -508,7 +539,6 @@ struct InboxView: View {
                     response = try await apiService.fetchInboxNotificationsApi(older: nil)
                 case .privateMessages:
                     InboxView.logger.error("refreshMessages called unexpectedly for .privateMessages type.")
-                    // No need to set isLoading = false here, defer handles it
                     return
                 }
                 
@@ -520,15 +550,14 @@ struct InboxView: View {
                 let fetchedMessageTypes = Dictionary(grouping: response.messages, by: { $0.type ?? "unknown" }).mapValues { $0.count }
                 InboxView.logger.debug("API Response for \(selectedMessageType.displayName): Fetched \(response.messages.count) messages. Types: \(fetchedMessageTypes). AtEnd: \(response.atEnd)")
 
-                await MainActor.run { // Ensure UI updates are on main thread
+                await MainActor.run {
                     self.messages = response.messages.sorted { $0.created > $1.created }
                     self.canLoadMore = !response.atEnd
                 }
                 InboxView.logger.info("Fetched \(response.messages.count) initial messages for tab \(selectedMessageType.displayName). AtEnd: \(response.atEnd)")
 
-            } catch is CancellationError { // Explicitly handle CancellationError
+            } catch is CancellationError {
                 InboxView.logger.info("API fetch for \(selectedMessageType.displayName) cancelled.")
-                // Don't set general errorMessage for cancellation
             } catch let error as URLError where error.code == .userAuthenticationRequired {
                 InboxView.logger.error("Inbox API fetch failed for \(selectedMessageType.displayName): Authentication required.")
                 await MainActor.run {
@@ -542,7 +571,6 @@ struct InboxView: View {
                 }
             }
         }
-        // --- END MODIFICATION ---
     }
 
     @MainActor
@@ -551,9 +579,7 @@ struct InboxView: View {
             InboxView.logger.info("loadMoreMessages called, but privateMessages selected. Skipping.")
             return
         }
-        // --- MODIFIED: Cancel existing loadMore task ---
         currentLoadMoreTask?.cancel()
-        // --- END MODIFICATION ---
 
         guard authService.isLoggedIn else { return }
         guard !isLoadingMore && canLoadMore && !isLoading else { return }
@@ -565,7 +591,6 @@ struct InboxView: View {
         InboxView.logger.info("--- Starting loadMoreMessages for \(selectedMessageType.displayName) older than timestamp \(oldestMessageTimestamp) ---")
         self.isLoadingMore = true
 
-        // --- MODIFIED: Assign task to state property ---
         currentLoadMoreTask = Task {
             defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; InboxView.logger.info("--- Finished loadMoreMessages for \(selectedMessageType.displayName) ---") } } }
 
@@ -578,7 +603,6 @@ struct InboxView: View {
                     response = try await apiService.fetchInboxNotificationsApi(older: oldestMessageTimestamp)
                 case .privateMessages:
                     InboxView.logger.error("loadMoreMessages called unexpectedly for .privateMessages type.")
-                    // No need to set isLoadingMore = false here, defer handles it.
                     return
                 }
 
@@ -586,7 +610,6 @@ struct InboxView: View {
                     InboxView.logger.info("LoadMore task for \(selectedMessageType.displayName) was cancelled during API call.")
                     return
                 }
-                // Check isLoadingMore again in case it was set to false by a rapid refresh
                 guard self.isLoadingMore else {
                     InboxView.logger.info("Load more for \(selectedMessageType.displayName) cancelled before UI update (isLoadingMore became false).");
                     return
@@ -595,7 +618,7 @@ struct InboxView: View {
                 let fetchedMessageTypes = Dictionary(grouping: response.messages, by: { $0.type ?? "unknown" }).mapValues { $0.count }
                 InboxView.logger.debug("API Response for \(selectedMessageType.displayName) (loadMore): Fetched \(response.messages.count) messages. Types: \(fetchedMessageTypes). AtEnd: \(response.atEnd)")
 
-                await MainActor.run { // Ensure UI updates are on main thread
+                await MainActor.run {
                     if response.messages.isEmpty {
                         InboxView.logger.info("Reached end of inbox feed for \(selectedMessageType.displayName).")
                         self.canLoadMore = false
@@ -614,17 +637,14 @@ struct InboxView: View {
                         }
                     }
                 }
-            } catch is CancellationError { // Explicitly handle CancellationError
+            } catch is CancellationError {
                 InboxView.logger.info("Load more API call for \(selectedMessageType.displayName) cancelled.")
-                // Don't set general errorMessage
             } catch let error as URLError where error.code == .userAuthenticationRequired {
                 InboxView.logger.error("Inbox API fetch failed during loadMore for \(selectedMessageType.displayName): Authentication required.")
                 await MainActor.run { self.errorMessage = "Sitzung abgelaufen."; self.canLoadMore = false }
                 await authService.logout()
             } catch {
                 InboxView.logger.error("Inbox API fetch failed during loadMore for \(selectedMessageType.displayName): \(error.localizedDescription)")
-                // Check isLoadingMore again because the task might have been cancelled
-                // by a refresh action that already set isLoadingMore to false.
                 guard self.isLoadingMore else { return }
                 await MainActor.run {
                     if self.messages.isEmpty { self.errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" }
@@ -632,14 +652,11 @@ struct InboxView: View {
                 }
             }
         }
-        // --- END MODIFICATION ---
     }
     
     @MainActor
     func refreshConversations() async {
-        // --- MODIFIED: Cancel existing refresh task ---
         currentRefreshTask?.cancel()
-        // --- END MODIFICATION ---
         InboxView.logger.info("Refreshing inbox conversations...")
         guard authService.isLoggedIn else {
             InboxView.logger.warning("Cannot refresh conversations: User not logged in.")
@@ -649,7 +666,6 @@ struct InboxView: View {
         self.isLoadingConversations = true
         self.conversationsError = nil
         
-        // --- MODIFIED: Assign task to state property ---
         currentRefreshTask = Task {
             defer { Task { @MainActor in self.isLoadingConversations = false } }
 
@@ -659,13 +675,12 @@ struct InboxView: View {
                     InboxView.logger.info("Refresh conversations task was cancelled during API call.")
                     return
                 }
-                await MainActor.run { // Ensure UI updates are on main thread
+                await MainActor.run {
                     self.conversations = response.conversations.sorted { $0.lastMessage > $1.lastMessage }
                 }
                 InboxView.logger.info("Fetched \(response.conversations.count) conversations.")
-            } catch is CancellationError { // Explicitly handle CancellationError
+            } catch is CancellationError {
                 InboxView.logger.info("Conversations API fetch cancelled.")
-                // Don't set general errorMessage
             } catch let error as URLError where error.code == .userAuthenticationRequired {
                 InboxView.logger.error("Conversations API fetch failed: Authentication required.")
                 await MainActor.run {
@@ -681,7 +696,6 @@ struct InboxView: View {
                 }
             }
         }
-        // --- END MODIFICATION ---
     }
 }
 

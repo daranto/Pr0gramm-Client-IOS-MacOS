@@ -50,12 +50,12 @@ struct MainView: View {
                  if (tab == .favorites || tab == .inbox) && !authService.isLoggedIn { /* Skip */ }
                  else {
                      Button { handleTap(on: tab) } label: {
-                         // --- MODIFIED: Pass badgeCount as 0 or remove it ---
+                         // --- MODIFIED: Pass badgeCount for inbox tab ---
                          TabBarButtonLabel(
                              iconName: iconName(for: tab),
                              isSelected: selectedTab == tab,
-                             tab: tab
-                             // badgeCount: 0 // Or remove badgeCount entirely from TabBarButtonLabel
+                             tab: tab,
+                             badgeCount: tab == .inbox ? authService.unreadInboxTotal : 0 // Pass count for inbox
                          )
                          // --- END MODIFICATION ---
                          .accessibilityLabel(label(for: tab))
@@ -81,7 +81,7 @@ struct MainView: View {
         case .feed: return "square.grid.2x2.fill"
         case .favorites: return "heart.fill"
         case .search: return "magnifyingglass"
-        case .inbox: return "envelope.fill" // Icon remains, but no badge
+        case .inbox: return "envelope.fill"
         case .profile: return "person.crop.circle"
         case .settings: return "gearshape.fill"
         }
@@ -100,18 +100,31 @@ struct MainView: View {
 }
 
 /// A reusable view for the content of a tab bar button (icon only).
-// --- MODIFIED: Remove badgeCount parameter and related logic ---
+// --- MODIFIED: Add badgeCount parameter and display logic ---
 struct TabBarButtonLabel: View {
     let iconName: String
     let isSelected: Bool
-    let tab: Tab // Keep tab if needed for other conditional styling, otherwise can remove
+    let tab: Tab
+    let badgeCount: Int // New parameter
 
     var body: some View {
-        Image(systemName: iconName)
-            .font(UIConstants.titleFont)
-            .symbolVariant(isSelected ? .fill : .none)
-            .padding(.vertical, 6)
-            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+        ZStack(alignment: .topTrailing) {
+            Image(systemName: iconName)
+                .font(UIConstants.titleFont)
+                .symbolVariant(isSelected ? .fill : .none)
+                .padding(.vertical, 6)
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+
+            if badgeCount > 0 {
+                Text("\(badgeCount)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, badgeCount > 9 ? 4 : 0) // Less horizontal padding for single digit
+                    .frame(minWidth: 16, idealHeight: 16) // Ensure minimum size for circle
+                    .background(Circle().fill(Color.red))
+                    .offset(x: 10, y: -4) // Adjust offset as needed
+            }
+        }
     }
 }
 // --- END MODIFICATION ---
@@ -121,10 +134,16 @@ struct TabBarButtonLabel: View {
     let authService = AuthService(appSettings: settings)
     let navigationService = NavigationService()
 
-    // Optional: Simulate logged in state
-     authService.isLoggedIn = true
-     authService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
-     // authService.unreadMessageCount = 0 // No longer exists
+    authService.isLoggedIn = true
+    authService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
+    // --- NEW: Simulate unread count for preview ---
+    // authService.unreadInboxTotal = 3 // Set directly for preview, though this won't work as it's private(set)
+    // To test this in preview, you'd need to make unreadInboxTotal public(set) or call a method.
+    // For now, we assume it works if the logic in AuthService is correct.
+    // If you want to see it in preview, temporarily change unreadInboxTotal to public set for testing.
+    // Task { await authService.fetchUnreadCounts() } // This would be better if API could be mocked.
+    // --- END NEW ---
+
 
     return MainView()
         .environmentObject(settings)

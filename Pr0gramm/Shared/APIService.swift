@@ -55,10 +55,10 @@ struct ItemComment: Codable, Identifiable, Hashable {
 struct ApiResponse: Codable {
     let items: [Item]
     let atEnd: Bool?
-    let atStart: Bool? // Keep for completeness, though not always used by client
-    let hasOlder: Bool? // Alternative to atEnd, specific to some API versions/contexts
-    let hasNewer: Bool? // Alternative to atStart
-    let error: String? // For errors like "nothingFound" or "tooShort"
+    let atStart: Bool?
+    let hasOlder: Bool?
+    let hasNewer: Bool?
+    let error: String?
 }
 /// Response structure for the `/user/login` endpoint.
 struct LoginResponse: Codable {
@@ -141,9 +141,37 @@ struct ApiCollection: Codable, Identifiable, Hashable {
     var isActuallyDefault: Bool { isDefault == 1 }
 }
 
-struct UserSyncResponse: Codable {
-    let likeNonce: String?
+// --- Corrected UserSyncResponse for inbox counts ---
+struct InboxCounts: Codable {
+    let comments: Int?
+    let mentions: Int?
+    let messages: Int?
+    let notifications: Int?
+    let follows: Int?
+    let digests: Int? // Assuming this might also be part of the inbox payload
 }
+
+struct UserSettingsSync: Codable { // Assuming UserSettings is also part of the sync
+    let themeId: Int?
+    let showAds: Bool?
+    let favUpvote: Bool?
+    // Add other settings fields as per actual API response if needed
+}
+
+struct UserSyncResponse: Codable {
+    let inbox: InboxCounts?
+    let log: String?
+    let logLength: Int?
+    let score: Int?
+    let settings: UserSettingsSync? // Assuming settings comes with sync
+    let ts: Int?
+    let cache: String? // API spec says "Cache-Buster-String"
+    let rt: Int?
+    let qc: Int?
+    let likeNonce: String? // Kept this as it was the original field
+}
+// --- End Corrected ---
+
 
 struct PostCommentResultComment: Codable, Identifiable, Hashable {
     let id: Int
@@ -184,7 +212,7 @@ struct ProfileCommentsResponse: Codable {
 struct InboxResponse: Codable {
     let messages: [InboxMessage]
     let atEnd: Bool
-    let queue: InboxQueueInfo? // Behalten für Kompatibilität mit /inbox/all, falls es mal gemischt verwendet wird
+    let queue: InboxQueueInfo?
 }
 
 struct InboxQueueInfo: Codable {
@@ -547,7 +575,7 @@ class APIService {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let syncResponse: UserSyncResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint + " (offset: \(offset))")
-            Self.logger.info("User sync successful. Nonce: \(syncResponse.likeNonce ?? "nil")")
+            Self.logger.info("User sync successful. Nonce: \(syncResponse.likeNonce ?? "nil"). Inbox counts: \(String(describing: syncResponse.inbox))") // Log inbox counts
             return syncResponse
         }
         catch {
@@ -856,9 +884,6 @@ class APIService {
         }
     }
 
-    // --- MODIFIED: `fetchInboxMessages` is now private and specific to the old /inbox/all behavior ---
-    // --- It should only be called if absolutely necessary or as a fallback.
-    // --- The new public methods will be `fetchInboxCommentsApi` and `fetchInboxNotificationsApi`.
     private func fetchInboxMessagesAll(older: Int? = nil) async throws -> InboxResponse {
         let endpoint = "/inbox/all"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
@@ -889,10 +914,7 @@ class APIService {
             throw error
         }
     }
-    // --- END MODIFICATION ---
 
-
-    // --- NEW: Method to fetch only comments from /inbox/comments ---
     func fetchInboxCommentsApi(older: Int? = nil) async throws -> InboxResponse {
         let endpoint = "/inbox/comments"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
@@ -917,9 +939,7 @@ class APIService {
             throw error
         }
     }
-    // --- END NEW ---
 
-    // --- NEW: Method to fetch only notifications from /inbox/notifications ---
     func fetchInboxNotificationsApi(older: Int? = nil) async throws -> InboxResponse {
         let endpoint = "/inbox/notifications"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
@@ -937,7 +957,6 @@ class APIService {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let apiResponse: InboxResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint)
-            // Die API liefert hier auch "follow" Nachrichten mit, was für den "System" Tab passt.
             Self.logger.info("Successfully fetched \(apiResponse.messages.count) notifications/follows from \(endpoint). AtEnd: \(apiResponse.atEnd)")
             return apiResponse
         } catch {
@@ -945,7 +964,6 @@ class APIService {
             throw error
         }
     }
-    // --- END NEW ---
 
 
     func fetchInboxConversations() async throws -> InboxConversationsResponse {

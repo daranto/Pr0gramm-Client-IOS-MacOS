@@ -25,16 +25,18 @@ struct Pr0grammApp: App {
     @StateObject private var navigationService = NavigationService()
     @StateObject private var scenePhaseObserver: ScenePhaseObserver
 
-    // Neuer State für Deep Link Daten
     @State private var activeDeepLinkData: DeepLinkData? = nil
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Pr0grammApp")
 
     init() {
         let settings = AppSettings()
+        let auth = AuthService(appSettings: settings)
         _appSettings = StateObject(wrappedValue: settings)
-        _authService = StateObject(wrappedValue: AuthService(appSettings: settings))
-        _scenePhaseObserver = StateObject(wrappedValue: ScenePhaseObserver(appSettings: settings))
+        _authService = StateObject(wrappedValue: auth)
+        // Stelle sicher, dass ScenePhaseObserver auch die authService Instanz bekommt, falls es sie für die unread counts braucht
+        _scenePhaseObserver = StateObject(wrappedValue: ScenePhaseObserver(appSettings: settings, authService: auth))
+
 
         configureAudioSession()
         Pr0grammApp.logger.info("Pr0grammApp init")
@@ -42,7 +44,7 @@ struct Pr0grammApp: App {
 
     var body: some Scene {
         WindowGroup {
-            AppRootView()
+            AppRootView() // Die Logik für checkInitialLoginStatus ist jetzt in AppRootView
                 .environmentObject(appSettings)
                 .environmentObject(authService)
                 .environmentObject(navigationService)
@@ -51,19 +53,13 @@ struct Pr0grammApp: App {
                     Pr0grammApp.logger.info("App opened with URL: \(url.absoluteString)")
                     handleIncomingURL(url)
                 }
-                .sheet(item: $activeDeepLinkData) { data in // .sheet(item: ...) verwenden
-                    // Das 'data'-Objekt hier ist garantiert nicht-nil
+                .sheet(item: $activeDeepLinkData) { data in
                     DeepLinkItemLoaderView(
                         itemID: data.itemIDValue,
                         targetCommentID: data.commentIDValue
-                        // Das Binding 'isPresented' wird hier nicht mehr benötigt,
-                        // da das Sheet automatisch geschlossen wird, wenn activeDeepLinkData nil wird.
-                        // Der "Fertig"-Button in DeepLinkItemLoaderView muss activeDeepLinkData auf nil setzen.
                     )
                     .environmentObject(appSettings)
                     .environmentObject(authService)
-                    // onDismiss kann optional verwendet werden, wenn nach dem Schließen noch Aufräumarbeiten nötig sind,
-                    // aber activeDeepLinkData wird bereits nil, was das Sheet schließt.
                 }
         }
     }
@@ -116,12 +112,7 @@ struct Pr0grammApp: App {
         }
         
         Pr0grammApp.logger.info("Parsed deep link: ItemID = \(itemID), CommentID = \(commentID ?? -1)")
-
-        // Setze das activeDeepLinkData-Objekt. Dies löst das Sheet aus.
-        // Die leichte Verzögerung ist hier wahrscheinlich nicht mehr so kritisch,
-        // da das Sheet erst gebaut wird, wenn activeDeepLinkData einen Wert hat.
-        // Man kann sie aber zur Sicherheit beibehalten.
-        DispatchQueue.main.async { // Sicherstellen, dass State-Änderungen auf dem Main Thread erfolgen
+        DispatchQueue.main.async {
            self.activeDeepLinkData = DeepLinkData(itemID: itemID, commentID: commentID)
            Pr0grammApp.logger.info("activeDeepLinkData set. Sheet should present.")
         }
@@ -138,7 +129,7 @@ struct AppRootView: View {
         MainView()
             .accentColor(appSettings.accentColorChoice.swiftUIColor)
             .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
-            .task {
+            .task { // checkInitialLoginStatus wird hier aufgerufen
                 await authService.checkInitialLoginStatus()
             }
             .onChange(of: scenePhase, initial: true) { oldPhase, newPhase in
@@ -150,10 +141,7 @@ struct AppRootView: View {
 struct DeepLinkItemLoaderView: View {
     let itemID: Int
     let targetCommentID: Int?
-    // Das Binding isPresented wird jetzt vom Environment über @Environment(\.dismiss) gesteuert
-    // ODER, wenn wir es explizit machen wollen, müssten wir es von Pr0grammApp.$activeDeepLinkData ableiten,
-    // was etwas komplexer wäre. Einfacher ist, den Environment dismiss zu verwenden.
-    @Environment(\.dismiss) var dismissSheet // Zum Schließen des Sheets
+    @Environment(\.dismiss) var dismissSheet
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
@@ -189,7 +177,7 @@ struct DeepLinkItemLoaderView: View {
                     .toolbar {
                         ToolbarItem(placement: .navigationBarTrailing) {
                             Button("Fertig") {
-                                dismissSheet() // Sheet schließen
+                                dismissSheet()
                             }
                         }
                     }
