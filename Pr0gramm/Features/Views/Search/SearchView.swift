@@ -4,6 +4,12 @@
 import SwiftUI
 import os
 
+// Wrapper struct for identifiable search history items
+struct SearchHistoryItem: Identifiable, Hashable {
+    let id = UUID()
+    let term: String
+}
+
 struct SearchView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
@@ -28,7 +34,7 @@ struct SearchView: View {
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
-    @State private var searchHistory: [String] = []
+    @State private var searchHistoryItems: [SearchHistoryItem] = []
     private static let searchHistoryKey = "searchHistory_v1"
     private static let maxSearchHistoryCount = 10
 
@@ -50,12 +56,12 @@ struct SearchView: View {
 
     private var apiFlagsForSearch: Int {
         let loggedIn = authService.isLoggedIn
-        if !loggedIn { return 1 } // SFW
+        if !loggedIn { return 1 }
 
-        if self.searchFeedType == .junk { return 9 } // SFW + NSFP
+        if self.searchFeedType == .junk { return 9 }
 
         var flags = 0
-        if settings.showSFW { flags |= 1; flags |= 8 } // SFW includes NSFP for logged-in users
+        if settings.showSFW { flags |= 1; flags |= 8 }
         if settings.showNSFW { flags |= 2 }
         if settings.showNSFL { flags |= 4 }
         if settings.showPOL { flags |= 16 }
@@ -84,14 +90,14 @@ struct SearchView: View {
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Tags suchen...")
             .onSubmit(of: .search) {
                 Self.addTagToGlobalSearchHistory(searchText)
-                loadSearchHistoryFromUserDefaults()
+                loadSearchHistoryItemsFromUserDefaults()
                 Task { await performSearch(isInitialSearch: true) }
             }
             .navigationDestination(for: Item.self) { destinationItem in
                 detailView(for: destinationItem)
              }
             .onAppear {
-                loadSearchHistoryFromUserDefaults()
+                loadSearchHistoryItemsFromUserDefaults()
                 
                 if !didPerformInitialPendingSearch, let tagToSearch = navigationService.pendingSearchTag, !tagToSearch.isEmpty {
                     SearchView.logger.info("SearchView appeared with pending tag: '\(tagToSearch)'")
@@ -265,7 +271,7 @@ struct SearchView: View {
                 actions: { Button("Erneut versuchen") { Task { await performSearch(isInitialSearch: true) } }.font(UIConstants.bodyFont) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if !hasSearched && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                if !searchHistory.isEmpty {
+                if !searchHistoryItems.isEmpty {
                     searchHistoryView
                 } else if minBenisScore > 0 {
                     ContentUnavailableView("Filter aktiv", systemImage: "slider.horizontal.3", description: Text("Min. Benis: \(Int(minBenisScore)). Drücke Suchen oder gib Tags ein."))
@@ -288,16 +294,16 @@ struct SearchView: View {
     private var searchHistoryView: some View {
         List {
             Section {
-                ForEach(searchHistory, id: \.self) { term in
+                ForEach(searchHistoryItems) { historyItem in
                     Button(action: {
-                        searchText = term
-                        Self.addTagToGlobalSearchHistory(term)
-                        loadSearchHistoryFromUserDefaults()
+                        searchText = historyItem.term
+                        Self.addTagToGlobalSearchHistory(historyItem.term)
+                        loadSearchHistoryItemsFromUserDefaults()
                         Task { await performSearch(isInitialSearch: true) }
                     }) {
                         HStack {
                             Image(systemName: "magnifyingglass").foregroundColor(.secondary)
-                            Text(term).foregroundColor(.primary)
+                            Text(historyItem.term).foregroundColor(.primary)
                             Spacer()
                             Image(systemName: "arrow.up.left").foregroundColor(.secondary)
                         }
@@ -309,7 +315,7 @@ struct SearchView: View {
             } header: {
                 HStack {
                     Text("Letzte Suchen"); Spacer()
-                    if !searchHistory.isEmpty {
+                    if !searchHistoryItems.isEmpty {
                         Button("Alle löschen", role: .destructive) { clearSearchHistory() }.font(.caption)
                     }
                 }
@@ -356,7 +362,7 @@ struct SearchView: View {
         
         searchText = trimmedTag
         Self.addTagToGlobalSearchHistory(trimmedTag)
-        loadSearchHistoryFromUserDefaults()
+        loadSearchHistoryItemsFromUserDefaults()
         
         Task {
              await performSearch(isInitialSearch: true);
@@ -420,11 +426,11 @@ struct SearchView: View {
             }
 
             let apiResponse = try await apiService.fetchItems(
-                flags: apiFlagsForSearch, // Use calculated flags
-                promoted: apiPromotedForSearch, // Use calculated promoted value
+                flags: apiFlagsForSearch,
+                promoted: apiPromotedForSearch,
                 tags: effectiveSearchQueryForAPITags,
                 olderThanId: olderThanIdForAPI,
-                showJunkParameter: apiShowJunkForSearch // Use calculated junk value
+                showJunkParameter: apiShowJunkForSearch
             )
             
             let currentUserSearchTextAfterFetch = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -457,11 +463,11 @@ struct SearchView: View {
                      SearchView.logger.info("\(isInitialSearch ? "Search" : "LoadMore") returned 0 items. Setting canLoadMore to false.")
                  } else {
                      let atEnd = apiResponse.atEnd ?? false
-                     let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
+                     let hasOlder = apiResponse.hasOlder ?? true
                      if atEnd {
                          self.canLoadMore = false
                          SearchView.logger.info("API indicates atEnd=true. Setting canLoadMore to false.")
-                     } else if hasOlder == false { // Nur false, nicht nil
+                     } else if hasOlder == false {
                          self.canLoadMore = false
                          SearchView.logger.info("API indicates hasOlder=false. Setting canLoadMore to false.")
                      } else {
@@ -481,10 +487,16 @@ struct SearchView: View {
         }
     }
 
-    private func loadSearchHistoryFromUserDefaults() {
-        if let history = UserDefaults.standard.stringArray(forKey: Self.searchHistoryKey) {
-            self.searchHistory = history
-            SearchView.logger.info("Loaded \(history.count) items from search history for SearchView instance.")
+    private func loadSearchHistoryItemsFromUserDefaults() {
+        if let historyStrings = UserDefaults.standard.stringArray(forKey: Self.searchHistoryKey) {
+            DispatchQueue.main.async {
+                self.searchHistoryItems = historyStrings.map { SearchHistoryItem(term: $0) }
+            }
+            SearchView.logger.info("Loaded \(historyStrings.count) items into searchHistoryItems from UserDefaults.")
+        } else {
+            DispatchQueue.main.async {
+                self.searchHistoryItems = []
+            }
         }
     }
 
@@ -502,19 +514,33 @@ struct SearchView: View {
         }
         
         UserDefaults.standard.set(currentGlobalHistory, forKey: searchHistoryKey)
-        logger.info("Tag '\(trimmedTerm)' added to GLOBAL search history. Count: \(currentGlobalHistory.count)")
+        logger.info("Tag '\(trimmedTerm)' added to GLOBAL search history (UserDefaults). Count: \(currentGlobalHistory.count)")
     }
 
+    // --- MODIFIED: deleteSearchHistoryItem with forced rebuild ---
     private func deleteSearchHistoryItem(at offsets: IndexSet) {
-        searchHistory.remove(atOffsets: offsets)
-        UserDefaults.standard.set(searchHistory, forKey: Self.searchHistoryKey)
-        SearchView.logger.info("Deleted item from search history. Saved updated local history.")
+        var temporaryCopy = searchHistoryItems
+        temporaryCopy.remove(atOffsets: offsets)
+        
+        // Force SwiftUI to rebuild the list by briefly emptying and then repopulating
+        // This is a workaround for potential UICollectionView inconsistency issues.
+        searchHistoryItems = [] // Empty it first
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { // Short delay
+            self.searchHistoryItems = temporaryCopy // Repopulate
+            
+            // Persist the actual change to UserDefaults
+            let historyStrings = self.searchHistoryItems.map { $0.term }
+            UserDefaults.standard.set(historyStrings, forKey: Self.searchHistoryKey)
+            SearchView.logger.info("Deleted item from search history. Saved updated history to UserDefaults. Count: \(self.searchHistoryItems.count)")
+        }
     }
+    // --- END MODIFICATION ---
+
 
     private func clearSearchHistory() {
-        searchHistory.removeAll()
-        UserDefaults.standard.set(searchHistory, forKey: Self.searchHistoryKey)
-        SearchView.logger.info("Cleared all search history. Saved empty local history.")
+        searchHistoryItems.removeAll()
+        UserDefaults.standard.set([String](), forKey: Self.searchHistoryKey)
+        SearchView.logger.info("Cleared all search history.")
     }
 }
 
