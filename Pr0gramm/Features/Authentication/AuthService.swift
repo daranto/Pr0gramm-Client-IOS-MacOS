@@ -25,6 +25,8 @@ class AuthService: ObservableObject {
     private let favoritedCommentsKey = "pr0grammFavoritedComments_v1"
     private let userCommentVotesKey = "pr0grammUserCommentVotes_v1"
     private let userTagVotesKey = "pr0grammUserTagVotes_v1"
+    private let followedUsersCacheKey = "pr0grammFollowedUsers_v2"
+
 
     // MARK: - Published Properties
     @Published var isLoggedIn: Bool = false {
@@ -32,15 +34,17 @@ class AuthService: ObservableObject {
             appSettings.updateUserLoginStatusForApiFlags(isLoggedIn: isLoggedIn)
             if isLoggedIn {
                 startUnreadCountSyncTimer()
+                Task { await fetchFollowList() }
             } else {
                 stopUnreadCountSyncTimer()
-                // Reset individual counts on logout
                 unreadCommentCount = 0
                 unreadMentionCount = 0
                 unreadSystemNotificationCount = 0
                 unreadFollowCount = 0
                 unreadPrivateMessageCount = 0
                 unreadInboxTotal = 0
+                followedUsers = []
+                subscribedUsernames = []
             }
         }
     }
@@ -68,13 +72,17 @@ class AuthService: ObservableObject {
     @Published private(set) var userCollections: [ApiCollection] = []
     
     @Published private(set) var unreadInboxTotal: Int = 0
-    // --- NEW: Individual unread counts ---
     @Published private(set) var unreadCommentCount: Int = 0
-    @Published private(set) var unreadMentionCount: Int = 0 // Mentions werden oft mit Kommentaren gruppiert
+    @Published private(set) var unreadMentionCount: Int = 0
     @Published private(set) var unreadSystemNotificationCount: Int = 0
     @Published private(set) var unreadFollowCount: Int = 0
     @Published private(set) var unreadPrivateMessageCount: Int = 0
-    // --- END NEW ---
+    
+    @Published var followedUsers: [FollowListItem] = []
+    @Published var subscribedUsernames: Set<String> = []
+    @Published private(set) var isLoadingFollowList: Bool = false
+    @Published private(set) var followListError: String? = nil
+    @Published private(set) var isModifyingFollowStatus: [String: Bool] = [:]
 
 
     private var unreadCountSyncTimer: Timer?
@@ -89,7 +97,8 @@ class AuthService: ObservableObject {
         loadFavoritedCommentIDs()
         loadVotedCommentStates()
         loadVotedTagStates()
-        AuthService.logger.info("AuthService initialized. Loaded \(self.votedItemStates.count) item vote states, \(self.votedCommentStates.count) comment vote states, \(self.favoritedCommentIDs.count) favorited comment IDs, and \(self.votedTagStates.count) tag vote states.")
+        loadFollowedUsersFromUserDefaults()
+        AuthService.logger.info("AuthService initialized. Loaded \(self.votedItemStates.count) item vote states, \(self.votedCommentStates.count) comment vote states, \(self.favoritedCommentIDs.count) favorited comment IDs, \(self.votedTagStates.count) tag vote states, and \(self.followedUsers.count) followed users.")
         appSettings.updateUserLoginStatusForApiFlags(isLoggedIn: self.isLoggedIn)
     }
 
@@ -97,12 +106,16 @@ class AuthService: ObservableObject {
     func setUserCollectionsForPreview(_ collections: [ApiCollection]) {
         self.userCollections = collections
     }
+    func setFollowedUsersForPreview(_ users: [FollowListItem]) {
+        self.followedUsers = users
+        self.subscribedUsernames = Set(users.filter { $0.isSubscribed }.map { $0.name })
+    }
     #endif
 
     func fetchUnreadCounts() async {
         guard isLoggedIn else {
             AuthService.logger.trace("Skipping unread count fetch: User not logged in (isLoggedIn is false).")
-            if unreadInboxTotal != 0 { // Reset all counts if user is not logged in but somehow they are non-zero
+            if unreadInboxTotal != 0 {
                 await MainActor.run {
                     unreadCommentCount = 0
                     unreadMentionCount = 0
@@ -127,12 +140,11 @@ class AuthService: ObservableObject {
 
             if let inboxData = syncResponse.inbox {
                 comments = inboxData.comments ?? 0
-                mentions = inboxData.mentions ?? 0 // Beachten, dass Mentions auch Kommentare sein können
+                mentions = inboxData.mentions ?? 0
                 messages = inboxData.messages ?? 0
                 notifications = inboxData.notifications ?? 0
                 follows = inboxData.follows ?? 0
                 
-                // Gesamtanzahl für das Tab-Badge
                 newTotal = comments + mentions + messages + notifications + follows
             }
             
@@ -142,17 +154,15 @@ class AuthService: ObservableObject {
             }
 
             await MainActor.run {
-                // Update individual counts
-                self.unreadCommentCount = comments + mentions // Mentions sind meist spezielle Kommentare
-                self.unreadMentionCount = mentions // Behalte es separat, falls du es später brauchst
-                self.unreadPrivateMessageCount = messages
-                // "System" fasst Notifications und Follows zusammen
-                self.unreadSystemNotificationCount = notifications + follows
-                self.unreadFollowCount = follows // Behalte es separat
+                self.unreadCommentCount = comments + mentions // Kommentare + Mentions
+                self.unreadMentionCount = mentions            // Nur Mentions (wird aktuell nicht separat angezeigt, aber für Vollständigkeit)
+                self.unreadPrivateMessageCount = messages     // Private Nachrichten
+                self.unreadSystemNotificationCount = notifications // Nur reine System-Benachrichtigungen
+                self.unreadFollowCount = follows              // Nur Follows (Stelzes)
 
                 self.unreadInboxTotal = newTotal
             }
-            AuthService.logger.info("Unread inbox counts updated. Total: \(newTotal), Comments: \(self.unreadCommentCount), Messages: \(self.unreadPrivateMessageCount), System: \(self.unreadSystemNotificationCount)")
+            AuthService.logger.info("Unread inbox counts updated. Total: \(newTotal), Comments: \(self.unreadCommentCount), Messages: \(self.unreadPrivateMessageCount), System: \(self.unreadSystemNotificationCount), Follows: \(self.unreadFollowCount)")
 
         } catch {
             AuthService.logger.error("Failed to fetch unread counts: \(error.localizedDescription)")
@@ -215,6 +225,8 @@ class AuthService: ObservableObject {
             self.unreadFollowCount = 0
             self.unreadPrivateMessageCount = 0
             self.unreadInboxTotal = 0
+            self.followedUsers = []
+            self.subscribedUsernames = []
             AuthService.logger.debug("Resetting user-specific states for login.")
         }
 
@@ -357,6 +369,8 @@ class AuthService: ObservableObject {
             self.unreadFollowCount = 0
             self.unreadPrivateMessageCount = 0
             self.unreadInboxTotal = 0
+            self.followedUsers = []
+            self.subscribedUsernames = []
         }
 
         var profileAndCollectionsLoaded = false
@@ -433,6 +447,259 @@ class AuthService: ObservableObject {
              isLoading = false
          }
     }
+
+    // MARK: - Follow Management
+    
+    func fetchFollowList() async {
+        guard isLoggedIn else {
+            AuthService.logger.trace("Skipping fetchFollowList: User not logged in.")
+            if !followedUsers.isEmpty || !subscribedUsernames.isEmpty {
+                await MainActor.run {
+                    self.followedUsers = []
+                    self.subscribedUsernames = []
+                    self.saveFollowedUsersToUserDefaults()
+                }
+            }
+            return
+        }
+        AuthService.logger.info("Fetching user follow list...")
+        await MainActor.run {
+            isLoadingFollowList = true
+            followListError = nil
+        }
+        do {
+            let response = try await apiService.fetchFollowList(flags: appSettings.apiFlags)
+            await MainActor.run {
+                self.followedUsers = response.list.sorted { $0.name.lowercased() < $1.name.lowercased() }
+                self.subscribedUsernames = Set(self.followedUsers.filter { $0.isSubscribed }.map { $0.name })
+                isLoadingFollowList = false
+                saveFollowedUsersToUserDefaults()
+            }
+            AuthService.logger.info("Successfully fetched \(self.followedUsers.count) followed users. Subscribed: \(self.subscribedUsernames.count)")
+        } catch let error as URLError where error.code == .userAuthenticationRequired {
+            AuthService.logger.error("Fetching follow list failed: Authentication required.")
+            await MainActor.run {
+                self.followListError = "Sitzung abgelaufen."
+                self.followedUsers = []
+                self.subscribedUsernames = []
+                isLoadingFollowList = false
+            }
+            await logout()
+        } catch {
+            AuthService.logger.error("Failed to fetch follow list: \(error.localizedDescription)")
+            await MainActor.run {
+                self.followListError = "Fehler beim Laden der Stelz-Liste."
+                isLoadingFollowList = false
+            }
+        }
+    }
+
+    func followUser(name: String) async {
+        guard isLoggedIn, let nonce = userNonce else { return }
+        AuthService.logger.info("Attempting to follow user: \(name)")
+        await MainActor.run { self.isModifyingFollowStatus[name] = true }
+        
+        let wasFollowing = self.followedUsers.contains { $0.name == name }
+
+        if !wasFollowing {
+            let newItem = FollowListItem(subscribed: 0, name: name, mark: 0, followCreated: Int(Date().timeIntervalSince1970), itemId: nil, thumb: nil, preview: nil, lastPost: nil)
+            await MainActor.run { self.followedUsers.append(newItem); self.followedUsers.sort { $0.name.lowercased() < $1.name.lowercased() } }
+            saveFollowedUsersToUserDefaults()
+        }
+
+        do {
+            let response = try await apiService.followUser(name: name, nonce: nonce)
+            if response.follows == true {
+                AuthService.logger.info("Successfully followed user \(name).")
+            } else {
+                AuthService.logger.warning("API indicated follow action for \(name) did not result in follows=true. Response: \(String(describing: response))")
+                if !wasFollowing {
+                    await MainActor.run { self.followedUsers.removeAll { $0.name == name } }
+                    saveFollowedUsersToUserDefaults()
+                }
+            }
+        } catch {
+            AuthService.logger.error("Error following user \(name): \(error.localizedDescription)")
+            if !wasFollowing {
+                await MainActor.run { self.followedUsers.removeAll { $0.name == name } }
+                saveFollowedUsersToUserDefaults()
+            }
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { await logout() }
+        }
+        await MainActor.run { self.isModifyingFollowStatus[name] = nil }
+    }
+
+    func unfollowUser(name: String) async {
+        guard isLoggedIn, let nonce = userNonce else { return }
+        AuthService.logger.info("Attempting to unfollow user: \(name)")
+        await MainActor.run { self.isModifyingFollowStatus[name] = true }
+
+        let originalItem = self.followedUsers.first(where: { $0.name == name })
+        await MainActor.run {
+            self.followedUsers.removeAll { $0.name == name }
+            self.subscribedUsernames.remove(name)
+        }
+        saveFollowedUsersToUserDefaults()
+
+
+        do {
+            let response = try await apiService.unfollowUser(name: name, nonce: nonce)
+            if response.follows == false {
+                AuthService.logger.info("Successfully unfollowed user \(name).")
+            } else {
+                AuthService.logger.warning("API indicated unfollow action for \(name) did not result in follows=false. Response: \(String(describing: response))")
+                if let item = originalItem { await MainActor.run { self.followedUsers.append(item); self.followedUsers.sort{$0.name.lowercased() < $1.name.lowercased()}; if item.isSubscribed { self.subscribedUsernames.insert(name) } } }
+                saveFollowedUsersToUserDefaults()
+            }
+        } catch {
+            AuthService.logger.error("Error unfollowing user \(name): \(error.localizedDescription)")
+            if let item = originalItem { await MainActor.run { self.followedUsers.append(item); self.followedUsers.sort{$0.name.lowercased() < $1.name.lowercased()}; if item.isSubscribed { self.subscribedUsernames.insert(name) } } }
+            saveFollowedUsersToUserDefaults()
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { await logout() }
+        }
+        await MainActor.run { self.isModifyingFollowStatus[name] = nil }
+    }
+    
+    func subscribeToUserNotifications(name: String) async {
+        guard isLoggedIn, let nonce = userNonce else { return }
+        AuthService.logger.info("Attempting to subscribe to notifications for user: \(name)")
+        await MainActor.run { self.isModifyingFollowStatus[name] = true }
+
+        let wasSubscribed = self.subscribedUsernames.contains(name)
+        await MainActor.run { self.subscribedUsernames.insert(name) }
+        if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
+            let oldItem = self.followedUsers[index]
+            let newItem = FollowListItem(subscribed: 1, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
+            await MainActor.run { self.followedUsers[index] = newItem }
+        }
+        saveFollowedUsersToUserDefaults()
+
+
+        do {
+            let response = try await apiService.subscribeToUser(name: name, nonce: nonce)
+            if response.subscribed == true {
+                AuthService.logger.info("Successfully subscribed to notifications for user \(name).")
+            } else {
+                AuthService.logger.warning("API indicated subscribe action for \(name) did not result in subscribed=true. Response: \(String(describing: response))")
+                if !wasSubscribed {
+                    await MainActor.run { self.subscribedUsernames.remove(name) }
+                    if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
+                         let oldItem = self.followedUsers[index]
+                         let newItem = FollowListItem(subscribed: 0, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
+                         await MainActor.run { self.followedUsers[index] = newItem }
+                    }
+                    saveFollowedUsersToUserDefaults()
+                }
+            }
+        } catch {
+            AuthService.logger.error("Error subscribing to notifications for user \(name): \(error.localizedDescription)")
+            if !wasSubscribed {
+                await MainActor.run { self.subscribedUsernames.remove(name) }
+                 if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
+                     let oldItem = self.followedUsers[index]
+                     let newItem = FollowListItem(subscribed: 0, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
+                     await MainActor.run { self.followedUsers[index] = newItem }
+                }
+                saveFollowedUsersToUserDefaults()
+            }
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { await logout() }
+        }
+        await MainActor.run { self.isModifyingFollowStatus[name] = nil }
+    }
+
+    func unsubscribeFromUserNotifications(name: String, keepFollow: Bool) async {
+        guard isLoggedIn, let nonce = userNonce else { return }
+        AuthService.logger.info("Attempting to unsubscribe from notifications for user: \(name), keepFollow: \(keepFollow)")
+        await MainActor.run { self.isModifyingFollowStatus[name] = true }
+
+        let wasSubscribed = self.subscribedUsernames.contains(name)
+        let originalFollowedItem = self.followedUsers.first(where: { $0.name == name })
+
+        await MainActor.run { self.subscribedUsernames.remove(name) }
+        if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
+            let oldItem = self.followedUsers[index]
+            if !keepFollow {
+                 await MainActor.run { self.followedUsers.remove(at: index) }
+            } else {
+                 let newItem = FollowListItem(subscribed: 0, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
+                 await MainActor.run { self.followedUsers[index] = newItem }
+            }
+        }
+        saveFollowedUsersToUserDefaults()
+
+
+        do {
+            let response = try await apiService.unsubscribeFromUser(name: name, keepFollow: keepFollow, nonce: nonce)
+            if response.subscribed == false {
+                AuthService.logger.info("Successfully unsubscribed from notifications for user \(name).")
+                if !keepFollow && response.follows == false {
+                     AuthService.logger.info("Also unfollowed user \(name) as per keepFollow=false and API response.")
+                } else if !keepFollow && response.follows == true {
+                    AuthService.logger.warning("Tried to unfollow \(name) during unsubscribe (keepFollow=false), but API reports still following.")
+                    if let originalItem = originalFollowedItem, !self.followedUsers.contains(where: {$0.name == name}) {
+                        let updatedItem = FollowListItem(subscribed: 0, name: originalItem.name, mark: originalItem.mark, followCreated: originalItem.followCreated, itemId: originalItem.itemId, thumb: originalItem.thumb, preview: originalItem.preview, lastPost: originalItem.lastPost)
+                        await MainActor.run { self.followedUsers.append(updatedItem); self.followedUsers.sort{$0.name.lowercased() < $1.name.lowercased()} }
+                    }
+                }
+            } else {
+                AuthService.logger.warning("API indicated unsubscribe action for \(name) did not result in subscribed=false. Response: \(String(describing: response))")
+                if wasSubscribed {
+                    await MainActor.run { self.subscribedUsernames.insert(name) }
+                     if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
+                        let oldItem = self.followedUsers[index]
+                        let newItem = FollowListItem(subscribed: 1, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
+                        await MainActor.run { self.followedUsers[index] = newItem }
+                    } else if !keepFollow, let originalItem = originalFollowedItem {
+                        let updatedItem = FollowListItem(subscribed: 1, name: originalItem.name, mark: originalItem.mark, followCreated: originalItem.followCreated, itemId: originalItem.itemId, thumb: originalItem.thumb, preview: originalItem.preview, lastPost: originalItem.lastPost)
+                        await MainActor.run { self.followedUsers.append(updatedItem); self.followedUsers.sort{$0.name.lowercased() < $1.name.lowercased()} }
+                    }
+                }
+            }
+        } catch {
+            AuthService.logger.error("Error unsubscribing from notifications for user \(name): \(error.localizedDescription)")
+            if wasSubscribed {
+                await MainActor.run { self.subscribedUsernames.insert(name) }
+                 if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
+                    let oldItem = self.followedUsers[index]
+                    let newItem = FollowListItem(subscribed: 1, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
+                    await MainActor.run { self.followedUsers[index] = newItem }
+                } else if !keepFollow, let originalItem = originalFollowedItem {
+                     let updatedItem = FollowListItem(subscribed: 1, name: originalItem.name, mark: originalItem.mark, followCreated: originalItem.followCreated, itemId: originalItem.itemId, thumb: originalItem.thumb, preview: originalItem.preview, lastPost: originalItem.lastPost)
+                     await MainActor.run { self.followedUsers.append(updatedItem); self.followedUsers.sort{$0.name.lowercased() < $1.name.lowercased()} }
+                }
+            }
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired { await logout() }
+        }
+        saveFollowedUsersToUserDefaults()
+        await MainActor.run { self.isModifyingFollowStatus[name] = nil }
+    }
+
+    private func saveFollowedUsersToUserDefaults() {
+        do {
+            let data = try JSONEncoder().encode(self.followedUsers)
+            UserDefaults.standard.set(data, forKey: followedUsersCacheKey)
+            AuthService.logger.trace("Saved \(self.followedUsers.count) followed users to UserDefaults.")
+        } catch {
+            AuthService.logger.error("Failed to encode and save followed users: \(error.localizedDescription)")
+        }
+    }
+
+    private func loadFollowedUsersFromUserDefaults() {
+        guard let data = UserDefaults.standard.data(forKey: followedUsersCacheKey) else {
+            AuthService.logger.debug("No followed users found in UserDefaults.")
+            return
+        }
+        do {
+            let loadedList = try JSONDecoder().decode([FollowListItem].self, from: data)
+            self.followedUsers = loadedList.sorted { $0.name.lowercased() < $1.name.lowercased() }
+            self.subscribedUsernames = Set(self.followedUsers.filter { $0.isSubscribed }.map { $0.name })
+            AuthService.logger.info("Loaded \(self.followedUsers.count) followed users from UserDefaults. Subscribed: \(self.subscribedUsernames.count)")
+        } catch {
+            AuthService.logger.error("Failed to decode followed users from UserDefaults: \(error.localizedDescription)")
+        }
+    }
+    // --- END FOLLOW MANAGEMENT ---
+
 
     func performVote(itemId: Int, voteType: Int) async {
         guard isLoggedIn, let nonce = userNonce else {
@@ -865,6 +1132,8 @@ class AuthService: ObservableObject {
             self.unreadFollowCount = 0
             self.unreadPrivateMessageCount = 0
             self.unreadInboxTotal = 0
+            self.followedUsers = []
+            self.subscribedUsernames = []
         }
         await clearCookies()
         _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey)
@@ -874,9 +1143,10 @@ class AuthService: ObservableObject {
         UserDefaults.standard.removeObject(forKey: favoritedCommentsKey)
         UserDefaults.standard.removeObject(forKey: userCommentVotesKey)
         UserDefaults.standard.removeObject(forKey: userTagVotesKey)
+        UserDefaults.standard.removeObject(forKey: followedUsersCacheKey)
         
         await self.appSettings.clearFavoritesCache(username: usernameToClearCache, collectionId: collectionIdToClearCache)
-        AuthService.logger.info("Cleared all session data including cookies, keychain entries, and user defaults for votes/favorites.")
+        AuthService.logger.info("Cleared all session data including cookies, keychain entries, and user defaults for votes/favorites/follows.")
     }
 
     private func clearCookies() async {

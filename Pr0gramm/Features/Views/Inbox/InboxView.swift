@@ -24,22 +24,35 @@ struct ProfileNavigationValue: Hashable, Identifiable {
 
 enum InboxViewMessageType: Int, CaseIterable, Identifiable {
     case comments = 1
+    case stelzes = 4 // Intern "follow" oder "follows"
     case notifications = 2
     case privateMessages = 3
 
+
     var id: Int { self.rawValue }
 
-    var displayName: String {
+    var baseDisplayName: String {
         switch self {
         case .comments: return "Kommentare"
+        case .stelzes: return "Stelzes"
         case .notifications: return "System"
         case .privateMessages: return "Privat"
         }
     }
     
-    var apiTypeStringForFilter: String? {
+    @MainActor
+    func displayNameForPicker(authService: AuthService) -> String {
+        let count = self.unreadCount(from: authService)
+        if count > 0 {
+            return "\(baseDisplayName) (\(count))"
+        }
+        return baseDisplayName
+    }
+    
+    var apiTypeStringForFilter: String? { // Wird für direkten API-Call nicht verwendet, aber für Konsistenz
         switch self {
         case .comments: return "comment"
+        case .stelzes: return "follow" // API liefert vielleicht "follow" oder "follows"
         case .notifications: return "notification"
         case .privateMessages: return nil
         }
@@ -50,6 +63,8 @@ enum InboxViewMessageType: Int, CaseIterable, Identifiable {
         switch self {
         case .comments:
             return authService.unreadCommentCount
+        case .stelzes:
+            return authService.unreadFollowCount
         case .notifications:
             return authService.unreadSystemNotificationCount
         case .privateMessages:
@@ -57,46 +72,6 @@ enum InboxViewMessageType: Int, CaseIterable, Identifiable {
         }
     }
 }
-
-// --- NEW: Label View für den Picker ---
-@MainActor
-struct InboxPickerSegmentLabel: View {
-    let type: InboxViewMessageType
-    let isSelected: Bool
-    @EnvironmentObject var authService: AuthService // Zugriff auf AuthService für die Zähler
-
-    private var unreadCount: Int {
-        type.unreadCount(from: authService)
-    }
-
-    private var displayText: String {
-        if unreadCount > 0 {
-            return "\(type.displayName) (\(unreadCount))"
-        }
-        return type.displayName
-    }
-
-    private var textColor: Color {
-        if isSelected {
-            // Wenn ausgewählt, verwendet der Picker normalerweise eine Kontrastfarbe (oft weiß oder schwarz, je nach Akzentfarbe)
-            // Wir können versuchen, dies zu respektieren oder eine feste Farbe zu setzen.
-            // Für den Standard-SegmentedControl ist es am besten, die Systemfarbe zu lassen oder .primary/.white.
-            return Color(UIColor.label) // Passt sich Hell/Dunkel-Modus an, aber Akzentfarbe überschreibt es oft.
-                                        // Oder .white, wenn der Picker-Hintergrund immer dunkel ist.
-        } else {
-            // Wenn nicht ausgewählt und ungelesen, dann rot. Sonst Standard.
-            return unreadCount > 0 ? .red : Color(UIColor.label)
-        }
-    }
-
-    var body: some View {
-        Text(displayText)
-            .foregroundColor(textColor)
-            // Wichtig: .tag hier im Picker-Loop setzen, nicht im Label selbst,
-            // damit der Picker die Auswahl korrekt verwalten kann.
-    }
-}
-// --- END NEW ---
 
 
 struct InboxView: View {
@@ -150,18 +125,16 @@ struct InboxView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // --- MODIFIED: Standard-Picker mit custom Label View ---
                 Picker("Nachrichten Typ", selection: $selectedMessageType) {
                     ForEach(InboxViewMessageType.allCases) { type in
-                        InboxPickerSegmentLabel(type: type, isSelected: selectedMessageType == type)
-                            .tag(type) // Das .tag muss hier sein!
+                        Text(type.displayNameForPicker(authService: authService))
+                            .tag(type)
                     }
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
                 .padding(.vertical, 8)
-                // --- END MODIFICATION ---
-
+                
                 contentView
             }
             .navigationTitle("Nachrichten")
@@ -205,6 +178,7 @@ struct InboxView: View {
                  UserProfileSheetView(username: navValue.username)
                       .environmentObject(settings)
                       .environmentObject(authService)
+                      .environmentObject(playerManager)
             }
             .navigationDestination(item: $conversationNavigationValue) { navValue in
                 ConversationDetailView(partnerUsername: navValue.conversationPartnerName)
@@ -255,7 +229,7 @@ struct InboxView: View {
             if selectedMessageType == .privateMessages {
                 currentRefreshTask = Task { await refreshConversations() }
             } else {
-                currentRefreshTask = Task { await refreshMessages() }
+                currentRefreshTask = Task { await refreshMessages(forType: selectedMessageType) }
             }
         } else {
             messages = []
@@ -297,33 +271,40 @@ struct InboxView: View {
                     self.conversationNavigationValue = ConversationNavigationValue(conversationPartnerName: username)
                 }
             )
-        case .comments, .notifications:
-            generalMessagesListView
+        case .comments, .notifications, .stelzes:
+            buildGeneralMessagesList()
         }
     }
 
-    private var generalMessagesListView: some View {
-        Group {
-            if isLoading && messages.isEmpty {
-                ProgressView("Lade Nachrichten...").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = errorMessage, messages.isEmpty, !isCancellationError(error) {
-                 ContentUnavailableView {
-                     Label("Fehler", systemImage: "exclamationmark.triangle")
-                 } description: {
-                     Text(error)
-                 } actions: {
-                     Button("Erneut versuchen") {
-                         currentRefreshTask?.cancel()
-                         currentLoadMoreTask?.cancel()
-                         currentRefreshTask = Task { await refreshMessages() }
-                    }
-                 }
-                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if messages.isEmpty && !isLoading && errorMessage == nil {
-                Text("Keine Nachrichten für Filter '\(selectedMessageType.displayName)' vorhanden.")
-                    .foregroundColor(.secondary).padding().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List {
+    @ViewBuilder
+    private func buildGeneralMessagesList() -> some View {
+        if isLoading && messages.isEmpty {
+            ProgressView("Lade Nachrichten...").frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = errorMessage, messages.isEmpty, !isCancellationError(error) {
+             ContentUnavailableView {
+                 Label("Fehler", systemImage: "exclamationmark.triangle")
+             } description: {
+                 Text(error)
+             } actions: {
+                 Button("Erneut versuchen") {
+                     currentRefreshTask?.cancel()
+                     currentLoadMoreTask?.cancel()
+                     currentRefreshTask = Task { await refreshMessages(forType: selectedMessageType) }
+                }
+             }
+             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List {
+                if messages.isEmpty && !isLoading && !isLoadingMore && errorMessage == nil {
+                     Section {
+                         Text(emptyListMessage())
+                             .foregroundColor(.secondary)
+                             .padding()
+                             .multilineTextAlignment(.center)
+                             .frame(maxWidth: .infinity, alignment: .center)
+                             .listRowSeparator(.hidden)
+                     }
+                } else {
                     ForEach(messages) { message in
                         InboxMessageRow(message: message)
                             .contentShape(Rectangle())
@@ -337,44 +318,53 @@ struct InboxView: View {
                         .listRowInsets(EdgeInsets(top: 10, leading: 15, bottom: 10, trailing: 15))
                         .id(message.id)
                         .onAppear {
-                            if messages.count >= 2 && message.id == messages[messages.count - 2].id && canLoadMore && !isLoadingMore {
-                                InboxView.logger.info("End trigger appeared for message ID: \(message.id).")
-                                currentLoadMoreTask?.cancel()
-                                currentLoadMoreTask = Task { await loadMoreMessages() }
-                            } else if messages.count == 1 && message.id == messages.first?.id && canLoadMore && !isLoadingMore {
-                                InboxView.logger.info("End trigger appeared for the only message ID: \(message.id).")
-                                currentLoadMoreTask?.cancel()
-                                currentLoadMoreTask = Task { await loadMoreMessages() }
+                            if !messages.isEmpty && message.id == messages.last?.id && canLoadMore && !isLoadingMore {
+                                 InboxView.logger.info("End trigger (last item) appeared for message ID: \(message.id).")
+                                 currentLoadMoreTask?.cancel()
+                                 currentLoadMoreTask = Task { await loadMoreMessages(forType: selectedMessageType) }
+                            } else if messages.count > 5 && messages.count < 100 && messages.firstIndex(where: {$0.id == message.id}) == (messages.count - 5) && canLoadMore && !isLoadingMore {
+                                 InboxView.logger.info("End trigger (near end) appeared for message ID: \(message.id).")
+                                 currentLoadMoreTask?.cancel()
+                                 currentLoadMoreTask = Task { await loadMoreMessages(forType: selectedMessageType) }
                             }
                         }
                     }
+                }
 
-                    if isLoadingMore {
-                        HStack { Spacer(); ProgressView("Lade mehr..."); Spacer() }
-                            .listRowSeparator(.hidden).listRowInsets(EdgeInsets())
-                    }
-                }
-                .listStyle(.plain)
-                .refreshable {
-                    currentRefreshTask?.cancel()
-                    currentLoadMoreTask?.cancel()
-                    currentRefreshTask = Task { await refreshMessages() }
+                if isLoadingMore {
+                    HStack { Spacer(); ProgressView("Lade mehr..."); Spacer() }
+                        .listRowSeparator(.hidden).listRowInsets(EdgeInsets())
                 }
             }
+            .listStyle(.plain)
+            .refreshable {
+                currentRefreshTask?.cancel()
+                currentLoadMoreTask?.cancel()
+                currentRefreshTask = Task { await refreshMessages(forType: selectedMessageType) }
+            }
+            .environment(\.openURL, OpenURLAction { url in
+                if let (itemID, commentID) = parsePr0grammLink(url: url) {
+                    InboxView.logger.info("Pr0gramm link tapped in inbox message, attempting to preview item ID: \(itemID), commentID: \(commentID ?? -1)")
+                    self.previewLinkTargetFromMessage = PreviewLinkTarget(itemID: itemID, commentID: commentID)
+                    return .handled
+                } else {
+                    InboxView.logger.info("Non-pr0gramm link tapped in inbox: \(url). Opening in system browser.")
+                    return .systemAction
+                }
+            })
         }
-        .environment(\.openURL, OpenURLAction { url in
-            if let (itemID, commentID) = parsePr0grammLink(url: url) {
-                InboxView.logger.info("Pr0gramm link tapped in inbox message, attempting to preview item ID: \(itemID), commentID: \(commentID ?? -1)")
-                self.previewLinkTargetFromMessage = PreviewLinkTarget(itemID: itemID, commentID: commentID)
-                return .handled
-            } else {
-                InboxView.logger.info("Non-pr0gramm link tapped in inbox: \(url). Opening in system browser.")
-                return .systemAction
-            }
-        })
+    }
+        
+    private func emptyListMessage() -> String {
+        let tabName = selectedMessageType.baseDisplayName
+        switch selectedMessageType {
+        case .stelzes:
+            return "\(authService.currentUser?.name ?? "Du") folgst niemandem oder die Posts der gefolgten User entsprechen nicht den Filtern."
+        default:
+            return "Keine \(tabName.lowercased()) vorhanden."
+        }
     }
     
-
     private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
 
@@ -428,31 +418,25 @@ struct InboxView: View {
             return
         }
         clearErrors()
-        InboxView.logger.info("Handling tap for message ID: \(message.id), Type: \(message.type ?? "nil")")
+        InboxView.logger.info("Handling tap for message ID: \(message.id), Type: \(message.type ?? "nil"), ItemID: \(message.itemId ?? -1)")
 
-        switch selectedMessageType {
-        case .comments:
-            if message.type == "comment", let itemId = message.itemId {
-                InboxView.logger.info("Comment message tapped, preparing navigation for item \(itemId), target comment ID: \(message.id)")
-                await prepareAndNavigateToItem(itemId, targetCommentID: message.id)
-            } else {
-                InboxView.logger.warning("Tapped on message with type '\(message.type ?? "nil")' while on Comments tab. ItemId: \(message.itemId ?? -1)")
-            }
-        case .notifications:
-            if message.type == "follow", let senderName = message.name, !senderName.isEmpty {
-                InboxView.logger.info("Follow message tapped on System tab, setting profileNavigationValue: \(senderName)")
+        if message.type == "comment", let itemId = message.itemId {
+            InboxView.logger.info("Comment message tapped, preparing navigation for item \(itemId), target comment ID: \(message.id)")
+            await prepareAndNavigateToItem(itemId, targetCommentID: message.id)
+        } else if message.type == "follow" || message.type == "follows", let itemId = message.itemId {
+            InboxView.logger.info("Follow message (with item, type: \(message.type ?? "")) tapped, preparing navigation for item \(itemId). User: \(message.name ?? "Unbekannt")")
+            await prepareAndNavigateToItem(itemId, targetCommentID: nil)
+        } else if message.type == "follow" || message.type == "follows" {
+             if let senderName = message.name, !senderName.isEmpty {
+                InboxView.logger.info("Follow message (no item, fallback to profile, type: \(message.type ?? "")) tapped, setting profileNavigationValue: \(senderName)")
                 self.profileNavigationValue = ProfileNavigationValue(username: senderName)
-            } else if message.type == "notification" {
-                 InboxView.logger.debug("Tapped on a 'notification' type message on System tab. No specific navigation action defined.")
-            } else if message.type == "comment", let itemId = message.itemId {
-                InboxView.logger.warning("Comment message tapped while on System tab, preparing navigation for item \(itemId), target comment ID: \(message.id)")
-                await prepareAndNavigateToItem(itemId, targetCommentID: message.id)
+            } else {
+                 InboxView.logger.warning("Follow message (type: \(message.type ?? "")) tapped but no itemId and no senderName for profile navigation.")
             }
-            else {
-                InboxView.logger.warning("Tapped on message with type '\(message.type ?? "nil")' while on System tab. This might be an unexpected message type for this tab.")
-            }
-        case .privateMessages:
-            InboxView.logger.error("handleMessageTap called for privateMessages type, which should be handled by ConversationsListView.")
+        } else if message.type == "notification" {
+             InboxView.logger.debug("Tapped on a 'notification' type message. No specific navigation action defined.")
+        } else {
+            InboxView.logger.warning("Tapped on message with unhandled type '\(message.type ?? "nil")' or missing itemId. ItemId: \(message.itemId ?? -1)")
         }
     }
 
@@ -507,14 +491,14 @@ struct InboxView: View {
     }
 
     @MainActor
-    func refreshMessages() async {
-        guard selectedMessageType != .privateMessages else {
+    func refreshMessages(forType type: InboxViewMessageType) async {
+        guard type != .privateMessages else {
             InboxView.logger.info("refreshMessages called, but privateMessages selected. Skipping general refresh.")
             return
         }
         currentRefreshTask?.cancel()
 
-        InboxView.logger.info("Refreshing inbox messages for selected type: \(selectedMessageType.displayName)...")
+        InboxView.logger.info("Refreshing inbox messages for type: \(type.baseDisplayName)...")
 
         guard authService.isLoggedIn else {
             InboxView.logger.warning("Cannot refresh inbox: User not logged in.")
@@ -527,45 +511,46 @@ struct InboxView: View {
         self.isLoading = true; self.errorMessage = nil
         self.messages = []
 
+
         currentRefreshTask = Task {
             defer { Task { @MainActor in self.isLoading = false } }
-
             do {
                 let response: InboxResponse
-                switch selectedMessageType {
+                switch type {
                 case .comments:
                     response = try await apiService.fetchInboxCommentsApi(older: nil)
+                case .stelzes:
+                    response = try await apiService.fetchInboxFollowsApi(older: nil)
                 case .notifications:
                     response = try await apiService.fetchInboxNotificationsApi(older: nil)
-                case .privateMessages:
-                    InboxView.logger.error("refreshMessages called unexpectedly for .privateMessages type.")
+                default:
+                    InboxView.logger.error("refreshMessages called with unhandled type: \(type.baseDisplayName)")
+                    await MainActor.run { self.canLoadMore = false; self.messages = [] }
                     return
                 }
                 
                 guard !Task.isCancelled else {
-                    InboxView.logger.info("Refresh task for \(selectedMessageType.displayName) was cancelled during API call.")
+                    InboxView.logger.info("Refresh task for \(type.baseDisplayName) was cancelled during API call.")
                     return
                 }
-
-                let fetchedMessageTypes = Dictionary(grouping: response.messages, by: { $0.type ?? "unknown" }).mapValues { $0.count }
-                InboxView.logger.debug("API Response for \(selectedMessageType.displayName): Fetched \(response.messages.count) messages. Types: \(fetchedMessageTypes). AtEnd: \(response.atEnd)")
 
                 await MainActor.run {
                     self.messages = response.messages.sorted { $0.created > $1.created }
                     self.canLoadMore = !response.atEnd
                 }
-                InboxView.logger.info("Fetched \(response.messages.count) initial messages for tab \(selectedMessageType.displayName). AtEnd: \(response.atEnd)")
+                InboxView.logger.info("Fetched \(response.messages.count) initial messages for type \(type.baseDisplayName). AtEnd: \(response.atEnd)")
 
             } catch is CancellationError {
-                InboxView.logger.info("API fetch for \(selectedMessageType.displayName) cancelled.")
+                InboxView.logger.info("API fetch for \(type.baseDisplayName) cancelled.")
+                 await MainActor.run { self.messages = [] }
             } catch let error as URLError where error.code == .userAuthenticationRequired {
-                InboxView.logger.error("Inbox API fetch failed for \(selectedMessageType.displayName): Authentication required.")
+                InboxView.logger.error("Inbox API fetch failed for \(type.baseDisplayName): Authentication required.")
                 await MainActor.run {
                     self.errorMessage = "Sitzung abgelaufen."; self.messages = []; self.canLoadMore = false
                 }
                 await authService.logout()
             } catch {
-                InboxView.logger.error("Inbox API fetch failed for \(selectedMessageType.displayName): \(error.localizedDescription)")
+                InboxView.logger.error("Inbox API fetch failed for \(type.baseDisplayName): \(error.localizedDescription)")
                 await MainActor.run {
                     self.errorMessage = "Fehler: \(error.localizedDescription)"; self.messages = []; self.canLoadMore = false
                 }
@@ -574,8 +559,8 @@ struct InboxView: View {
     }
 
     @MainActor
-    func loadMoreMessages() async {
-        guard selectedMessageType != .privateMessages else {
+    func loadMoreMessages(forType type: InboxViewMessageType) async {
+         guard type != .privateMessages else {
             InboxView.logger.info("loadMoreMessages called, but privateMessages selected. Skipping.")
             return
         }
@@ -584,67 +569,65 @@ struct InboxView: View {
         guard authService.isLoggedIn else { return }
         guard !isLoadingMore && canLoadMore && !isLoading else { return }
         guard let oldestMessageTimestamp = messages.last?.created else {
-             InboxView.logger.warning("Cannot load more messages for \(selectedMessageType.displayName): No last message found.")
+             InboxView.logger.warning("Cannot load more messages for \(type.baseDisplayName): No last message found.")
              self.canLoadMore = false; return
         }
 
-        InboxView.logger.info("--- Starting loadMoreMessages for \(selectedMessageType.displayName) older than timestamp \(oldestMessageTimestamp) ---")
+        InboxView.logger.info("--- Starting loadMoreMessages for \(type.baseDisplayName) older than timestamp \(oldestMessageTimestamp) ---")
         self.isLoadingMore = true
 
         currentLoadMoreTask = Task {
-            defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; InboxView.logger.info("--- Finished loadMoreMessages for \(selectedMessageType.displayName) ---") } } }
-
+            defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; InboxView.logger.info("--- Finished loadMoreMessages for \(type.baseDisplayName) ---") } } }
             do {
                 let response: InboxResponse
-                switch selectedMessageType {
+                switch type {
                 case .comments:
                     response = try await apiService.fetchInboxCommentsApi(older: oldestMessageTimestamp)
+                case .stelzes:
+                    response = try await apiService.fetchInboxFollowsApi(older: oldestMessageTimestamp)
                 case .notifications:
                     response = try await apiService.fetchInboxNotificationsApi(older: oldestMessageTimestamp)
-                case .privateMessages:
-                    InboxView.logger.error("loadMoreMessages called unexpectedly for .privateMessages type.")
+                default:
+                    InboxView.logger.error("loadMoreMessages called with unhandled type: \(type.baseDisplayName)")
+                    self.canLoadMore = false
                     return
                 }
 
                 guard !Task.isCancelled else {
-                    InboxView.logger.info("LoadMore task for \(selectedMessageType.displayName) was cancelled during API call.")
+                    InboxView.logger.info("LoadMore task for \(type.baseDisplayName) was cancelled during API call.")
                     return
                 }
                 guard self.isLoadingMore else {
-                    InboxView.logger.info("Load more for \(selectedMessageType.displayName) cancelled before UI update (isLoadingMore became false).");
+                    InboxView.logger.info("Load more for \(type.baseDisplayName) cancelled before UI update (isLoadingMore became false).");
                     return
                 }
                 
-                let fetchedMessageTypes = Dictionary(grouping: response.messages, by: { $0.type ?? "unknown" }).mapValues { $0.count }
-                InboxView.logger.debug("API Response for \(selectedMessageType.displayName) (loadMore): Fetched \(response.messages.count) messages. Types: \(fetchedMessageTypes). AtEnd: \(response.atEnd)")
-
                 await MainActor.run {
                     if response.messages.isEmpty {
-                        InboxView.logger.info("Reached end of inbox feed for \(selectedMessageType.displayName).")
+                        InboxView.logger.info("Reached end of inbox feed for \(type.baseDisplayName).")
                         self.canLoadMore = false
                     } else {
                         let currentIDs = Set(self.messages.map { $0.id })
                         let uniqueNewMessages = response.messages.filter { !currentIDs.contains($0.id) }
 
                         if uniqueNewMessages.isEmpty {
-                            InboxView.logger.warning("All loaded messages for \(selectedMessageType.displayName) were duplicates.")
+                            InboxView.logger.warning("All loaded messages for \(type.baseDisplayName) were duplicates.")
                             self.canLoadMore = !response.atEnd
                         } else {
-                            self.messages.append(contentsOf: uniqueNewMessages)
-                            self.messages.sort { $0.created > $1.created }
-                            InboxView.logger.info("Appended \(uniqueNewMessages.count) unique messages for \(selectedMessageType.displayName). Total: \(self.messages.count)")
+                            self.messages.append(contentsOf: uniqueNewMessages.sorted { $0.created > $1.created })
+                            InboxView.logger.info("Appended \(uniqueNewMessages.count) unique messages for \(type.baseDisplayName). Total: \(self.messages.count)")
                             self.canLoadMore = !response.atEnd
                         }
                     }
                 }
             } catch is CancellationError {
-                InboxView.logger.info("Load more API call for \(selectedMessageType.displayName) cancelled.")
+                InboxView.logger.info("Load more API call for \(type.baseDisplayName) cancelled.")
             } catch let error as URLError where error.code == .userAuthenticationRequired {
-                InboxView.logger.error("Inbox API fetch failed during loadMore for \(selectedMessageType.displayName): Authentication required.")
+                InboxView.logger.error("Inbox API fetch failed during loadMore for \(type.baseDisplayName): Authentication required.")
                 await MainActor.run { self.errorMessage = "Sitzung abgelaufen."; self.canLoadMore = false }
                 await authService.logout()
             } catch {
-                InboxView.logger.error("Inbox API fetch failed during loadMore for \(selectedMessageType.displayName): \(error.localizedDescription)")
+                InboxView.logger.error("Inbox API fetch failed during loadMore for \(type.baseDisplayName): \(error.localizedDescription)")
                 guard self.isLoadingMore else { return }
                 await MainActor.run {
                     if self.messages.isEmpty { self.errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" }
@@ -653,7 +636,7 @@ struct InboxView: View {
             }
         }
     }
-    
+        
     @MainActor
     func refreshConversations() async {
         currentRefreshTask?.cancel()
@@ -699,10 +682,8 @@ struct InboxView: View {
     }
 }
 
-
 struct InboxConversationRow: View {
     let conversation: InboxConversation
-
     private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -749,7 +730,6 @@ struct InboxConversationRow: View {
 
 struct InboxMessageRow: View {
     let message: InboxMessage
-
     private static let relativeDateFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -761,31 +741,50 @@ struct InboxMessageRow: View {
         return Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date())
     }
 
-    private var title: String {
-        switch message.type {
+    // Enthält jetzt keine Präfixe mehr
+    private var titleText: String {
+        let messageType = message.type?.lowercased()
+        switch messageType {
         case "comment": return message.name ?? "Kommentar"
         case "notification": return "Systemnachricht"
-        case "message": return message.name ?? "Nachricht"
-        case "follow": return "\(message.name ?? "Jemand") folgt dir"
+        case "message": return message.name ?? "Nachricht" // Name des Absenders bei PMs
+        case "follow", "follows": return message.name ?? "Unbekannter User" // Username des Posters
         default: return "Unbekannt (\(message.type ?? "N/A"))"
         }
     }
+    
+    private var senderNameText: String? {
+        // Für die neue Struktur ist diese Property nicht mehr direkt nötig,
+        // da der Username jetzt Teil von titleText ist oder direkt im Layout platziert wird.
+        // Wir behalten sie aber, falls wir sie später für eine andere Logik brauchen.
+        let messageType = message.type?.lowercased()
+        if messageType == "follow" || messageType == "follows" || messageType == "comment" || messageType == "message" {
+            return message.name
+        }
+        return nil
+    }
 
     private var titleOrMarkColor: Color {
-        if message.type == "comment" || message.type == "follow" {
+        let messageType = message.type?.lowercased()
+        if messageType == "comment" || messageType == "follow" || messageType == "follows" || messageType == "message" {
             return Mark(rawValue: message.mark ?? -1).displayColor
         }
         return .secondary
     }
 
     private var attributedMessageContent: AttributedString {
-        var attributedString = AttributedString(message.message ?? "")
+        let messageType = message.type?.lowercased()
+        guard messageType != "follow" && messageType != "follows", let msgText = message.message, !msgText.isEmpty else {
+            return AttributedString("")
+        }
+        
+        var attributedString = AttributedString(msgText)
         let baseUIFont = UIFont.uiFont(from: UIConstants.subheadlineFont)
         attributedString.font = baseUIFont
 
         do {
             let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-            let matches = detector.matches(in: message.message ?? "", options: [], range: NSRange(location: 0, length: (message.message ?? "").utf16.count))
+            let matches = detector.matches(in: msgText, options: [], range: NSRange(location: 0, length: msgText.utf16.count))
             for match in matches {
                 guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
                 attributedString[range].link = url
@@ -800,41 +799,53 @@ struct InboxMessageRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            if message.type == "comment", let thumbUrl = message.itemThumbnailUrl {
+            let messageType = message.type?.lowercased()
+            // Thumbnail
+            if (messageType == "comment" || messageType == "follow" || messageType == "follows"), let thumbUrl = message.itemThumbnailUrl {
                 KFImage(thumbUrl)
                     .resizable().placeholder { Color.gray.opacity(0.1) }
                     .aspectRatio(contentMode: .fill).frame(width: 50, height: 50)
                     .clipped().cornerRadius(4)
-            } else if message.type == "follow" {
-                 Image(systemName: "person.crop.circle.fill")
-                     .resizable().scaledToFit().frame(width: 50, height: 50)
-                     .foregroundColor(.secondary)
             } else {
                  Image(systemName: "bell.circle.fill")
                     .resizable().scaledToFit().frame(width: 50, height: 50)
                     .foregroundColor(.secondary)
             }
 
+            // Inhalt
             VStack(alignment: .leading, spacing: 4) {
+                // Erste Zeile: Titel/Name und Zeitstempel
                 HStack {
-                     if message.type != "notification" && message.type != "follow" {
+                    // Mark-Farbe, falls relevant
+                    if messageType == "comment" || messageType == "follow" || messageType == "follows" || messageType == "message" {
                          Circle().fill(titleOrMarkColor)
                              .frame(width: 8, height: 8)
                              .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
                      }
-                     Text(title).font(.headline).lineLimit(1)
+                     Text(titleText).font(.headline).lineLimit(1) // Zeigt jetzt den Namen oder "Systemnachricht"
                      Spacer()
                      Text(relativeTime).font(.caption).foregroundColor(.secondary)
-                     if message.read == 0 {
+                     // Ungelesen-Indikator (nicht für Stelzes)
+                     if message.read == 0 && messageType != "follow" && messageType != "follows" {
                          Circle().fill(Color.accentColor).frame(width: 8, height: 8).padding(.leading, 4)
                      }
                 }
-                if message.type != "follow" || !(message.message?.isEmpty ?? true) {
+                
+                // Zweite Zeile (optional): Nachrichtentext
+                if messageType != "follow" && messageType != "follows", let msg = message.message, !msg.isEmpty {
                     Text(attributedMessageContent)
                         .font(.subheadline)
                         .foregroundColor(.primary)
-                        .lineLimit(nil)
+                        .lineLimit(messageType == "notification" ? 3 : nil)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if messageType == "follow" || messageType == "follows" {
+                     // Für Stelzes: "hat einen neuen Post" oder ähnliches könnte hier stehen,
+                     // aber da es im Titel schon impliziert ist, lassen wir es leer für mehr Platz.
+                     // Alternativ: Titel des Posts, falls verfügbar und gewünscht.
+                     // Aktuell wird die Zeile einfach leer sein, was den Fokus auf den Usernamen legt.
+                    Text("hat einen neuen Post") // Als Beispiel, kann auch weggelassen werden.
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
                 }
             }
         }
@@ -842,156 +853,6 @@ struct InboxMessageRow: View {
     }
 }
 
-struct ConversationMessageRow: View {
-    let message: PrivateMessage
-    let isSentByCurrentUser: Bool
-    let currentUserMark: Int
-    let partnerMark: Int
-    let partnerName: String
-
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ConversationMessageRowGlobal")
-    @EnvironmentObject var authService: AuthService
-
-    private var backgroundColor: Color {
-        isSentByCurrentUser ? Color.accentColor : Color(uiColor: .systemGray5)
-    }
-
-    private var textColorForBubble: Color {
-        isSentByCurrentUser ? .white : .primary
-    }
-    
-    private var senderDisplayName: String {
-        return message.name
-    }
-    private var senderMarkValue: Int {
-        return message.mark
-    }
-    
-    private func getInitials(from name: String) -> String {
-        let parts = name.uppercased().components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        var initials = ""
-        if let first = parts.first?.first {
-            initials.append(first)
-        }
-        if parts.count > 1, let second = parts.last?.first {
-            initials.append(second)
-        } else if initials.count == 1 && (parts.first?.count ?? 0) > 1, let secondChar = parts.first?.dropFirst().first {
-             initials.append(secondChar)
-        }
-        if initials.count > 2 {
-            initials = String(initials.prefix(2))
-        }
-        if initials.count == 1 && (parts.first?.count ?? 0) == 1 {
-        }
-        return initials.isEmpty ? "?" : initials
-    }
-
-    private func isColorLight(_ color: Color) -> Bool {
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        guard UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a) else {
-            return false
-        }
-        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        return luminance > 0.6
-    }
-
-    @ViewBuilder
-    private var avatarView: some View {
-        let nameForAvatar = isSentByCurrentUser ? (authService.currentUser?.name ?? "Ich") : partnerName
-        let initials = getInitials(from: nameForAvatar)
-        let avatarBackgroundColor = Mark(rawValue: senderMarkValue).displayColor
-        let initialsColor: Color = isColorLight(avatarBackgroundColor) ? .black : .white
-        
-        ZStack {
-            Circle()
-                .fill(avatarBackgroundColor)
-                .frame(width: 36, height: 36)
-                .overlay(Circle().stroke(Color.secondary.opacity(0.4), lineWidth: 0.5))
-            Text(initials)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(initialsColor)
-        }
-    }
-
-    private var attributedMessageContent: AttributedString {
-        var attributedString = AttributedString(message.message ?? "")
-        let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont)
-        attributedString.font = baseUIFont
-        attributedString.foregroundColor = textColorForBubble
-
-        do {
-            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-            let matches = detector.matches(in: message.message ?? "", options: [], range: NSRange(location: 0, length: (message.message ?? "").utf16.count))
-            for match in matches {
-                guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
-                attributedString[range].link = url
-                attributedString[range].foregroundColor = isSentByCurrentUser ? .white.opacity(0.85) : Color.accentColor
-                attributedString[range].underlineStyle = .single
-                attributedString[range].font = baseUIFont
-            }
-        } catch {
-            Self.logger.error("Error creating NSDataDetector in ConversationMessageRow: \(error.localizedDescription)")
-        }
-        return attributedString
-    }
-
-    private func formattedTimestamp(for created: Int) -> String {
-        let date = Date(timeIntervalSince1970: TimeInterval(created))
-        let calendar = Calendar.current
-
-        let timeFormatter = DateFormatter()
-        timeFormatter.dateFormat = "HH:mm"
-        let timeString = timeFormatter.string(from: date)
-
-        if calendar.isDateInToday(date) {
-            return timeString
-        } else if calendar.isDateInYesterday(date) {
-            return "Gestern, \(timeString)"
-        } else {
-            let dateFormatter = DateFormatter()
-            if calendar.isDate(date, equalTo: Date(), toGranularity: .year) {
-                dateFormatter.dateFormat = "d. MMMM"
-            } else {
-                dateFormatter.dateFormat = "dd.MM.yy"
-            }
-            let dateString = dateFormatter.string(from: date)
-            return "\(dateString), \(timeString)"
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 0) {
-            if !isSentByCurrentUser {
-                avatarView
-                    .padding(.trailing, 6)
-            } else {
-                Spacer(minLength: 36 + 6)
-            }
-
-            VStack(alignment: isSentByCurrentUser ? .trailing : .leading, spacing: 2) {
-                Text(attributedMessageContent)
-                    .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-                    .background(backgroundColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
-                    .frame(minWidth: 40)
-
-                HStack(spacing: 4) {
-                    Text(formattedTimestamp(for: message.created))
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                }
-                .padding(.horizontal, 0)
-                .padding(.top, 2)
-            }
-            
-            if isSentByCurrentUser {
-                 Spacer().frame(width: 36 + 6, height: 0)
-            } else {
-                Spacer(minLength: 36 + 6)
-            }
-        }
-    }
-}
 
 #Preview {
     InboxPreviewWrapper()
@@ -1018,7 +879,7 @@ private struct InboxPreviewWrapper: View {
         
         let msg1 = InboxMessage(id: 1, type: "comment", itemId: 123, thumb: "thumb1.jpg", flags: 1, name: "UserA", mark: 2, senderId: 101, score: 5, created: Int(Date().timeIntervalSince1970 - 600), message: "Das ist ein Kommentar http://pr0gramm.com/new/543210:comment123 zur Benachrichtigung.", read: 0, blocked: 0, sent: 0)
         let msg2 = InboxMessage(id: 2, type: "notification", itemId: nil, thumb: nil, flags: nil, name: nil, mark: nil, senderId: 0, score: 0, created: Int(Date().timeIntervalSince1970 - 3600), message: "Systemnachricht: Dein pr0mium läuft bald ab!", read: 1, blocked: 0, sent: nil)
-        let msg3 = InboxMessage(id: 3, type: "follow", itemId: nil, thumb: nil, flags: nil, name: "FollowerUser", mark: 1, senderId: 102, score: 0, created: Int(Date().timeIntervalSince1970 - 7200), message: nil, read: 0, blocked: 0, sent: nil)
+        let msg3 = InboxMessage(id: 3, type: "follows", itemId: 6625472, thumb: "2025/05/21/1001c9dcd15d8324.jpg", flags: 8, name: "Vollzeitdieb", mark: 9, senderId: 363088, score: 7, created: Int(Date().timeIntervalSince1970 - 7200), message: nil, read: 0, blocked: 0, sent: nil)
 
 
         return InboxView(

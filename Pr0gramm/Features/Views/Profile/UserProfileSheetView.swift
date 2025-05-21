@@ -11,6 +11,10 @@ struct UserProfileSheetView: View {
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) var dismiss
+    // --- MODIFIED: PlayerManager als EnvironmentObject ---
+    @EnvironmentObject var playerManager: VideoPlayerManager
+    // --- END MODIFICATION ---
+
 
     @State private var profileInfo: ProfileInfoResponse?
     @State private var isLoadingProfileInfo = false
@@ -34,6 +38,7 @@ struct UserProfileSheetView: View {
     @State private var showAllCommentsSheet = false
     
     @State private var showConversationSheet = false
+    @State private var showingFollowActions = false
 
     @State private var isLoadingNavigationTarget: Bool = false
     @State private var navigationTargetItemId: Int? = nil
@@ -41,7 +46,7 @@ struct UserProfileSheetView: View {
     @State private var previewLinkTargetFromComment: PreviewLinkTarget? = nil
     @State private var didLoad: Bool = false
 
-    @StateObject private var playerManager = VideoPlayerManager()
+    // @StateObject private var playerManager = VideoPlayerManager() // Entfernt
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserProfileSheetView")
@@ -54,8 +59,27 @@ struct UserProfileSheetView: View {
         return formatter
     }()
 
+    private var isCurrentUserProfile: Bool {
+        authService.currentUser?.name.lowercased() == username.lowercased()
+    }
+
+    private var isFollowingThisUser: Bool {
+        if let apiFollows = profileInfo?.follows {
+            return apiFollows
+        }
+        return authService.followedUsers.contains { $0.name.lowercased() == username.lowercased() }
+    }
+
+    private var isSubscribedToThisUser: Bool {
+        if let apiSubscribed = profileInfo?.subscribed {
+            return apiSubscribed
+        }
+        return authService.subscribedUsernames.contains(username)
+    }
+
+
     var body: some View {
-        NavigationStack { // Der NavigationStack hier ist wichtig für die .toolbar und .navigationTitle
+        NavigationStack {
             List {
                 profileInfoSection()
                 userUploadsSection()
@@ -65,7 +89,7 @@ struct UserProfileSheetView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .toolbar { // Diese Toolbar sollte jetzt eindeutig sein.
+            .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Fertig") { dismiss() }
                 }
@@ -73,17 +97,25 @@ struct UserProfileSheetView: View {
             .onAppear {
                 guard !didLoad else { return }
                 didLoad = true
+                // playerManager.configure(settings: settings) // Wird jetzt von höherer Ebene konfiguriert
                 Task {
-                    playerManager.configure(settings: settings)
                     await loadAllData()
                 }
             }
             .refreshable {
                 await loadAllData(forceRefresh: true)
             }
-            .onChange(of: settings.apiFlags) { _, _ in
+            .onChange(of: settings.apiFlags) {
                 UserProfileSheetView.logger.info("Global filters (apiFlags) changed. Reloading data for \(username) sheet.")
                 Task { await loadAllData(forceRefresh: true) }
+            }
+            .onChange(of: authService.followedUsers) {
+                UserProfileSheetView.logger.debug("authService.followedUsers changed, profile sheet for \(username) might re-evaluate buttons.")
+                Task { await loadProfileInfo(forceRefresh: true) }
+            }
+            .onChange(of: authService.subscribedUsernames) {
+                UserProfileSheetView.logger.debug("authService.subscribedUsernames changed, profile sheet for \(username) might re-evaluate buttons.")
+                Task { await loadProfileInfo(forceRefresh: true) }
             }
             .environment(\.openURL, OpenURLAction { url in
                 if let (itemID, commentID) = parsePr0grammLink(url: url) {
@@ -101,6 +133,11 @@ struct UserProfileSheetView: View {
                         .padding().background(Material.regular).cornerRadius(10).shadow(radius: 5)
                 }
             }
+            .confirmationDialog("Aktionen für \(username)", isPresented: $showingFollowActions, titleVisibility: .visible) {
+                confirmationDialogButtons()
+            } message: {
+                Text("Wähle eine Aktion:")
+            }
             .sheet(isPresented: $showPostDetailSheet, onDismiss: {
                 itemForDetailSheet = nil
                 targetCommentIDForDetailSheet = nil
@@ -109,11 +146,12 @@ struct UserProfileSheetView: View {
                     NavigationStack{
                         PagedDetailViewWrapperForItem(
                             item: item,
-                            playerManager: playerManager,
+                            playerManager: playerManager, // Verwende den EnvironmentObject PlayerManager
                             targetCommentID: targetCommentIDForDetailSheet
                         )
                         .environmentObject(settings)
                         .environmentObject(authService)
+                        // .environmentObject(playerManager) // Nicht nötig, da direkt übergeben
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showPostDetailSheet = false } } }
                         .navigationTitle(item.user)
                         #if os(iOS)
@@ -127,6 +165,7 @@ struct UserProfileSheetView: View {
                     UserUploadsView(username: username)
                         .environmentObject(settings)
                         .environmentObject(authService)
+                        .environmentObject(playerManager) // PlayerManager weitergeben
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllUploadsSheet = false } } }
                 }
             }
@@ -135,6 +174,7 @@ struct UserProfileSheetView: View {
                     UserProfileCommentsView(username: username)
                         .environmentObject(settings)
                         .environmentObject(authService)
+                        .environmentObject(playerManager) // PlayerManager weitergeben
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllCommentsSheet = false } } }
                 }
             }
@@ -143,7 +183,7 @@ struct UserProfileSheetView: View {
                     ConversationDetailView(partnerUsername: username)
                         .environmentObject(settings)
                         .environmentObject(authService)
-                        .environmentObject(playerManager)
+                        .environmentObject(playerManager) // PlayerManager weitergeben
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
                                 Button("Schließen") { showConversationSheet = false }
@@ -155,14 +195,19 @@ struct UserProfileSheetView: View {
                  LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
                      .environmentObject(settings)
                      .environmentObject(authService)
+                     // .environmentObject(playerManager) // Falls LinkedItemPreviewView Videos abspielen soll
             }
         }
     }
 
     private func loadAllData(forceRefresh: Bool = false) async {
         UserProfileSheetView.logger.info("Loading all data for user \(username). Force refresh: \(forceRefresh)")
+        if authService.isLoggedIn && (forceRefresh || authService.followedUsers.isEmpty && !isCurrentUserProfile) {
+            await authService.fetchFollowList()
+        }
+        await loadProfileInfo(forceRefresh: forceRefresh)
+        
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { await loadProfileInfo(forceRefresh: forceRefresh) }
             group.addTask { await loadUserUploads(isRefresh: forceRefresh, initialLoad: true) }
             group.addTask { await loadUserComments(isRefresh: forceRefresh, initialLoad: true) }
         }
@@ -190,15 +235,36 @@ struct UserProfileSheetView: View {
                     badgeScrollView(badges: badges)
                         .padding(.vertical, 4)
                 }
+                
+                if authService.isLoggedIn && !isCurrentUserProfile {
+                    HStack(spacing: 0) {
+                        Button {
+                            UserProfileSheetView.logger.info("Nachricht senden an \(username) getippt.")
+                            showConversationSheet = true
+                        } label: {
+                            Label("Nachricht senden", systemImage: "paperplane.fill")
+                                .font(UIConstants.bodyFont)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundColor(Color.accentColor)
+                        .disabled(info.user.banned != nil && info.user.banned == 1)
 
-                if authService.isLoggedIn && authService.currentUser?.name.lowercased() != username.lowercased() {
-                    Button {
-                        UserProfileSheetView.logger.info("Send private message button tapped for user: \(username)")
-                        showConversationSheet = true
-                    } label: {
-                        Label("Private Nachricht senden", systemImage: "paperplane.fill")
+                        Button {
+                            UserProfileSheetView.logger.info("Follow/Subscribe Aktionen für \(username) getippt.")
+                            showingFollowActions = true
+                        } label: {
+                            Label(isFollowingThisUser ? "Gefolgt" : "Folgen", systemImage: isFollowingThisUser ? "person.fill.checkmark" : "person.badge.plus")
+                                .font(UIConstants.bodyFont)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundColor(isFollowingThisUser ? .green : Color.accentColor)
+                        .disabled(authService.isModifyingFollowStatus[username] ?? false)
                     }
-                    .disabled(info.user.banned != nil && info.user.banned == 1)
+                    .padding(.vertical, 5)
                 }
 
             } else {
@@ -207,14 +273,70 @@ struct UserProfileSheetView: View {
         }
         .headerProminence(.increased)
     }
+    
+    @ViewBuilder
+    private func confirmationDialogButtons() -> some View {
+        let modifyingStatus = authService.isModifyingFollowStatus[username] ?? false
+
+        Button(isFollowingThisUser ? "Entfolgen" : "Folgen") {
+            Task {
+                if isFollowingThisUser {
+                    await authService.unfollowUser(name: username)
+                } else {
+                    await authService.followUser(name: username)
+                }
+                await loadProfileInfo(forceRefresh: true)
+            }
+        }
+        .disabled(modifyingStatus)
+
+        if isFollowingThisUser {
+            Button(isSubscribedToThisUser ? "Benachrichtigungen Deaktivieren" : "Benachrichtigen") {
+                Task {
+                    if isSubscribedToThisUser {
+                        await authService.unsubscribeFromUserNotifications(name: username, keepFollow: true)
+                    } else {
+                        await authService.subscribeToUserNotifications(name: username)
+                    }
+                    await loadProfileInfo(forceRefresh: true)
+                }
+            }
+            .disabled(modifyingStatus)
+        } else {
+             Button("Folgen und Benachrichtigen") {
+                 Task {
+                     UserProfileSheetView.logger.info("Attempting to follow AND subscribe to \(username)")
+                     await authService.followUser(name: username)
+                     try? await Task.sleep(for: .milliseconds(500))
+                     await loadProfileInfo(forceRefresh: true)
+                     if self.isFollowingThisUser {
+                         await authService.subscribeToUserNotifications(name: username)
+                         await loadProfileInfo(forceRefresh: true)
+                     } else {
+                         UserProfileSheetView.logger.warning("Konnte nicht subscriben, da Follow-Aktion für \(username) nicht erfolgreich zu sein scheint oder Status nicht schnell genug aktualisiert wurde.")
+                     }
+                 }
+             }
+             .disabled(modifyingStatus)
+        }
+        
+        Button("Abbrechen", role: .cancel) { }
+    }
+
 
     private func loadProfileInfo(forceRefresh: Bool = false) async {
-        if !forceRefresh && profileInfo != nil { return }
-        UserProfileSheetView.logger.info("Loading profile info for \(username)...")
+        if !forceRefresh && profileInfo != nil {
+             UserProfileSheetView.logger.trace("Skipping profile info load for \(username), already loaded and not forced.")
+            return
+        }
+        UserProfileSheetView.logger.info("Loading profile info for \(username)... Force: \(forceRefresh)")
         await MainActor.run { isLoadingProfileInfo = true; profileInfoError = nil }
         do {
             let infoResponse = try await apiService.getProfileInfo(username: username, flags: 31)
             await MainActor.run { profileInfo = infoResponse }
+            let followsStatus = infoResponse.follows.map { String(describing: $0) } ?? "N/A"
+            let subscribedStatus = infoResponse.subscribed.map { String(describing: $0) } ?? "N/A"
+            UserProfileSheetView.logger.info("Profile info for \(username) loaded. API-Reported Follows: \(followsStatus), Subscribed: \(subscribedStatus)")
         } catch {
             UserProfileSheetView.logger.error("Failed to load profile info for \(username): \(error.localizedDescription)")
             await MainActor.run { profileInfoError = error.localizedDescription }
@@ -487,6 +609,9 @@ struct UserProfileSheetView: View {
     struct PreviewWrapper: View {
         @StateObject private var authService: AuthService
         @StateObject private var settings = AppSettings()
+        // --- NEW: Add PlayerManager for Preview ---
+        @StateObject private var playerManager = VideoPlayerManager()
+
 
         init() {
             let tempSettings = AppSettings()
@@ -495,12 +620,19 @@ struct UserProfileSheetView: View {
             tempAuth.currentUser = UserInfo(id: 1, name: "Rockabilly", registered: 1609459200, score: 12345, mark: 2, badges: [
                 ApiBadge(image: "pr0-coin.png", description: "Test Badge 1", created: 0, link: nil, category: nil),
                 ApiBadge(image: "pr0mium-s.png", description: "Test Badge 2", created: 0, link: nil, category: nil),
-                ApiBadge(image: "comment-gold.png", description: "Test Badge 3", created: 0, link: nil, category: nil),
-                ApiBadge(image: "secret-santa-2015.png", description: "Test Badge 4", created: 0, link: nil, category: nil)
             ], collections: [])
+            
+            #if DEBUG
+            tempAuth.setFollowedUsersForPreview([
+                FollowListItem(subscribed: 1, name: "AnotherUser", mark: 1, followCreated: 0, itemId: nil, thumb: nil, preview: nil, lastPost: nil)
+            ])
+            #endif
+
 
             _settings = StateObject(wrappedValue: tempSettings)
             _authService = StateObject(wrappedValue: tempAuth)
+            // --- NEW: Configure PlayerManager ---
+            playerManager.configure(settings: tempSettings)
         }
 
         var body: some View {
@@ -509,9 +641,38 @@ struct UserProfileSheetView: View {
                     UserProfileSheetView(username: "AnotherUser")
                         .environmentObject(authService)
                         .environmentObject(settings)
+                        .environmentObject(playerManager) // Pass PlayerManager
                 }
         }
     }
     return PreviewWrapper()
+}
+
+#Preview("Own Profile in Sheet (for testing)") {
+     struct PreviewWrapperOwn: View {
+        @StateObject private var authService: AuthService
+        @StateObject private var settings = AppSettings()
+        @StateObject private var playerManager = VideoPlayerManager() // Add PlayerManager
+
+        init() {
+            let tempSettings = AppSettings()
+            let tempAuth = AuthService(appSettings: tempSettings)
+            tempAuth.isLoggedIn = true
+            tempAuth.currentUser = UserInfo(id: 1, name: "Rockabilly", registered: 1609459200, score: 12345, mark: 2, badges: [], collections: [])
+            _settings = StateObject(wrappedValue: tempSettings)
+            _authService = StateObject(wrappedValue: tempAuth)
+            playerManager.configure(settings: tempSettings) // Configure PlayerManager
+        }
+        var body: some View {
+            Text("Parent View")
+                .sheet(isPresented: .constant(true)) {
+                    UserProfileSheetView(username: "Rockabilly")
+                        .environmentObject(authService)
+                        .environmentObject(settings)
+                        .environmentObject(playerManager) // Pass PlayerManager
+                }
+        }
+    }
+    return PreviewWrapperOwn()
 }
 // --- END OF COMPLETE FILE ---

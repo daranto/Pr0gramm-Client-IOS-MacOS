@@ -1,3 +1,6 @@
+// Pr0gramm/Pr0gramm/Shared/Mark.swift
+// --- START OF COMPLETE FILE ---
+
 import SwiftUI
 
 /// Represents the user ranks (Marks) on pr0gramm.
@@ -55,24 +58,23 @@ enum Mark: Int, Codable, CaseIterable, Identifiable {
     /// Returns the associated color for the rank based on the reference repository.
     var displayColor: Color {
         switch self {
-        // Hex values converted from reference repo (RRGGBB → 0.0–1.0)
-        case .schwuchtel:           return Color(hex: 0xffffff) // White
-        case .neuschwuchtel:        return Color(hex: 0xe108e9) // Magenta
-        case .altschwuchtel:        return Color(hex: 0x5bb91c) // Green
-        case .administrator:        return Color(hex: 0xff9900) // Orange
-        case .gebannt:              return Color(hex: 0x444444) // Dark Gray
-        case .moderator:            return Color(hex: 0x008fff) // Blue
-        case .fliesentisch:         return Color(hex: 0x6c432b) // Brown
-        case .lebendeLegende:       return Color(hex: 0x1cb992) // Teal
-        case .wichtel:              return Color(hex: 0xc52b2f) // Dark Red
-        case .edlerSpender:         return Color(hex: 0x1cb992) // Teal (same as Legende)
-        case .mittelaltschwuchtel:  return Color(hex: 0xaddc8d) // Light Green
-        case .ehemaligerModerator:  return Color(hex: 0x7fc7ff) // Light Blue
-        case .communityHelfer:      return Color(hex: 0xc52b2f) // Dark Red (same as Wichtel)
-        case .nutzerBot:            return Color(hex: 0x10366f) // Dark Blue
-        case .systemBot:            return Color(hex: 0xffc166) // Peach
-        case .ehemaligerHelfer:     return Color(hex: 0xea9fa1) // Pink
-        case .unbekannt:            return .secondary          // Fallback color
+        case .schwuchtel:           return Color(hex: 0xffffff)
+        case .neuschwuchtel:        return Color(hex: 0xe108e9)
+        case .altschwuchtel:        return Color(hex: 0x5bb91c)
+        case .administrator:        return Color(hex: 0xff9900)
+        case .gebannt:              return Color(hex: 0x444444)
+        case .moderator:            return Color(hex: 0x008fff)
+        case .fliesentisch:         return Color(hex: 0x6c432b)
+        case .lebendeLegende:       return Color(hex: 0x1cb992)
+        case .wichtel:              return Color(hex: 0xc52b2f)
+        case .edlerSpender:         return Color(hex: 0x1cb992)
+        case .mittelaltschwuchtel:  return Color(hex: 0xaddc8d)
+        case .ehemaligerModerator:  return Color(hex: 0x7fc7ff)
+        case .communityHelfer:      return Color(hex: 0xc52b2f)
+        case .nutzerBot:            return Color(hex: 0x10366f)
+        case .systemBot:            return Color(hex: 0xffc166)
+        case .ehemaligerHelfer:     return Color(hex: 0xea9fa1)
+        case .unbekannt:            return .secondary
         }
     }
 }
@@ -86,3 +88,36 @@ extension Color {
         self.init(.sRGB, red: red, green: green, blue: blue, opacity: alpha)
     }
 }
+
+// --- UserMarkView hierher verschoben ---
+struct UserMarkView: View {
+    let markValue: Int?
+    let showName: Bool
+
+    private var markEnum: Mark
+    private var markColor: Color { markEnum.displayColor }
+    private var markName: String { markEnum.displayName }
+
+    init(markValue: Int?, showName: Bool = true) {
+        self.markValue = markValue
+        self.markEnum = Mark(rawValue: markValue ?? -1) // Sichere Initialisierung
+        self.showName = showName
+    }
+
+    static func getMarkName(for mark: Int) -> String { Mark(rawValue: mark).displayName }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(markColor)
+                .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
+                .frame(width: 8, height: 8)
+            if showName {
+                Text(markName)
+                    .font(UIConstants.subheadlineFont) // Verwendung von UIConstants
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+}
+// --- ENDE UserMarkView ---
+// --- END OF COMPLETE FILE ---
