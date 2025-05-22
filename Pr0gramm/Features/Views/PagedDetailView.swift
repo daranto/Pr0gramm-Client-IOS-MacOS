@@ -234,6 +234,7 @@ struct PagedDetailView: View {
             UserProfileSheetView(username: target.username)
                 .environmentObject(authService)
                 .environmentObject(settings)
+                .environmentObject(playerManager) // PlayerManager hier weitergeben
         }
         .sheet(item: $fullscreenImageTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
              FullscreenImageView(item: targetWrapper.item)
