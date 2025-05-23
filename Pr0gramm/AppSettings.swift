@@ -146,6 +146,7 @@ class AppSettings: ObservableObject {
     private static let accentColorChoiceKey = "accentColorChoice_v1"
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
+    private static let enableUnlimitedStyleFeedKey = "enableUnlimitedStyleFeed_v1" // Neuer Key
     private var keyValueStoreChangeObserver: NSObjectProtocol?
 
     // MARK: - Published User Settings (Persisted via UserDefaults)
@@ -248,6 +249,17 @@ class AppSettings: ObservableObject {
             }
         }
     }
+    
+    // --- NEW SETTING ---
+    @Published var enableUnlimitedStyleFeed: Bool {
+        didSet {
+            if oldValue != enableUnlimitedStyleFeed {
+                UserDefaults.standard.set(enableUnlimitedStyleFeed, forKey: Self.enableUnlimitedStyleFeedKey)
+                Self.logger.info("Experimental 'Enable Unlimited Style Feed' setting changed to: \(self.enableUnlimitedStyleFeed)")
+            }
+        }
+    }
+    // --- END NEW SETTING ---
 
 
     // MARK: - Published Session State (Not Persisted)
@@ -400,6 +412,9 @@ class AppSettings: ObservableObject {
         let initialResetFiltersOnAppOpen = UserDefaults.standard.bool(forKey: Self.resetFiltersOnAppOpenKey)
         let initialRawAccentColor = UserDefaults.standard.string(forKey: Self.accentColorChoiceKey)
         let initialAccentColor = AccentColorChoice(rawValue: initialRawAccentColor ?? AccentColorChoice.blue.rawValue) ?? .blue
+        // --- NEW: Load experimental feed setting ---
+        let initialEnableUnlimitedStyleFeed = UserDefaults.standard.bool(forKey: Self.enableUnlimitedStyleFeedKey)
+        // --- END NEW ---
 
         self.isVideoMuted = initialIsVideoMuted
         self.feedType = initialFeedType
@@ -418,6 +433,9 @@ class AppSettings: ObservableObject {
         self.gridSize = initialGridSize
         self.resetFiltersOnAppOpen = initialResetFiltersOnAppOpen
         self.accentColorChoice = initialAccentColor
+        // --- NEW: Initialize experimental feed setting ---
+        self.enableUnlimitedStyleFeed = initialEnableUnlimitedStyleFeed
+        // --- END NEW ---
         
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
@@ -432,6 +450,10 @@ class AppSettings: ObservableObject {
         Self.logger.info("- gridSize: \(self.gridSize.displayName)")
         Self.logger.info("- resetFiltersOnAppOpen: \(self.resetFiltersOnAppOpen)")
         Self.logger.info("- accentColorChoice: \(self.accentColorChoice.displayName)")
+        // --- NEW: Log experimental feed setting ---
+        Self.logger.info("- enableUnlimitedStyleFeed: \(self.enableUnlimitedStyleFeed)")
+        // --- END NEW ---
+
 
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
@@ -442,6 +464,9 @@ class AppSettings: ObservableObject {
         if UserDefaults.standard.object(forKey: Self.gridSizeSettingKey) == nil { UserDefaults.standard.set(self.gridSize.rawValue, forKey: Self.gridSizeSettingKey) }
         if UserDefaults.standard.object(forKey: Self.resetFiltersOnAppOpenKey) == nil { UserDefaults.standard.set(self.resetFiltersOnAppOpen, forKey: Self.resetFiltersOnAppOpenKey) }
         if UserDefaults.standard.object(forKey: Self.accentColorChoiceKey) == nil { UserDefaults.standard.set(self.accentColorChoice.rawValue, forKey: Self.accentColorChoiceKey) }
+        // --- NEW: Ensure default value for new setting if not present ---
+        if UserDefaults.standard.object(forKey: Self.enableUnlimitedStyleFeedKey) == nil { UserDefaults.standard.set(self.enableUnlimitedStyleFeed, forKey: Self.enableUnlimitedStyleFeedKey) }
+        // --- END NEW ---
 
 
         updateKingfisherCacheLimit()
@@ -459,6 +484,10 @@ class AppSettings: ObservableObject {
             self.showNSFW = false
             self.showNSFL = false
             self.showPOL = false
+            // NSFP wird durch showSFW gesteuert, wenn eingeloggt
+            if self.isUserLoggedInForApiFlags {
+                self.showNSFP = true
+            }
         } else {
             AppSettings.logger.info("Filter reset on app open is disabled.")
         }

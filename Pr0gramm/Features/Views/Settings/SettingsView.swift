@@ -34,7 +34,6 @@ struct SettingsView: View {
                     }
                     .font(UIConstants.bodyFont)
                     
-                    // --- NEW: Picker für Akzentfarbe ---
                     Picker("Akzentfarbe", selection: $settings.accentColorChoice) {
                         ForEach(AccentColorChoice.allCases) { colorChoice in
                             HStack {
@@ -44,7 +43,7 @@ struct SettingsView: View {
                                     .fill(colorChoice.swiftUIColor)
                                     .frame(width: 20, height: 20)
                                     .overlay(
-                                        Circle().stroke(Color.secondary, lineWidth: colorChoice == .blue ? 0 : 0.5) // Rand für helle Farben
+                                        Circle().stroke(Color.secondary, lineWidth: colorChoice == .blue ? 0 : 0.5)
                                     )
                             }
                             .tag(colorChoice)
@@ -52,7 +51,6 @@ struct SettingsView: View {
                         }
                     }
                     .font(UIConstants.bodyFont)
-                    // --- END NEW ---
                     
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
@@ -126,10 +124,14 @@ struct SettingsView: View {
                 Section {
                     Toggle("Feature: 'Nur Frisches anzeigen' aktivieren", isOn: $settings.enableExperimentalHideSeen)
                         .font(UIConstants.bodyFont)
+                    // --- NEW TOGGLE ---
+                    Toggle("Feature: 'Vertikaler Feed (TikTok-Style)' aktivieren", isOn: $settings.enableUnlimitedStyleFeed)
+                        .font(UIConstants.bodyFont)
+                    // --- END NEW TOGGLE ---
                 } header: {
                      Text("Experimentelle Features")
                 } footer: {
-                     Text("Aktiviere diese Option, um die experimentelle Funktion 'Nur Frisches anzeigen' im Filter-Menü verfügbar zu machen. Diese Funktion blendet bereits gesehene Posts im Feed aus, kann aber bei der Paginierung (Nachladen älterer Posts) noch zu unerwartetem Verhalten führen.")
+                     Text("Aktiviere diese Option, um die experimentelle Funktion 'Nur Frisches anzeigen' im Filter-Menü verfügbar zu machen. Diese Funktion blendet bereits gesehene Posts im Feed aus, kann aber bei der Paginierung (Nachladen älterer Posts) noch zu unerwartetem Verhalten führen.\nDer vertikale Feed ändert die Darstellung des Haupt-Feeds zu einer seitenbasierten Ansicht.")
                         .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
@@ -199,7 +201,7 @@ struct SettingsView: View {
                             Label("Projekt auf GitHub", systemImage: "link")
                                 .font(UIConstants.bodyFont)
                         }
-                        .tint(.accentColor) // Wird jetzt dynamisch sein
+                        .tint(.accentColor)
                     }
                 } header: {
                     Text("Info & Projekt")

@@ -24,7 +24,14 @@ struct MainView: View {
         VStack(spacing: 0) {
             Group { // Main Content Area
                 switch selectedTab {
-                case .feed: FeedView(popToRootTrigger: feedPopToRootTrigger)
+                case .feed:
+                    // --- MODIFIED: Conditional View based on setting ---
+                    if settings.enableUnlimitedStyleFeed {
+                        UnlimitedStyleFeedView()
+                    } else {
+                        FeedView(popToRootTrigger: feedPopToRootTrigger)
+                    }
+                    // --- END MODIFICATION ---
                 case .favorites: FavoritesView()
                 case .search: SearchView()
                 case .inbox: InboxView()
@@ -70,8 +77,16 @@ struct MainView: View {
 
 
     private func handleTap(on tab: Tab) {
-        if tab == .feed && selectedTab == .feed { print("Feed tab tapped again. Triggering pop to root."); feedPopToRootTrigger = UUID() }
-        else { navigationService.selectedTab = tab; if navigationService.pendingSearchTag != nil && tab != .search { print("Clearing pending search tag due to manual tab navigation."); navigationService.pendingSearchTag = nil } }
+        if tab == .feed && selectedTab == .feed && !settings.enableUnlimitedStyleFeed { // Pop to root nur für Grid-Feed
+            print("Feed tab tapped again (Grid View). Triggering pop to root.");
+            feedPopToRootTrigger = UUID()
+        } else {
+            navigationService.selectedTab = tab;
+            if navigationService.pendingSearchTag != nil && tab != .search {
+                print("Clearing pending search tag due to manual tab navigation.");
+                navigationService.pendingSearchTag = nil
+            }
+        }
     }
 
     private func iconName(for tab: Tab) -> String {
@@ -104,34 +119,28 @@ struct TabBarButtonLabel: View {
     let tab: Tab
     let badgeCount: Int
 
-    // --- NEW: Konstanten für Badge-Styling ---
-    private let badgeMinWidth: CGFloat = 18 // Mindestbreite für den Kreis (auch bei einer Ziffer)
+    private let badgeMinWidth: CGFloat = 18
     private let badgeHeight: CGFloat = 18
-    private let badgeHorizontalPadding: CGFloat = 5 // Horizontaler Abstand des Texts zum Kreisrand
-    // --- END NEW ---
+    private let badgeHorizontalPadding: CGFloat = 5
 
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Image(systemName: iconName)
-                .font(UIConstants.titleFont) // Beibehaltung der Icon-Größe
+                .font(UIConstants.titleFont)
                 .symbolVariant(isSelected ? .fill : .none)
                 .padding(.vertical, 6)
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
 
             if badgeCount > 0 {
-                Text(badgeCount > 99 ? "99+" : "\(badgeCount)") // Begrenze auf 99+
-                    .font(.system(size: 10, weight: .bold)) // Kleinere Schrift für den Badge
+                Text(badgeCount > 99 ? "99+" : "\(badgeCount)")
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.white)
-                    // --- MODIFIED: Padding und Frame für dynamische Breite ---
                     .padding(.horizontal, badgeHorizontalPadding)
-                    .frame(minWidth: badgeMinWidth, idealHeight: badgeHeight) // Mindestbreite, damit der Kreis rund bleibt
-                    // --- END MODIFIED ---
+                    .frame(minWidth: badgeMinWidth, idealHeight: badgeHeight)
                     .background(Color.red)
-                    .clipShape(Capsule()) // Capsule für längliche Form bei mehreren Ziffern
-                    // --- MODIFIED: Offset leicht angepasst für bessere Positionierung ---
+                    .clipShape(Capsule())
                     .offset(x: 12, y: -5)
-                    // --- END MODIFICATION ---
             }
         }
     }
@@ -144,8 +153,10 @@ struct TabBarButtonLabel: View {
 
     authService.isLoggedIn = true
     authService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
-    // Für die Preview könntest du den Wert direkt im AuthService setzen (temporär public machen oder eine Debug-Funktion)
-    // authService.unreadInboxTotal = 119
+    // authService.unreadInboxTotal = 119 // Für Preview von Badges
+
+    // Um den UnlimitedStyleFeed in der Preview zu testen:
+    // settings.enableUnlimitedStyleFeed = true
 
     return MainView()
         .environmentObject(settings)
