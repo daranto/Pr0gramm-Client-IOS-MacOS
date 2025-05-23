@@ -107,6 +107,8 @@ struct UnlimitedStyleFeedView: View {
     @State private var addTagErrorForSheet: String? = nil
     @State private var isAddingTagsInSheet: Bool = false
     
+    @State private var fullscreenImageTarget: FullscreenImageTarget? = nil
+    
     private let initialVisibleTagCount = 2
     @State private var flagsUsedForLastItemsLoad: Int? = nil
     
@@ -195,6 +197,9 @@ struct UnlimitedStyleFeedView: View {
                 }
             }
             .sheet(isPresented: $showingAddTagSheet) { addTagSheetContent() }
+            .sheet(item: $fullscreenImageTarget) { (target: FullscreenImageTarget) in
+                FullscreenImageView(item: target.item)
+            }
             .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoadingFeed)) {
                  Button("OK") { errorMessage = nil }
             } message: {
@@ -233,6 +238,11 @@ struct UnlimitedStyleFeedView: View {
                     await refreshItems()
                 }
             }
+            .onDisappear {
+                Self.logger.info("UnlimitedStyleFeedView.onDisappear - Cleaning up player.")
+                playerManager.cleanupPlayer()
+                currentRefreshFeedTask?.cancel()
+            }
         }
     }
 
@@ -268,7 +278,8 @@ struct UnlimitedStyleFeedView: View {
                          keyboardActionHandlerForVideo: keyboardActionHandlerInstance,
                          isActive: activeItemID == dummyStartItemID,
                          isDummyItem: true,
-                         onToggleShowAllTags: {}, onUpvoteTag: {_ in }, onDownvoteTag: {_ in }, onTagTapped: {_ in }, onRetryLoadDetails: {}, onShowAddTagSheet: {}
+                         onToggleShowAllTags: {}, onUpvoteTag: {_ in }, onDownvoteTag: {_ in }, onTagTapped: {_ in }, onRetryLoadDetails: {}, onShowAddTagSheet: {},
+                         onShowFullscreenImage: { _ in }
                      )
                      .frame(height: 200)
                  }
@@ -312,6 +323,11 @@ struct UnlimitedStyleFeedView: View {
                                     addTagErrorForSheet = nil
                                     isAddingTagsInSheet = false
                                     showingAddTagSheet = true
+                                },
+                                onShowFullscreenImage: { tappedItem in
+                                    if !tappedItem.isVideo {
+                                        self.fullscreenImageTarget = FullscreenImageTarget(item: tappedItem)
+                                    }
                                 }
                             )
                             .id(item.id)
@@ -511,7 +527,6 @@ struct UnlimitedStyleFeedView: View {
         var apiReachedEndInLoop = false
 
         do {
-            // --- MODIFIED: Schleife für automatisches Nachladen beim Refresh, wenn hideSeenItems aktiv ist ---
             if settings.hideSeenItems && settings.enableExperimentalHideSeen {
                 while allFetchedUnseenItems.isEmpty && pagesAttemptedInLoop < maxAutoRefreshPages && !apiReachedEndInLoop {
                     if Task.isCancelled { throw CancellationError() }
@@ -546,7 +561,6 @@ struct UnlimitedStyleFeedView: View {
                     }
                 }
             } else {
-                // Standard-Verhalten: Nur eine Seite laden
                 let apiResponse = try await apiService.fetchItems(
                     flags: currentApiFlagsForThisRefresh,
                     promoted: settings.apiPromoted,
@@ -556,7 +570,6 @@ struct UnlimitedStyleFeedView: View {
                 apiReachedEndInLoop = apiResponse.atEnd == true || apiResponse.hasOlder == false
                 Self.logger.info("API fetch (Unlimited, no hideSeenItems) completed: \(allFetchedUnseenItems.count) items. API at end: \(apiReachedEndInLoop)")
             }
-            // --- END MODIFICATION ---
             
             if Task.isCancelled { Self.logger.info("RefreshItems (Unlimited) Task cancelled after API fetch but before UI update."); return }
 
@@ -579,6 +592,7 @@ struct UnlimitedStyleFeedView: View {
                             self.scrolledItemID = allFetchedUnseenItems.first?.id ?? dummyStartItemID
                         }
                     }
+                    
                     self.canLoadMore = !apiReachedEndInLoop
                 }
                 self.flagsUsedForLastItemsLoad = currentApiFlagsForThisRefresh
@@ -632,7 +646,7 @@ struct UnlimitedStyleFeedView: View {
         var itemsToAppend: [Item] = []
         var apiStillHasMore = true
         var pagesForLoadMore = 0
-        let maxPagesForLoadMore = settings.hideSeenItems && settings.enableExperimentalHideSeen ? 3 : 1 // Mehr Seiten versuchen, wenn gefiltert wird
+        let maxPagesForLoadMore = settings.hideSeenItems && settings.enableExperimentalHideSeen ? 3 : 1
 
         do {
             var currentOlderForLoop = finalOlderThanId
@@ -667,7 +681,7 @@ struct UnlimitedStyleFeedView: View {
                 if !apiResponse.items.isEmpty && apiStillHasMore {
                     currentOlderForLoop = settings.feedType == .promoted ? apiResponse.items.last!.promoted ?? apiResponse.items.last!.id : apiResponse.items.last!.id
                 } else if apiResponse.items.isEmpty && apiStillHasMore {
-                    apiStillHasMore = false // Keine Items mehr trotz positivem Signal von API
+                    apiStillHasMore = false
                 }
             }
             
@@ -677,7 +691,7 @@ struct UnlimitedStyleFeedView: View {
                 self.items.append(contentsOf: itemsToAppend)
                 Self.logger.info("LoadMore: Appended \(itemsToAppend.count) new items.")
             }
-            self.canLoadMore = apiStillHasMore && !itemsToAppend.isEmpty // Nur weiterladen, wenn auch was Neues kam
+            self.canLoadMore = apiStillHasMore && !itemsToAppend.isEmpty
             if itemsToAppend.isEmpty && apiStillHasMore {
                 Self.logger.info("LoadMore: No new unseen items found after \(pagesForLoadMore) pages, but API might have more. Stopping for now.")
             }
@@ -841,6 +855,7 @@ struct UnlimitedFeedItemView: View {
     let onTagTapped: (String) -> Void
     let onRetryLoadDetails: () -> Void
     let onShowAddTagSheet: () -> Void
+    let onShowFullscreenImage: (Item) -> Void
 
     var item: Item { itemData.item }
     
@@ -853,6 +868,12 @@ struct UnlimitedFeedItemView: View {
         ZStack {
             mediaContentLayer
                 .zIndex(0)
+                .onTapGesture {
+                    if !item.isVideo && !isDummyItem {
+                        onShowFullscreenImage(item)
+                    }
+                }
+                .allowsHitTesting(!item.isVideo && !isDummyItem)
 
             if !isDummyItem {
                 VStack {
