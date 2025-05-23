@@ -116,6 +116,8 @@ struct UnlimitedStyleFeedView: View {
     private func createDummyStartItem() -> Item {
         return Item(id: dummyStartItemID, promoted: nil, userId: 0, down: 0, up: 0, created: 0, image: "pr0tok.png", thumb: "pr0tok.png", fullsize: "pr0tok.png", preview: nil, width: 512, height: 512, audio: false, source: nil, flags: 1, user: "Pr0Tok", mark: 0, repost: false, variants: nil, subtitles: nil)
     }
+    
+    private let maxAutoRefreshPages = 3
 
     init() {
         // .onAppear wird für die initiale Einrichtung verwendet
@@ -130,6 +132,41 @@ struct UnlimitedStyleFeedView: View {
             .navigationTitle("Feed (Vertikal)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        Task {
+                            Self.logger.info("Refresh button tapped for UnlimitedStyleFeedView.")
+                            currentRefreshFeedTask?.cancel()
+                            Self.logger.debug("Cancelled previous refresh task (if any) due to manual refresh.")
+                            
+                            await MainActor.run {
+                                self.items = [createDummyStartItem()]
+                                self.cachedDetails = [:]
+                                self.infoLoadingStatus = [:]
+                                self.activeItemID = dummyStartItemID
+                                self.scrolledItemID = dummyStartItemID
+                                self.errorMessage = nil
+                                self.canLoadMore = true
+                                self.isLoadingMore = false
+                                self.flagsUsedForLastItemsLoad = nil
+                                self.showAllTagsForItem = []
+                            }
+                            Self.logger.info("UI and data states reset for manual refresh.")
+                            
+                            currentRefreshFeedTask = Task {
+                                if Task.isCancelled {
+                                    Self.logger.info("New manual refresh task was cancelled before starting.")
+                                    return
+                                }
+                                Self.logger.info("Starting new manual refresh task.")
+                                await refreshItems()
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.clockwise.circle")
+                    }
+                    .disabled(isLoadingFeed)
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button { showingFilterSheet = true } label: {
                         Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
@@ -468,36 +505,81 @@ struct UnlimitedStyleFeedView: View {
             return
         }
         
-        var fetchedItemsFromAPI: [Item] = []
+        var allFetchedUnseenItems: [Item] = []
+        var currentOlderThanIdForRefreshLoop: Int? = nil
+        var pagesAttemptedInLoop = 0
+        var apiReachedEndInLoop = false
+
         do {
-            let apiResponse = try await apiService.fetchItems(
-                flags: currentApiFlagsForThisRefresh,
-                promoted: settings.apiPromoted,
-                showJunkParameter: settings.apiShowJunk
-            )
-            fetchedItemsFromAPI = apiResponse.items
-            Self.logger.info("API fetch (Unlimited) completed: \(fetchedItemsFromAPI.count) items received for refresh. Flags used: \(currentApiFlagsForThisRefresh)")
+            // --- MODIFIED: Schleife für automatisches Nachladen beim Refresh, wenn hideSeenItems aktiv ist ---
+            if settings.hideSeenItems && settings.enableExperimentalHideSeen {
+                while allFetchedUnseenItems.isEmpty && pagesAttemptedInLoop < maxAutoRefreshPages && !apiReachedEndInLoop {
+                    if Task.isCancelled { throw CancellationError() }
+                    pagesAttemptedInLoop += 1
+                    Self.logger.info("RefreshItems: Auto-fetching page \(pagesAttemptedInLoop) for unseen (older: \(currentOlderThanIdForRefreshLoop ?? -1)) with flags \(currentApiFlagsForThisRefresh)")
+
+                    let apiResponse = try await apiService.fetchItems(
+                        flags: currentApiFlagsForThisRefresh,
+                        promoted: settings.apiPromoted,
+                        olderThanId: currentOlderThanIdForRefreshLoop,
+                        showJunkParameter: settings.apiShowJunk
+                    )
+                    
+                    if Task.isCancelled { throw CancellationError() }
+
+                    var pageItems = apiResponse.items
+                    Self.logger.info("API (auto-refresh page \(pagesAttemptedInLoop)) fetched \(pageItems.count) items.")
+
+                    pageItems.removeAll { settings.seenItemIDs.contains($0.id) }
+                    Self.logger.info("Filtered \(apiResponse.items.count - pageItems.count) seen items from auto-refresh page \(pagesAttemptedInLoop). \(pageItems.count) unseen remaining.")
+                    
+                    allFetchedUnseenItems.append(contentsOf: pageItems)
+                    
+                    if apiResponse.atEnd == true || apiResponse.hasOlder == false {
+                        apiReachedEndInLoop = true
+                    }
+                    
+                    if !apiResponse.items.isEmpty && !apiReachedEndInLoop {
+                         currentOlderThanIdForRefreshLoop = settings.feedType == .promoted ? apiResponse.items.last!.promoted ?? apiResponse.items.last!.id : apiResponse.items.last!.id
+                    } else if apiResponse.items.isEmpty && !apiReachedEndInLoop {
+                        apiReachedEndInLoop = true
+                    }
+                }
+            } else {
+                // Standard-Verhalten: Nur eine Seite laden
+                let apiResponse = try await apiService.fetchItems(
+                    flags: currentApiFlagsForThisRefresh,
+                    promoted: settings.apiPromoted,
+                    showJunkParameter: settings.apiShowJunk
+                )
+                allFetchedUnseenItems = apiResponse.items
+                apiReachedEndInLoop = apiResponse.atEnd == true || apiResponse.hasOlder == false
+                Self.logger.info("API fetch (Unlimited, no hideSeenItems) completed: \(allFetchedUnseenItems.count) items. API at end: \(apiReachedEndInLoop)")
+            }
+            // --- END MODIFICATION ---
             
             if Task.isCancelled { Self.logger.info("RefreshItems (Unlimited) Task cancelled after API fetch but before UI update."); return }
 
             await MainActor.run {
-                self.items = [createDummyStartItem()] + fetchedItemsFromAPI
+                self.items = [createDummyStartItem()] + allFetchedUnseenItems
                 self.cachedDetails = [:]
                 self.infoLoadingStatus = [:]
                 self.errorMessage = nil
 
-                if fetchedItemsFromAPI.isEmpty {
+                if allFetchedUnseenItems.isEmpty {
                     self.canLoadMore = false
                     if self.scrolledItemID != dummyStartItemID { self.scrolledItemID = dummyStartItemID }
                     if self.activeItemID != dummyStartItemID { self.activeItemID = dummyStartItemID }
                 } else {
-                    // Start immer mit dem Dummy-Item, der Nutzer scrollt manuell weiter
-                    if self.scrolledItemID != dummyStartItemID { self.scrolledItemID = dummyStartItemID }
-                    if self.activeItemID != dummyStartItemID { self.activeItemID = dummyStartItemID }
-                    
-                    let atEnd = apiResponse.atEnd ?? false
-                    let hasOlder = apiResponse.hasOlder ?? true
-                    self.canLoadMore = !atEnd && hasOlder
+                    if self.scrolledItemID == dummyStartItemID || self.items.count == (allFetchedUnseenItems.count + 1) {
+                         if self.scrolledItemID != dummyStartItemID { self.scrolledItemID = dummyStartItemID }
+                         if self.activeItemID != dummyStartItemID { self.activeItemID = dummyStartItemID }
+                    } else if let firstReal = allFetchedUnseenItems.first, self.scrolledItemID != firstReal.id {
+                        if !allFetchedUnseenItems.contains(where: {$0.id == self.scrolledItemID}) {
+                            self.scrolledItemID = allFetchedUnseenItems.first?.id ?? dummyStartItemID
+                        }
+                    }
+                    self.canLoadMore = !apiReachedEndInLoop
                 }
                 self.flagsUsedForLastItemsLoad = currentApiFlagsForThisRefresh
             }
@@ -547,31 +629,60 @@ struct UnlimitedStyleFeedView: View {
         Self.logger.info("--- Starting loadMoreItems (Unlimited) older than \(finalOlderThanId) ---")
         defer { Task { @MainActor in self.isLoadingMore = false } }
 
+        var itemsToAppend: [Item] = []
+        var apiStillHasMore = true
+        var pagesForLoadMore = 0
+        let maxPagesForLoadMore = settings.hideSeenItems && settings.enableExperimentalHideSeen ? 3 : 1 // Mehr Seiten versuchen, wenn gefiltert wird
+
         do {
-            let apiResponse = try await apiService.fetchItems(
-                flags: settings.apiFlags,
-                promoted: settings.apiPromoted,
-                olderThanId: finalOlderThanId,
-                showJunkParameter: settings.apiShowJunk
-            )
-            let newItems = apiResponse.items
-            
-            if Task.isCancelled { Self.logger.info("LoadMoreItems (Unlimited) Task cancelled after API fetch."); return }
-            
-            if newItems.isEmpty {
-                self.canLoadMore = false
-            } else {
-                let currentIDs = Set(self.items.map { $0.id })
-                let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
-                if uniqueNewItems.isEmpty {
-                    self.canLoadMore = false
-                } else {
-                    self.items.append(contentsOf: uniqueNewItems)
-                    let atEnd = apiResponse.atEnd ?? false
-                    let hasOlder = apiResponse.hasOlder ?? true
-                    self.canLoadMore = !atEnd && hasOlder
+            var currentOlderForLoop = finalOlderThanId
+            while itemsToAppend.isEmpty && pagesForLoadMore < maxPagesForLoadMore && apiStillHasMore {
+                if Task.isCancelled { throw CancellationError() }
+                pagesForLoadMore += 1
+                Self.logger.info("LoadMore: Fetching page \(pagesForLoadMore) (older: \(currentOlderForLoop))")
+
+                let apiResponse = try await apiService.fetchItems(
+                    flags: settings.apiFlags,
+                    promoted: settings.apiPromoted,
+                    olderThanId: currentOlderForLoop,
+                    showJunkParameter: settings.apiShowJunk
+                )
+                
+                if Task.isCancelled { throw CancellationError() }
+
+                var pageItems = apiResponse.items
+                
+                if settings.hideSeenItems && settings.enableExperimentalHideSeen {
+                    let originalCount = pageItems.count
+                    pageItems.removeAll { settings.seenItemIDs.contains($0.id) }
+                    Self.logger.info("LoadMore: Filtered \(originalCount - pageItems.count) seen items. \(pageItems.count) unseen remaining.")
+                }
+                
+                let currentItemIDs = Set(self.items.map { $0.id })
+                let uniqueNewPageItems = pageItems.filter { !currentItemIDs.contains($0.id) }
+                itemsToAppend.append(contentsOf: uniqueNewPageItems)
+
+                apiStillHasMore = apiResponse.atEnd == false && apiResponse.hasOlder != false
+                
+                if !apiResponse.items.isEmpty && apiStillHasMore {
+                    currentOlderForLoop = settings.feedType == .promoted ? apiResponse.items.last!.promoted ?? apiResponse.items.last!.id : apiResponse.items.last!.id
+                } else if apiResponse.items.isEmpty && apiStillHasMore {
+                    apiStillHasMore = false // Keine Items mehr trotz positivem Signal von API
                 }
             }
+            
+            if Task.isCancelled { Self.logger.info("LoadMoreItems (Unlimited) Task cancelled after API fetch loops."); return }
+
+            if !itemsToAppend.isEmpty {
+                self.items.append(contentsOf: itemsToAppend)
+                Self.logger.info("LoadMore: Appended \(itemsToAppend.count) new items.")
+            }
+            self.canLoadMore = apiStillHasMore && !itemsToAppend.isEmpty // Nur weiterladen, wenn auch was Neues kam
+            if itemsToAppend.isEmpty && apiStillHasMore {
+                Self.logger.info("LoadMore: No new unseen items found after \(pagesForLoadMore) pages, but API might have more. Stopping for now.")
+            }
+
+
         } catch {
             Self.logger.error("API fetch (Unlimited) failed during loadMore: \(error.localizedDescription)")
              if Task.isCancelled { Self.logger.info("LoadMoreItems (Unlimited) Task cancelled after API error."); return }
