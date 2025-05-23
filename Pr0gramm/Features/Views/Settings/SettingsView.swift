@@ -125,7 +125,7 @@ struct SettingsView: View {
                     Toggle("Feature: 'Nur Frisches anzeigen' aktivieren", isOn: $settings.enableExperimentalHideSeen)
                         .font(UIConstants.bodyFont)
                     // --- NEW TOGGLE ---
-                    Toggle("Feature: 'Vertikaler Feed (TikTok-Style)' aktivieren", isOn: $settings.enableUnlimitedStyleFeed)
+                    Toggle("Feature: 'pr0Tok' aktivieren", isOn: $settings.enableUnlimitedStyleFeed)
                         .font(UIConstants.bodyFont)
                     // --- END NEW TOGGLE ---
                 } header: {
