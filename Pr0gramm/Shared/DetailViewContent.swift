@@ -238,11 +238,12 @@ struct DetailViewContent: View {
     @ViewBuilder private var voteCounterView: some View {
         let benis = item.up - item.down
         HStack(spacing: 6) {
-            Button(action: upvoteAction) {
-                Image(systemName: currentVote == 1 ? "plus.circle.fill" : "plus.circle")
+            // --- MODIFIED: Reihenfolge der Buttons getauscht ---
+            Button(action: downvoteAction) {
+                Image(systemName: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(currentVote == 1 ? Color.white : Color.secondary,
-                                     currentVote == 1 ? Color.green : Color.secondary)
+                     .foregroundStyle(currentVote == -1 ? Color.white : Color.secondary,
+                                      currentVote == -1 ? Color.red : Color.secondary)
                     .font(actionIconFont)
             }
             .buttonStyle(.plain)
@@ -254,15 +255,16 @@ struct DetailViewContent: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
 
-            Button(action: downvoteAction) {
-                Image(systemName: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
+            Button(action: upvoteAction) {
+                Image(systemName: currentVote == 1 ? "plus.circle.fill" : "plus.circle")
                     .symbolRenderingMode(.palette)
-                     .foregroundStyle(currentVote == -1 ? Color.white : Color.secondary,
-                                      currentVote == -1 ? Color.red : Color.secondary)
+                    .foregroundStyle(currentVote == 1 ? Color.white : Color.secondary,
+                                     currentVote == 1 ? Color.green : Color.secondary)
                     .font(actionIconFont)
             }
             .buttonStyle(.plain)
             .disabled(!authService.isLoggedIn)
+            // --- END MODIFICATION ---
         }
     }
 
