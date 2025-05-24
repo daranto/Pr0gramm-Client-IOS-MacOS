@@ -4,6 +4,7 @@
 import SwiftUI
 import os
 import Kingfisher
+import UIKit // Für UIPasteboard
 
 // Datenmodell für die Übergabe an UnlimitedFeedItemView
 struct UnlimitedFeedItemDataModel {
@@ -12,64 +13,11 @@ struct UnlimitedFeedItemDataModel {
     let totalTagCount: Int
     let comments: [ItemComment]
     let itemInfoStatus: InfoLoadingStatus
-}
-
-fileprivate struct UnlimitedVotableTagView: View {
-    let tag: ItemTag
+    let isFavorited: Bool
     let currentVote: Int
-    let isVoting: Bool
-    let truncateText: Bool
-    let onUpvote: () -> Void
-    let onDownvote: () -> Void
-    let onTapTag: () -> Void
-
-    @EnvironmentObject var authService: AuthService
-
-    private let characterLimit = 10
-    private var displayText: String {
-        if truncateText && tag.tag.count > characterLimit {
-            return String(tag.tag.prefix(characterLimit)) + "…"
-        }
-        return tag.tag
-    }
-    private let tagVoteButtonFont: Font = .caption
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if authService.isLoggedIn {
-                Button(action: onDownvote) {
-                    Image(systemName: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
-                        .font(tagVoteButtonFont)
-                        .foregroundColor(currentVote == -1 ? .red : .white.opacity(0.7))
-                }
-                .buttonStyle(.plain)
-                .disabled(isVoting)
-            }
-
-            Text(displayText)
-                .font(.caption)
-                .foregroundColor(.white)
-                .padding(.horizontal, authService.isLoggedIn ? 2 : 8)
-                .padding(.vertical, 4)
-                .contentShape(Capsule())
-                .onTapGesture(perform: onTapTag)
-
-
-            if authService.isLoggedIn {
-                Button(action: onUpvote) {
-                    Image(systemName: currentVote == 1 ? "plus.circle.fill" : "plus.circle")
-                        .font(tagVoteButtonFont)
-                        .foregroundColor(currentVote == 1 ? .green : .white.opacity(0.7))
-                }
-                .buttonStyle(.plain)
-                .disabled(isVoting)
-            }
-        }
-        .padding(.horizontal, authService.isLoggedIn ? 6 : 0)
-        .background(Color.black.opacity(0.4))
-        .clipShape(Capsule())
-    }
 }
+
+// UnlimitedVotableTagView wurde nach UnlimitedFeedItemView.swift verschoben
 
 
 struct UnlimitedStyleFeedView: View {
@@ -116,6 +64,13 @@ struct UnlimitedStyleFeedView: View {
     @State private var currentRefreshFeedTask: Task<Void, Never>? = nil
     @State private var debouncedRefreshTask: Task<Void, Never>? = nil
 
+    @State private var showingShareOptionsForItemID: Int? = nil
+    @State private var itemToShareWrapper: ShareableItemWrapper? = nil
+    @State private var isPreparingShareGlobal = false
+    @State private var sharePreparationErrorGlobal: String? = nil
+    @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
+    @State private var isProcessingFavoriteGlobal: [Int: Bool] = [:]
+
     private let dummyStartItemID = -1
     private func createDummyStartItem() -> Item {
         return Item(id: dummyStartItemID, promoted: nil, userId: 0, down: 0, up: 0, created: 0, image: "pr0tok.png", thumb: "pr0tok.png", fullsize: "pr0tok.png", preview: nil, width: 512, height: 512, audio: false, source: nil, flags: 1, user: "Pr0Tok", mark: 0, repost: false, variants: nil, subtitles: nil)
@@ -134,7 +89,7 @@ struct UnlimitedStyleFeedView: View {
                 feedControls
                 feedContent
             }
-            .navigationTitle("Feed (Vertikal)")
+            .navigationTitle("pr0Tok")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -158,6 +113,7 @@ struct UnlimitedStyleFeedView: View {
                                 self.canLoadMore = true
                                 self.isLoadingMore = false
                                 self.flagsUsedForLastItemsLoad = nil
+                                self.isProcessingFavoriteGlobal = [:]
                             }
                             Self.logger.info("UI and data states reset for manual refresh. Scrolled to dummy.")
                             
@@ -236,10 +192,53 @@ struct UnlimitedStyleFeedView: View {
             .sheet(item: $fullscreenImageTarget) { (target: FullscreenImageTarget) in
                 FullscreenImageView(item: target.item)
             }
+            .sheet(item: $itemToShareWrapper, onDismiss: {
+                if let tempUrl = itemToShareWrapper?.temporaryFileUrlToDelete {
+                    deleteTemporaryFile(at: tempUrl)
+                }
+            }) { shareableItemWrapper in
+                ShareSheet(activityItems: shareableItemWrapper.itemsToShare)
+            }
+            .sheet(item: $collectionSelectionSheetTarget) { target in
+                CollectionSelectionView(
+                    item: target.item,
+                    onCollectionSelected: { selectedCollection in
+                        Task {
+                            await addActiveItemToSelectedCollection(collection: selectedCollection)
+                        }
+                    }
+                )
+                .environmentObject(authService)
+                .environmentObject(settings)
+                .presentationDetents([.medium, .large])
+            }
+            .onChange(of: collectionSelectionSheetTarget) { oldValue, newValue in // DEBUG LOG
+                Self.logger.info("DEBUG: collectionSelectionSheetTarget changed from \(String(describing: oldValue?.item.id)) to \(String(describing: newValue?.item.id)). Sheet should appear: \(newValue != nil)")
+            }
             .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoadingFeed)) {
                  Button("OK") { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "Unbekannter Fehler")
+            }
+            .confirmationDialog(
+                "Teilen & Kopieren",
+                isPresented: .init(
+                    get: { showingShareOptionsForItemID != nil },
+                    set: { if !$0 { showingShareOptionsForItemID = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Medium teilen/speichern") {
+                    Task { await prepareAndShareMediaForActiveItem() }
+                }
+                Button("Post-Link (pr0gramm.com)") {
+                    copyPostLinkForActiveItem()
+                }
+                Button("Direkter Medien-Link") {
+                    copyMediaLinkForActiveItem()
+                }
+            } message: {
+                Text("Wähle eine Aktion:")
             }
             .onAppear {
                 playerManager.configure(settings: settings)
@@ -276,6 +275,7 @@ struct UnlimitedStyleFeedView: View {
                     self.errorMessage = nil
                     self.canLoadMore = true
                     self.isLoadingMore = false
+                    self.isProcessingFavoriteGlobal = [:]
                 }
                 Self.logger.info("UI reset to dummy item before starting debounced refresh.")
 
@@ -376,7 +376,11 @@ struct UnlimitedStyleFeedView: View {
                          isActive: activeItemID == dummyStartItemID,
                          isDummyItem: true,
                          onToggleShowAllTags: {}, onUpvoteTag: {_ in }, onDownvoteTag: {_ in }, onTagTapped: {_ in }, onRetryLoadDetails: {}, onShowAddTagSheet: {},
-                         onShowFullscreenImage: { _ in }
+                         onShowFullscreenImage: { _ in },
+                         onToggleFavorite: {},
+                         onShowCollectionSelection: {},
+                         onShareTapped: {},
+                         isProcessingFavorite: false
                      )
                      .frame(height: 200)
                  }
@@ -423,7 +427,34 @@ struct UnlimitedStyleFeedView: View {
                                     if !tappedItem.isVideo {
                                         self.fullscreenImageTarget = FullscreenImageTarget(item: tappedItem)
                                     }
-                                }
+                                },
+                                onToggleFavorite: {
+                                    if item.id != dummyStartItemID {
+                                        Task { await toggleFavoriteForActiveItem() }
+                                    }
+                                },
+                                onShowCollectionSelection: {
+                                    // --- DEBUG LOG in Callback ---
+                                    Self.logger.debug("onShowCollectionSelection callback TRIGGERED in UnlimitedStyleFeedView for item.id \(item.id). Current activeItemID: \(String(describing: self.activeItemID))")
+                                    // --- END DEBUG LOG ---
+                                    if let activeId = self.activeItemID, activeId != dummyStartItemID,
+                                       let currentItem = self.items.first(where: { $0.id == activeId }) {
+                                        Self.logger.info("Long press on favorite for item \(currentItem.id) (active). Setting collectionSelectionSheetTarget.")
+                                        self.collectionSelectionSheetTarget = CollectionSelectionSheetTarget(item: currentItem)
+                                    } else if item.id != dummyStartItemID {
+                                        Self.logger.warning("Long press on favorite for item \(item.id) (cell's item, activeItemID was \(String(describing: self.activeItemID))). Setting collectionSelectionSheetTarget via cell's item.")
+                                        self.collectionSelectionSheetTarget = CollectionSelectionSheetTarget(item: item)
+                                    } else {
+                                        Self.logger.warning("onShowCollectionSelection: Could not determine item for collection sheet. activeItemID: \(String(describing: self.activeItemID)), cell's item.id: \(item.id)")
+                                    }
+                                },
+                                onShareTapped: {
+                                    if item.id != dummyStartItemID {
+                                        self.showingShareOptionsForItemID = item.id
+                                        self.sharePreparationErrorGlobal = nil
+                                    }
+                                },
+                                isProcessingFavorite: isProcessingFavoriteGlobal[item.id] ?? false
                             )
                             .id(item.id)
                             .frame(height: geometry.size.height)
@@ -506,13 +537,18 @@ struct UnlimitedStyleFeedView: View {
     }
 
     private func prepareItemDataModel(for item: Item) -> UnlimitedFeedItemDataModel {
+        let isFavoritedState = authService.favoritedItemIDs.contains(item.id)
+        let currentVoteState = authService.votedItemStates[item.id] ?? 0
+
         if item.id == dummyStartItemID {
             return UnlimitedFeedItemDataModel(
                 item: item,
                 displayedTags: [],
                 totalTagCount: 0,
                 comments: [],
-                itemInfoStatus: .loaded
+                itemInfoStatus: .loaded,
+                isFavorited: false,
+                currentVote: 0
             )
         }
 
@@ -528,7 +564,9 @@ struct UnlimitedStyleFeedView: View {
             displayedTags: tagsForDisplayLogic,
             totalTagCount: allItemTags.count,
             comments: commentsToDisplay,
-            itemInfoStatus: currentInfoStatus
+            itemInfoStatus: currentInfoStatus,
+            isFavorited: isFavoritedState,
+            currentVote: currentVoteState
         )
     }
     
@@ -588,6 +626,7 @@ struct UnlimitedStyleFeedView: View {
             self.isLoadingMore = false
             self.cachedDetails = [:]
             self.infoLoadingStatus = [:]
+            self.isProcessingFavoriteGlobal = [:]
         }
         
         let currentApiFlagsForThisRefresh = settings.apiFlags
@@ -678,9 +717,6 @@ struct UnlimitedStyleFeedView: View {
                     if self.scrolledItemID != dummyStartItemID { self.scrolledItemID = dummyStartItemID }
                     if self.activeItemID != dummyStartItemID { self.activeItemID = dummyStartItemID }
                 } else {
-                    // scrolledItemID should remain dummyStartItemID after a refresh,
-                    // until user interaction or the .onAppear of UnlimitedFeedItemView for the first real item.
-                    // This allows the dummy item to be potentially visible first.
                     Self.logger.info("Refresh (Unlimited) successful. \(allFetchedUnseenItems.count) new items added. scrolledItemID remains on dummy. canLoadMore set to \(!apiSaysNoMoreItems).")
                 }
                 self.flagsUsedForLastItemsLoad = currentApiFlagsForThisRefresh
@@ -947,256 +983,163 @@ struct UnlimitedStyleFeedView: View {
         }
         .interactiveDismissDisabled(isAddingTagsInSheet)
     }
-}
 
-struct UnlimitedFeedItemView: View {
-    let itemData: UnlimitedFeedItemDataModel
-    @ObservedObject var playerManager: VideoPlayerManager
-    @ObservedObject var keyboardActionHandlerForVideo: KeyboardActionHandler
-    let isActive: Bool
-    let isDummyItem: Bool
-
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UnlimitedFeedItemView")
-
-    let onToggleShowAllTags: () -> Void
-    let onUpvoteTag: (Int) -> Void
-    let onDownvoteTag: (Int) -> Void
-    let onTagTapped: (String) -> Void
-    let onRetryLoadDetails: () -> Void
-    let onShowAddTagSheet: () -> Void
-    let onShowFullscreenImage: (Item) -> Void
-
-    var item: Item { itemData.item }
-    
-    @State private var showingCommentsSheet = false
-    
-    private let initialVisibleTagCountInItemView = 2
-
-
-    var body: some View {
-        ZStack {
-            mediaContentLayer
-                .zIndex(0)
-                .onTapGesture {
-                    if !item.isVideo && !isDummyItem {
-                        onShowFullscreenImage(item)
-                    }
-                }
-                .allowsHitTesting(!item.isVideo && !isDummyItem)
-
-            if !isDummyItem {
-                VStack {
-                    Spacer()
-                    HStack(alignment: .bottom) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("@\(item.user)")
-                                .font(.headline).bold()
-                                .foregroundColor(.white)
-                            
-                            tagSection
-                        }
-                        .padding(.leading)
-                        .padding(.bottom, bottomSafeAreaPadding)
-
-                        Spacer()
-
-                        interactionButtons
-                            .padding(.trailing)
-                            .padding(.bottom, bottomSafeAreaPadding)
-                    }
-                    .padding(.bottom, 10)
-                    .background(
-                        LinearGradient(
-                            gradient: Gradient(colors: [Color.black.opacity(0.0), Color.black.opacity(0.6)]),
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                }
-                .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
-                .zIndex(1)
-            }
+    private func toggleFavoriteForActiveItem() async {
+        guard let activeId = activeItemID, activeId != dummyStartItemID, let item = items.first(where: { $0.id == activeId }) else {
+            Self.logger.warning("Toggle Favorite: No active item or item not found.")
+            return
         }
-        .background(Color.black)
-        .clipped()
-        .onChange(of: isActive) { oldValue, newValue in
-            if isDummyItem { return }
+        guard !(isProcessingFavoriteGlobal[item.id] ?? false) else {
+            Self.logger.debug("Favorite toggle skipped for item \(item.id): Already processing.")
+            return
+        }
+        guard authService.isLoggedIn,
+              let nonce = authService.userNonce,
+              let collectionId = settings.selectedCollectionIdForFavorites else {
+            Self.logger.warning("Favorite toggle skipped for item \(item.id): User not logged in, nonce missing, or no favorite collection selected in AppSettings.")
+            return
+        }
 
-            if newValue {
-                if item.isVideo && playerManager.playerItemID == item.id {
-                    if playerManager.player?.timeControlStatus != .playing {
-                        playerManager.player?.play()
-                        Self.logger.debug("UnlimitedFeedItemView: Player started via isActive change for item \(item.id)")
-                    }
-                } else if item.isVideo {
-                    playerManager.setupPlayerIfNeeded(for: item, isFullscreen: false)
-                    Self.logger.debug("UnlimitedFeedItemView: Player setup initiated via isActive for item \(item.id)")
-                     Task {
-                         try? await Task.sleep(for: .milliseconds(100))
-                         if self.isActive && playerManager.playerItemID == item.id && playerManager.player?.timeControlStatus != .playing {
-                             playerManager.player?.play()
-                             Self.logger.debug("UnlimitedFeedItemView: Explicit play after setup for item \(item.id)")
-                         }
-                     }
-                }
+        let currentIsFavorited = authService.favoritedItemIDs.contains(item.id)
+        let targetFavoriteState = !currentIsFavorited
+
+        isProcessingFavoriteGlobal[item.id] = true
+
+        do {
+            if targetFavoriteState {
+                try await apiService.addToCollection(itemId: item.id, collectionId: collectionId, nonce: nonce)
             } else {
-                if item.isVideo && playerManager.playerItemID == item.id {
-                     playerManager.player?.pause()
-                     Self.logger.debug("UnlimitedFeedItemView: Player paused via isActive change for item \(item.id)")
-                }
+                try await apiService.removeFromCollection(itemId: item.id, collectionId: collectionId, nonce: nonce)
+            }
+
+            if targetFavoriteState { authService.favoritedItemIDs.insert(item.id) }
+            else { authService.favoritedItemIDs.remove(item.id) }
+            
+            await settings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collectionId)
+            Self.logger.info("Favorite toggled successfully for item \(item.id) in collection \(collectionId). Cache cleared.")
+        } catch {
+            Self.logger.error("Failed to toggle favorite for item \(item.id): \(error.localizedDescription)")
+            if targetFavoriteState { authService.favoritedItemIDs.remove(item.id) }
+            else { authService.favoritedItemIDs.insert(item.id) }
+
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                 await authService.logout()
             }
         }
-        .sheet(isPresented: $showingCommentsSheet) {
-            ItemCommentsSheetView(
-                itemId: itemData.item.id,
-                uploaderName: itemData.item.user,
-                initialComments: itemData.comments,
-                initialInfoStatusProp: itemData.itemInfoStatus,
-                onRetryLoadDetails: onRetryLoadDetails
-            )
-            .environmentObject(settings)
-            .environmentObject(authService)
+        isProcessingFavoriteGlobal[item.id] = false
+    }
+
+    private func addActiveItemToSelectedCollection(collection: ApiCollection) async {
+        guard let activeId = activeItemID, activeId != dummyStartItemID, let item = items.first(where: { $0.id == activeId }) else {
+            Self.logger.warning("Add to Collection: No active item or item not found.")
+            return
         }
-    }
-    
-    private var bottomSafeAreaPadding: CGFloat {
-        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
-            .windows.first(where: { $0.isKeyWindow })?.safeAreaInsets.bottom ?? 0
+        guard !(isProcessingFavoriteGlobal[item.id] ?? false) else {
+            Self.logger.debug("Add to collection '\(collection.name)' skipped: Favorite toggle already processing.")
+            return
+        }
+        guard authService.isLoggedIn, let nonce = authService.userNonce else {
+            Self.logger.warning("Add to collection '\(collection.name)' skipped: User not logged in or nonce missing.")
+            return
+        }
+
+        isProcessingFavoriteGlobal[item.id] = true
+
+        do {
+            try await apiService.addToCollection(itemId: item.id, collectionId: collection.id, nonce: nonce)
+            if collection.id == settings.selectedCollectionIdForFavorites {
+                authService.favoritedItemIDs.insert(item.id)
+            }
+            await settings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collection.id)
+            Self.logger.info("Successfully added item \(item.id) to collection '\(collection.name)'. Cache cleared.")
+        } catch {
+            Self.logger.error("Failed to add item \(item.id) to collection '\(collection.name)': \(error.localizedDescription)")
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                await authService.logout()
+            }
+        }
+        isProcessingFavoriteGlobal[item.id] = false
     }
 
+    private func prepareAndShareMediaForActiveItem() async {
+        guard let activeId = activeItemID, activeId != dummyStartItemID, let item = items.first(where: { $0.id == activeId }) else {
+            Self.logger.error("Cannot share media: No active item or item not found.")
+            sharePreparationErrorGlobal = "Kein aktives Item zum Teilen."
+            return
+        }
+        guard let mediaUrl = item.imageUrl else {
+            Self.logger.error("Cannot share media: URL is nil for item \(item.id)")
+            sharePreparationErrorGlobal = "Medien-URL nicht verfügbar."
+            return
+        }
 
-    @ViewBuilder
-    private var mediaContentLayer: some View {
-        if isDummyItem {
-            Image("pr0tok")
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(50)
-        } else if item.isVideo {
-             if isActive, let player = playerManager.player, playerManager.playerItemID == item.id {
-                 CustomVideoPlayerRepresentable(
-                     player: player,
-                     handler: keyboardActionHandlerForVideo,
-                     onWillBeginFullScreen: { /* TODO */ },
-                     onWillEndFullScreen: { /* TODO */ },
-                     horizontalSizeClass: nil
-                 )
-                 .id("video_\(item.id)")
-             } else {
-                 KFImage(item.thumbnailUrl)
-                     .resizable()
-                     .aspectRatio(contentMode: .fill)
-                     .overlay(Color.black.opacity(0.3))
-                     .overlay(ProgressView().scaleEffect(1.5).tint(.white).opacity(isActive && playerManager.playerItemID != item.id ? 1 : 0))
-             }
+        isPreparingShareGlobal = true
+        sharePreparationErrorGlobal = nil
+        var temporaryFileToDelete: URL? = nil
+
+        defer { isPreparingShareGlobal = false }
+
+        if item.isVideo {
+            do {
+                let temporaryDirectory = FileManager.default.temporaryDirectory
+                let fileName = mediaUrl.lastPathComponent
+                let localUrl = temporaryDirectory.appendingPathComponent(fileName)
+                temporaryFileToDelete = localUrl
+
+                let (downloadedUrl, response) = try await URLSession.shared.download(from: mediaUrl)
+                guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+                    sharePreparationErrorGlobal = "Video-Download fehlgeschlagen (Code: \((response as? HTTPURLResponse)?.statusCode ?? -1))."
+                    return
+                }
+                if FileManager.default.fileExists(atPath: localUrl.path) { try FileManager.default.removeItem(at: localUrl) }
+                try FileManager.default.moveItem(at: downloadedUrl, to: localUrl)
+                itemToShareWrapper = ShareableItemWrapper(itemsToShare: [localUrl], temporaryFileUrlToDelete: localUrl)
+            } catch {
+                sharePreparationErrorGlobal = "Video-Download fehlgeschlagen."
+                itemToShareWrapper = ShareableItemWrapper(itemsToShare: [mediaUrl])
+            }
         } else {
-            KFImage(item.imageUrl)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-        }
-    }
-        
-    @ViewBuilder
-    private var tagSection: some View {
-        if isDummyItem { EmptyView() } else {
-            switch itemData.itemInfoStatus {
-            case .loading:
-                ProgressView().tint(.white).scaleEffect(0.7)
-            case .error(let msg):
-                VStack(alignment: .leading) {
-                    Text("Tags nicht geladen.")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                    Button("Erneut versuchen") {
-                        onRetryLoadDetails()
-                    }
-                    .font(.caption.bold())
-                    .foregroundColor(.white)
+            let result: Result<ImageLoadingResult, KingfisherError> = await withCheckedContinuation { continuation in
+                KingfisherManager.shared.downloader.downloadImage(with: mediaUrl, options: nil) { result in
+                    continuation.resume(returning: result)
                 }
-            case .loaded:
-                if !itemData.displayedTags.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(itemData.displayedTags) { tag in
-                            UnlimitedVotableTagView(
-                                tag: tag,
-                                currentVote: authService.votedTagStates[tag.id] ?? 0,
-                                isVoting: authService.isVotingTag[tag.id] ?? false,
-                                truncateText: true,
-                                onUpvote: { onUpvoteTag(tag.id) },
-                                onDownvote: { onDownvoteTag(tag.id) },
-                                onTapTag: { onTagTapped(tag.tag) }
-                            )
-                        }
-                        if itemData.totalTagCount > itemData.displayedTags.count {
-                            let remainingCount = itemData.totalTagCount - itemData.displayedTags.count
-                            Button {
-                                onToggleShowAllTags()
-                            } label: {
-                                Text("+\(remainingCount) mehr")
-                                    .font(.caption.bold())
-                                    .foregroundColor(.white.opacity(0.8))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color.black.opacity(0.3))
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        } else if authService.isLoggedIn && itemData.totalTagCount == 0 {
-                            Button {
-                                onShowAddTagSheet()
-                            } label: {
-                                Image(systemName: "plus.circle.fill")
-                                    .font(.callout)
-                                    .foregroundColor(.white.opacity(0.8))
-                                    .padding(EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6))
-                                    .background(Color.black.opacity(0.3))
-                                    .clipShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                } else if itemData.totalTagCount > 0 {
-                    Text("Keine Tags (Filter?).")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.7))
-                } else if authService.isLoggedIn {
-                     Button {
-                        onShowAddTagSheet()
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.callout)
-                            .foregroundColor(.white.opacity(0.8))
-                            .padding(EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6))
-                            .background(Color.black.opacity(0.3))
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
+            }
+            switch result {
+            case .success(let imageLoadingResult):
+                itemToShareWrapper = ShareableItemWrapper(itemsToShare: [imageLoadingResult.image])
+            case .failure(let error):
+                if !error.isTaskCancelled && !error.isNotCurrentTask {
+                    sharePreparationErrorGlobal = "Bild-Download fehlgeschlagen."
                 }
-            default:
-                Text("Lade Tags...")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
             }
         }
     }
-    
-    @ViewBuilder
-    private var interactionButtons: some View {
-        if isDummyItem { EmptyView() } else {
-            VStack(spacing: 25) {
-                Button { /* TODO: Like Action */ } label: { Image(systemName: "heart.fill").font(.title).foregroundColor(.white) }
-                Button {
-                    Self.logger.info("Kommentar-Button getippt für Item \(item.id)")
-                    showingCommentsSheet = true
-                } label: {
-                    Image(systemName: "message.fill").font(.title).foregroundColor(.white)
+
+    private func copyPostLinkForActiveItem() {
+        guard let activeId = activeItemID, activeId != dummyStartItemID else { return }
+        let urlString = "https://pr0gramm.com/new/\(activeId)"
+        UIPasteboard.general.string = urlString
+        Self.logger.info("Copied Post-Link to clipboard: \(urlString)")
+    }
+
+    private func copyMediaLinkForActiveItem() {
+        guard let activeId = activeItemID, activeId != dummyStartItemID, let item = items.first(where: { $0.id == activeId }) else { return }
+        if let urlString = item.imageUrl?.absoluteString {
+            UIPasteboard.general.string = urlString
+            Self.logger.info("Copied Media-Link to clipboard: \(urlString)")
+        } else {
+            Self.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)")
+        }
+    }
+
+    private func deleteTemporaryFile(at url: URL) {
+        Task(priority: .background) {
+            do {
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
                 }
-                Button { /* TODO: Share Action */ } label: { Image(systemName: "arrowshape.turn.up.right.fill").font(.title).foregroundColor(.white) }
+            } catch {
+                Self.logger.error("Error deleting temporary shared file \(url.path): \(error.localizedDescription)")
             }
         }
     }

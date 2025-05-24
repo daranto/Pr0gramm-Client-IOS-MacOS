@@ -117,22 +117,20 @@ enum AccentColorChoice: String, CaseIterable, Identifiable {
 }
 
 
-/// Manages application-wide settings, persists them to UserDefaults, and provides access to cache services.
-/// Also manages synchronization of 'seen' items via iCloud Key-Value Store.
 @MainActor
 class AppSettings: ObservableObject {
 
     private nonisolated static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AppSettings")
     private let cacheService = CacheService()
-    private let cloudStore = NSUbiquitousKeyValueStore.default
+    private nonisolated let cloudStore = NSUbiquitousKeyValueStore.default
 
-    // UserDefaults Keys
+
     private static let isVideoMutedPreferenceKey = "isVideoMutedPreference_v1"
     private static let feedTypeKey = "feedTypePreference_v1"
     private static let showSFWKey = "showSFWPreference_v1"
     private static let showNSFWKey = "showNSFWPreference_v1"
     private static let showNSFLKey = "showNSFLPreference_v1"
-    private static let showNSFPKey = "showNSFPPreference_v1" // Wird beibehalten, aber UI-seitig ggf. entfernt
+    private static let showNSFPKey = "showNSFPPreference_v1"
     private static let showPOLKey = "showPOLPreference_v1"
     private static let maxImageCacheSizeMBKey = "maxImageCacheSizeMB_v1"
     private static let commentSortOrderKey = "commentSortOrder_v1"
@@ -146,10 +144,9 @@ class AppSettings: ObservableObject {
     private static let accentColorChoiceKey = "accentColorChoice_v1"
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
-    private static let enableUnlimitedStyleFeedKey = "enableUnlimitedStyleFeed_v1" // Neuer Key
+    private static let enableUnlimitedStyleFeedKey = "enableUnlimitedStyleFeed_v1"
     private var keyValueStoreChangeObserver: NSObjectProtocol?
 
-    // MARK: - Published User Settings (Persisted via UserDefaults)
     @Published var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
     @Published var feedType: FeedType {
         didSet {
@@ -250,7 +247,6 @@ class AppSettings: ObservableObject {
         }
     }
     
-    // --- NEW SETTING ---
     @Published var enableUnlimitedStyleFeed: Bool {
         didSet {
             if oldValue != enableUnlimitedStyleFeed {
@@ -259,21 +255,15 @@ class AppSettings: ObservableObject {
             }
         }
     }
-    // --- END NEW SETTING ---
 
 
-    // MARK: - Published Session State (Not Persisted)
     @Published var transientSessionMuteState: Bool? = nil
-
-    // MARK: - Published Cache Information
     @Published var currentImageDataCacheSizeMB: Double = 0.0
     @Published var currentDataCacheSizeMB: Double = 0.0
-
-    // MARK: - Published Seen Items State (Synced via iCloud KVS, backed up locally)
     @Published private(set) var seenItemIDs: Set<Int> = []
 
     private var saveSeenItemsTask: Task<Void, Never>?
-    private let saveSeenItemsDebounceDelay: Duration = .seconds(2)
+    private let saveSeenItemsDebounceDelay: Duration = .seconds(1) // Kürzere Verzögerung für schnellere Reaktion
 
     var favoritesSettingsChangedPublisher: AnyPublisher<Void, Never> {
         let sfwPublisher = $showSFW.map { _ in () }.eraseToAnyPublisher()
@@ -312,46 +302,34 @@ class AppSettings: ObservableObject {
         }
     }
 
-    // MARK: - Computed Properties for API Usage
     var apiFlags: Int {
         get {
             let loggedIn = self.isUserLoggedInForApiFlags
 
             if !loggedIn {
-                // Ausgeloggt: Immer SFW (Flag 1)
                 return 1
             }
 
-            // Eingeloggt:
             if feedType == .junk {
-                // Junk-Feed hat Vorrang und liefert immer SFW + NSFP
-                return 9 // (SFW: 1 | NSFP: 8)
+                return 9
             } else {
                 var flags = 0
                 if showSFW {
-                    flags |= 1 // SFW
-                    flags |= 8 // NSFP (ist Teil von SFW für eingeloggte User)
+                    flags |= 1
+                    flags |= 8
                 }
                 if showNSFW {
-                    flags |= 2 // NSFW
+                    flags |= 2
                 }
                 if showNSFL {
-                    flags |= 4 // NSFL
+                    flags |= 4
                 }
-
                 if showPOL {
-                    flags |= 16 // POL
+                    flags |= 16
                 }
-
-                // --- KORRIGIERTE LOGIK ---
-                // Wenn keine der Filter (SFW, NSFW, NSFL, POL) aktiv ist,
-                // dann als Default reines SFW (Flag 1) verwenden.
-                // Ansonsten die exakte Kombination der ausgewählten Flags.
                 if flags == 0 {
-                    return 1 // Default auf SFW, wenn gar nichts ausgewählt ist
+                    return 1
                 }
-                // --- ENDE KORRIGIERTE LOGIK ---
-                
                 return flags
             }
         }
@@ -381,7 +359,6 @@ class AppSettings: ObservableObject {
         }
     }
 
-    // MARK: - Initializer
     init() {
         let initialIsVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) as? Bool ?? true
         let initialRawFeedType = UserDefaults.standard.integer(forKey: Self.feedTypeKey)
@@ -412,9 +389,7 @@ class AppSettings: ObservableObject {
         let initialResetFiltersOnAppOpen = UserDefaults.standard.bool(forKey: Self.resetFiltersOnAppOpenKey)
         let initialRawAccentColor = UserDefaults.standard.string(forKey: Self.accentColorChoiceKey)
         let initialAccentColor = AccentColorChoice(rawValue: initialRawAccentColor ?? AccentColorChoice.blue.rawValue) ?? .blue
-        // --- NEW: Load experimental feed setting ---
         let initialEnableUnlimitedStyleFeed = UserDefaults.standard.bool(forKey: Self.enableUnlimitedStyleFeedKey)
-        // --- END NEW ---
 
         self.isVideoMuted = initialIsVideoMuted
         self.feedType = initialFeedType
@@ -433,9 +408,7 @@ class AppSettings: ObservableObject {
         self.gridSize = initialGridSize
         self.resetFiltersOnAppOpen = initialResetFiltersOnAppOpen
         self.accentColorChoice = initialAccentColor
-        // --- NEW: Initialize experimental feed setting ---
         self.enableUnlimitedStyleFeed = initialEnableUnlimitedStyleFeed
-        // --- END NEW ---
         
         Self.logger.info("AppSettings initialized:")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
@@ -450,9 +423,7 @@ class AppSettings: ObservableObject {
         Self.logger.info("- gridSize: \(self.gridSize.displayName)")
         Self.logger.info("- resetFiltersOnAppOpen: \(self.resetFiltersOnAppOpen)")
         Self.logger.info("- accentColorChoice: \(self.accentColorChoice.displayName)")
-        // --- NEW: Log experimental feed setting ---
         Self.logger.info("- enableUnlimitedStyleFeed: \(self.enableUnlimitedStyleFeed)")
-        // --- END NEW ---
 
 
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
@@ -464,9 +435,7 @@ class AppSettings: ObservableObject {
         if UserDefaults.standard.object(forKey: Self.gridSizeSettingKey) == nil { UserDefaults.standard.set(self.gridSize.rawValue, forKey: Self.gridSizeSettingKey) }
         if UserDefaults.standard.object(forKey: Self.resetFiltersOnAppOpenKey) == nil { UserDefaults.standard.set(self.resetFiltersOnAppOpen, forKey: Self.resetFiltersOnAppOpenKey) }
         if UserDefaults.standard.object(forKey: Self.accentColorChoiceKey) == nil { UserDefaults.standard.set(self.accentColorChoice.rawValue, forKey: Self.accentColorChoiceKey) }
-        // --- NEW: Ensure default value for new setting if not present ---
         if UserDefaults.standard.object(forKey: Self.enableUnlimitedStyleFeedKey) == nil { UserDefaults.standard.set(self.enableUnlimitedStyleFeed, forKey: Self.enableUnlimitedStyleFeedKey) }
-        // --- END NEW ---
 
 
         updateKingfisherCacheLimit()
@@ -484,7 +453,6 @@ class AppSettings: ObservableObject {
             self.showNSFW = false
             self.showNSFL = false
             self.showPOL = false
-            // NSFP wird durch showSFW gesteuert, wenn eingeloggt
             if self.isUserLoggedInForApiFlags {
                 self.showNSFP = true
             }
@@ -494,16 +462,22 @@ class AppSettings: ObservableObject {
     }
 
 
-    // MARK: - Cache Management Methods
     func clearSeenItemsCache() async {
         Self.logger.warning("Clearing Seen Items Cache (Local & iCloud) requested.")
-        self.seenItemIDs = []
+        await MainActor.run {
+            self.seenItemIDs = []
+        }
         Self.logger.info("Cleared in-memory seen items set.")
-        await cacheService.clearCache(forKey: Self.localSeenItemsCacheKey)
-        Self.logger.info("Cleared local seen items cache file via CacheService.")
-        cloudStore.removeObject(forKey: Self.iCloudSeenItemsKey)
-        let syncSuccess = cloudStore.synchronize()
-        Self.logger.info("Removed seen items key from iCloud KVS. Synchronize requested: \(syncSuccess).")
+        
+        // Detached task for file operations
+        Task.detached { [cacheService = self.cacheService, cloudStore = self.cloudStore] in
+            await cacheService.clearCache(forKey: Self.localSeenItemsCacheKey)
+            Self.logger.info("Cleared local seen items cache file via CacheService (background).")
+            
+            cloudStore.removeObject(forKey: Self.iCloudSeenItemsKey)
+            let syncSuccess = cloudStore.synchronize() // This is blocking
+            Self.logger.info("Removed seen items key from iCloud KVS. Synchronize requested: \(syncSuccess) (background).")
+        }
     }
     func clearAllAppCache() async {
         Self.logger.warning("Clearing ALL Data Cache, Kingfisher Image Cache, Seen Items Cache (Local & iCloud) requested.")
@@ -547,7 +521,6 @@ class AppSettings: ObservableObject {
         Self.logger.info("Set Kingfisher (image) disk cache size limit to \(limitBytes) bytes (\(self.maxImageCacheSizeMB) MB).")
     }
 
-    // MARK: - Data Cache Access Methods (Delegated to CacheService)
     func saveItemsToCache(_ items: [Item], forKey cacheKey: String) async {
         guard !cacheKey.isEmpty else { return }
         await cacheService.saveItems(items, forKey: cacheKey)
@@ -568,119 +541,142 @@ class AppSettings: ObservableObject {
         await updateDataCacheSize()
     }
 
-    // MARK: - Seen Items Management Methods
+    // --- MODIFIED: markItemAsSeen and related functions ---
     func markItemAsSeen(id: Int) {
-        if !seenItemIDs.contains(id) {
-             var idsToUpdate = seenItemIDs
-             idsToUpdate.insert(id)
-             seenItemIDs = idsToUpdate
-             Self.logger.debug("Marked item \(id) as seen (in-memory). Total seen: \(self.seenItemIDs.count)")
-             saveSeenItemsTask?.cancel()
-             saveSeenItemsTask = Task {
-                 do {
-                     try await Task.sleep(for: saveSeenItemsDebounceDelay)
-                     guard !Task.isCancelled else {
-                         Self.logger.info("Debounced save task for seen items cancelled during sleep.")
-                         return
-                     }
-                     await self.saveSeenItemIDsToCloudAndLocal()
-                 } catch is CancellationError {
-                      Self.logger.info("Debounced save task for seen items cancelled.")
-                 } catch {
-                     Self.logger.error("Error in debounced save task for seen items: \(error.localizedDescription)")
-                 }
-             }
-        } else {
-             Self.logger.trace("Item \(id) was already marked as seen.")
+        // Must be called on MainActor due to @Published property access.
+        guard !seenItemIDs.contains(id) else {
+            Self.logger.trace("Item \(id) was already marked as seen (in-memory).")
+            return
         }
+        
+        var updatedIDs = seenItemIDs
+        updatedIDs.insert(id)
+        seenItemIDs = updatedIDs // Update @Published var on MainActor for UI reactivity
+        Self.logger.debug("Marked item \(id) as seen (in-memory). Total seen: \(self.seenItemIDs.count). Scheduling save.")
+
+        scheduleSaveSeenItems()
     }
 
     func markItemsAsSeen(ids: Set<Int>) {
-         let newIDs = ids.subtracting(seenItemIDs)
-         if !newIDs.isEmpty {
-             Self.logger.debug("Marking \(newIDs.count) new items as seen (in-memory).")
-             var idsToUpdate = seenItemIDs
-             idsToUpdate.formUnion(newIDs)
-             seenItemIDs = idsToUpdate
-             Self.logger.info("Marked \(newIDs.count) items as seen (in-memory). Total seen: \(self.seenItemIDs.count)")
-             saveSeenItemsTask?.cancel()
-             saveSeenItemsTask = Task {
-                 do {
-                     try await Task.sleep(for: saveSeenItemsDebounceDelay)
-                     guard !Task.isCancelled else {
-                         Self.logger.info("Debounced save task for multiple seen items cancelled during sleep.")
-                         return
-                     }
-                     await self.saveSeenItemIDsToCloudAndLocal()
-                 } catch is CancellationError {
-                     Self.logger.info("Debounced save task for multiple seen items cancelled.")
-                 } catch {
-                     Self.logger.error("Error in debounced save task for multiple seen items: \(error.localizedDescription)")
-                 }
-             }
-         } else {
-             Self.logger.trace("No new items to mark as seen from the provided batch.")
-         }
+        // Must be called on MainActor.
+        let newIDs = ids.subtracting(seenItemIDs)
+        guard !newIDs.isEmpty else {
+            Self.logger.trace("No new items to mark as seen from the provided batch.")
+            return
+        }
+        
+        Self.logger.debug("Marking \(newIDs.count) new items as seen (in-memory).")
+        var idsToUpdate = seenItemIDs
+        idsToUpdate.formUnion(newIDs)
+        seenItemIDs = idsToUpdate // UI update
+        Self.logger.info("Marked \(newIDs.count) items as seen (in-memory). Total seen: \(self.seenItemIDs.count). Scheduling save.")
+        
+        scheduleSaveSeenItems()
+    }
+    
+    private func scheduleSaveSeenItems() {
+        // Must be called on MainActor.
+        saveSeenItemsTask?.cancel() // Cancel existing task
+        
+        // Capture the current seenItemIDs for the save operation.
+        // This ensures the task saves the state *at the time it was scheduled* (after debounce).
+        let idsToSave = self.seenItemIDs
+        
+        saveSeenItemsTask = Task {
+            do {
+                try await Task.sleep(for: saveSeenItemsDebounceDelay)
+                guard !Task.isCancelled else {
+                    Self.logger.info("Debounced save task for seen items cancelled during sleep.")
+                    return
+                }
+                // Perform the actual saving in a detached task to avoid blocking main actor.
+                Task.detached(priority: .utility) { [weak self] in // Low priority
+                    guard let self = self else { return }
+                    await self.performActualSaveOfSeenIDs(ids: idsToSave)
+                }
+            } catch is CancellationError {
+                Self.logger.info("Debounced save task (scheduling part) cancelled.")
+            } catch {
+                Self.logger.error("Error in debounced save task scheduling: \(error.localizedDescription)")
+            }
+        }
     }
 
     public func forceSaveSeenItems() async {
+        // Must be called on MainActor.
         saveSeenItemsTask?.cancel()
         Self.logger.info("Force save seen items requested. Current debounced task (if any) cancelled.")
-        await saveSeenItemIDsToCloudAndLocal()
+        let currentIDsToSave = self.seenItemIDs // Get current state on MainActor
+        // Perform the actual saving in a detached task.
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            await self.performActualSaveOfSeenIDs(ids: currentIDsToSave)
+        }
     }
 
-    private func saveSeenItemIDsToCloudAndLocal() async {
-        let idsToSave = self.seenItemIDs
-        Self.logger.debug("Saving \(idsToSave.count) seen item IDs to iCloud KVS (Key: \(Self.iCloudSeenItemsKey))...")
+    // This function runs off the MainActor.
+    private func performActualSaveOfSeenIDs(ids: Set<Int>) async {
+        Self.logger.debug("BG Save: Saving \(ids.count) seen item IDs to local cache...")
+        await cacheService.saveSeenIDs(ids, forKey: Self.localSeenItemsCacheKey)
+
+        Self.logger.debug("BG Save: Saving \(ids.count) seen item IDs to iCloud KVS...")
         do {
-            let data = try JSONEncoder().encode(idsToSave)
-            cloudStore.set(data, forKey: Self.iCloudSeenItemsKey)
-            let syncSuccess = cloudStore.synchronize()
-            Self.logger.info("Saved seen IDs to iCloud KVS. Synchronize requested: \(syncSuccess).")
+            let data = try JSONEncoder().encode(ids)
+            self.cloudStore.set(data, forKey: Self.iCloudSeenItemsKey)
+            let syncSuccess = self.cloudStore.synchronize() // This is blocking
+            Self.logger.info("BG Save: Saved seen IDs to iCloud KVS. Synchronize requested: \(syncSuccess).")
         } catch {
-            Self.logger.error("Failed to encode or save seen IDs to iCloud KVS: \(error.localizedDescription)")
+            Self.logger.error("BG Save: Failed to encode or save seen IDs to iCloud KVS: \(error.localizedDescription)")
         }
-        Self.logger.debug("Saving \(idsToSave.count) seen item IDs to local cache (Key: \(Self.localSeenItemsCacheKey))...")
-        await cacheService.saveSeenIDs(idsToSave, forKey: Self.localSeenItemsCacheKey)
     }
+    // --- END MODIFICATION ---
+
+
     private func loadSeenItemIDs() async {
         Self.logger.debug("Loading seen item IDs (iCloud first, then local cache)...")
+        var loadedFromCloud = false
+        
         if let cloudData = cloudStore.data(forKey: Self.iCloudSeenItemsKey) {
             Self.logger.debug("Found data in iCloud KVS for key \(Self.iCloudSeenItemsKey).")
             do {
                 let decodedIDs = try JSONDecoder().decode(Set<Int>.self, from: cloudData)
-                self.seenItemIDs = decodedIDs
+                await MainActor.run { self.seenItemIDs = decodedIDs }
+                loadedFromCloud = true
                 Self.logger.info("Successfully loaded \(decodedIDs.count) seen item IDs from iCloud KVS.")
-                Task.detached { await self.cacheService.saveSeenIDs(decodedIDs, forKey: Self.localSeenItemsCacheKey) }
-                return
+                Task.detached(priority: .background) { await self.cacheService.saveSeenIDs(decodedIDs, forKey: Self.localSeenItemsCacheKey) }
             } catch {
                 Self.logger.error("Failed to decode seen item IDs from iCloud KVS data: \(error.localizedDescription). Falling back to local cache.")
             }
         } else {
             Self.logger.info("No data found in iCloud KVS for key \(Self.iCloudSeenItemsKey). Checking local cache...")
         }
-        if let localIDs = await cacheService.loadSeenIDs(forKey: Self.localSeenItemsCacheKey) {
-             self.seenItemIDs = localIDs
-             Self.logger.info("Loaded \(localIDs.count) seen item IDs from LOCAL cache.")
-             Task.detached {
-                  Self.logger.info("Syncing locally loaded seen IDs UP to iCloud...")
-                  await self.saveSeenItemIDsToCloudAndLocal()
-             }
-        } else {
-            Self.logger.warning("Could not load seen item IDs from iCloud or local cache. Starting with an empty set.")
-             self.seenItemIDs = []
+
+        if !loadedFromCloud {
+            if let localIDs = await cacheService.loadSeenIDs(forKey: Self.localSeenItemsCacheKey) {
+                 await MainActor.run { self.seenItemIDs = localIDs }
+                 Self.logger.info("Loaded \(localIDs.count) seen item IDs from LOCAL cache.")
+                 Task.detached(priority: .background) {
+                      Self.logger.info("Syncing locally loaded seen IDs UP to iCloud (using performActualSave).")
+                      await self.performActualSaveOfSeenIDs(ids: localIDs)
+                 }
+            } else {
+                Self.logger.warning("Could not load seen item IDs from iCloud or local cache. Starting with an empty set.")
+                 await MainActor.run { self.seenItemIDs = [] }
+            }
         }
     }
 
-    // MARK: - iCloud KVS Synchronization Handling
     private func setupCloudKitKeyValueStoreObserver() {
         if keyValueStoreChangeObserver != nil { NotificationCenter.default.removeObserver(keyValueStoreChangeObserver!); keyValueStoreChangeObserver = nil }
-        keyValueStoreChangeObserver = NotificationCenter.default.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification, object: cloudStore, queue: .main) { [weak self] notification in
-            Task { @MainActor [weak self] in await self?.handleCloudKitStoreChange(notification: notification) }
+        keyValueStoreChangeObserver = NotificationCenter.default.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification, object: cloudStore, queue: .main) { [weak self, capturedCloudStore = self.cloudStore] notification in
+            Task { @MainActor [weak self, capturedCloudStore] in
+                await self?.handleCloudKitStoreChange(notification: notification, cloudStoreToUse: capturedCloudStore)
+            }
         }
         let syncSuccess = cloudStore.synchronize(); Self.logger.info("Setup iCloud KVS observer. Initial synchronize requested: \(syncSuccess)")
     }
-    private func handleCloudKitStoreChange(notification: Notification) async {
+
+    private func handleCloudKitStoreChange(notification: Notification, cloudStoreToUse: NSUbiquitousKeyValueStore) async {
         Self.logger.info("Received iCloud KVS didChangeExternallyNotification.")
         guard let userInfo = notification.userInfo, let changeReason = userInfo[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int else { Self.logger.warning("Could not get change reason from KVS notification."); return }
         guard let changedKeys = userInfo[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String], changedKeys.contains(Self.iCloudSeenItemsKey) else { Self.logger.debug("KVS change notification did not contain our key (\(Self.iCloudSeenItemsKey)). Ignoring."); return }
@@ -689,9 +685,9 @@ class AppSettings: ObservableObject {
         switch changeReason {
         case NSUbiquitousKeyValueStoreServerChange, NSUbiquitousKeyValueStoreInitialSyncChange:
             Self.logger.debug("Change reason: ServerChange or InitialSyncChange.")
-            guard let cloudData = cloudStore.data(forKey: Self.iCloudSeenItemsKey) else {
+            guard let cloudData = cloudStoreToUse.data(forKey: Self.iCloudSeenItemsKey) else {
                 Self.logger.warning("Our key (\(Self.iCloudSeenItemsKey)) was reportedly changed, but no data found in KVS. Possibly deleted externally?")
-                self.seenItemIDs = []
+                await MainActor.run { self.seenItemIDs = [] }
                 await self.cacheService.clearCache(forKey: Self.localSeenItemsCacheKey)
                 Self.logger.info("Cleared local seen items state because key was missing in iCloud after external change notification.")
                 return
@@ -699,12 +695,12 @@ class AppSettings: ObservableObject {
             do {
                 let incomingIDs = try JSONDecoder().decode(Set<Int>.self, from: cloudData); Self.logger.info("Successfully decoded \(incomingIDs.count) seen IDs from external iCloud KVS change.")
                 let localIDs = self.seenItemIDs; let mergedIDs = localIDs.union(incomingIDs)
-                if mergedIDs.count > localIDs.count {
-                    self.seenItemIDs = mergedIDs; Self.logger.info("Merged external seen IDs. New total: \(mergedIDs.count).")
-                    Task.detached { await self.cacheService.saveSeenIDs(mergedIDs, forKey: Self.localSeenItemsCacheKey) }
+                if mergedIDs.count > localIDs.count || mergedIDs != localIDs {
+                    await MainActor.run { self.seenItemIDs = mergedIDs }
+                    Self.logger.info("Merged external seen IDs. New total: \(mergedIDs.count).")
+                    Task.detached(priority: .background) { await self.cacheService.saveSeenIDs(mergedIDs, forKey: Self.localSeenItemsCacheKey) }
                 } else {
-                    Self.logger.debug("Incoming seen IDs did not add new items to the local set. No UI update needed.")
-                    Task.detached { await self.cacheService.saveSeenIDs(localIDs, forKey: Self.localSeenItemsCacheKey) }
+                    Self.logger.debug("Incoming seen IDs did not add new items or change the local set. No UI update needed.")
                 }
             } catch { Self.logger.error("Failed to decode seen IDs from external iCloud KVS change data: \(error.localizedDescription)") }
         case NSUbiquitousKeyValueStoreAccountChange: Self.logger.warning("iCloud account changed. Reloading seen items state."); await loadSeenItemIDs()
