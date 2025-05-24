@@ -85,9 +85,7 @@ struct UnlimitedFeedItemView: View {
     let onShowCollectionSelection: () -> Void
     let onShareTapped: () -> Void
     let isProcessingFavorite: Bool
-    // --- NEW: Callback for showing user profile ---
     let onShowUserProfile: (String) -> Void
-    // --- END NEW ---
 
 
     var item: Item { itemData.item }
@@ -95,10 +93,12 @@ struct UnlimitedFeedItemView: View {
     @State private var showingCommentsSheet = false
     
     private let initialVisibleTagCountInItemView = 2
+    
+    private let bottomUIBarHeightEstimate: CGFloat = 70
 
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             mediaContentLayer
                 .zIndex(0)
                 .onTapGesture {
@@ -107,24 +107,60 @@ struct UnlimitedFeedItemView: View {
                     }
                 }
                 .allowsHitTesting(!item.isVideo && !isDummyItem)
+            
+            if isActive && item.isVideo && playerManager.playerItemID == item.id {
+                VStack {
+                    Spacer()
+                    if let subtitle = playerManager.currentSubtitleText, !subtitle.isEmpty {
+                         Text(subtitle)
+                             .font(UIConstants.footnoteFont.weight(.medium))
+                             .foregroundColor(.white)
+                             .padding(.horizontal, 10)
+                             .padding(.vertical, 5)
+                             .background(.black.opacity(0.75))
+                             .cornerRadius(6)
+                             .multilineTextAlignment(.center)
+                             .padding(.horizontal)
+                             .padding(.bottom, bottomUIBarHeightEstimate + (bottomSafeAreaPadding > 0 ? bottomSafeAreaPadding : 10) + 10)
+                             .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+                             .id("pr0tok_subtitle_\(item.id)_\(subtitle)")
+                             .allowsHitTesting(false)
+                    }
+                }
+                .zIndex(0.5)
+                
+                if let subtitleError = playerManager.subtitleError, !subtitleError.isEmpty {
+                    VStack {
+                        Text("Untertitel: \(subtitleError)")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .padding(5)
+                            .background(Material.ultraThin)
+                            .cornerRadius(5)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                            .padding(.top, 50)
+                        Spacer()
+                    }
+                    .allowsHitTesting(false)
+                    .zIndex(0.5)
+                }
+            }
 
             if !isDummyItem {
                 VStack {
                     Spacer()
                     HStack(alignment: .bottom) {
                         VStack(alignment: .leading, spacing: 8) {
-                            // --- MODIFIED: Add onTapGesture to username Text ---
                             Text("@\(item.user)")
                                 .font(.headline).bold()
                                 .foregroundColor(.white)
-                                .contentShape(Rectangle()) // Make sure the tap area is sufficient
+                                .contentShape(Rectangle())
                                 .onTapGesture {
                                     if !item.user.isEmpty {
                                         Self.logger.info("Username '\(item.user)' tapped. Calling onShowUserProfile.")
                                         onShowUserProfile(item.user)
                                     }
                                 }
-                            // --- END MODIFICATION ---
                             
                             tagSection
                         }
@@ -204,7 +240,7 @@ struct UnlimitedFeedItemView: View {
             Image("pr0tok")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity) // Zentriert das Dummy-Bild
                 .padding(50)
         } else if item.isVideo {
              if isActive, let player = playerManager.player, playerManager.playerItemID == item.id {
@@ -219,14 +255,17 @@ struct UnlimitedFeedItemView: View {
              } else {
                  KFImage(item.thumbnailUrl)
                      .resizable()
-                     .aspectRatio(contentMode: .fill)
+                     .aspectRatio(contentMode: .fill) // Füllt den verfügbaren Platz
+                     .frame(maxWidth: .infinity, maxHeight: .infinity) // Nimmt allen Platz ein
+                     .clipped() // Verhindert Überlappen, falls Aspect Ratio nicht passt
                      .overlay(Color.black.opacity(0.3))
                      .overlay(ProgressView().scaleEffect(1.5).tint(.white).opacity(isActive && playerManager.playerItemID != item.id ? 1 : 0))
              }
         } else {
             KFImage(item.imageUrl)
                 .resizable()
-                .aspectRatio(contentMode: .fit)
+                .aspectRatio(contentMode: .fit) // Behält Aspekt bei und füllt, zentriert
+                .frame(maxWidth: .infinity, maxHeight: .infinity) // Zentriert das Bild im verfügbaren Raum
         }
     }
         
@@ -335,7 +374,7 @@ struct UnlimitedFeedItemView: View {
                     }
                 }
                 .disabled(isProcessingFavorite || !authService.isLoggedIn)
-                .highPriorityGesture( // Behält HighPriority für LongPress
+                .highPriorityGesture(
                     LongPressGesture(minimumDuration: 0.5)
                         .onEnded { _ in
                             Self.logger.debug("Long press detected on heart button for item \(item.id). Calling onShowCollectionSelection.")
@@ -371,7 +410,7 @@ struct UnlimitedFeedItemView: View {
     let navService = NavigationService()
     settings.enableUnlimitedStyleFeed = true
     
-    let dummyItem = Item(id: 1, promoted: nil, userId: 1, down: 0, up: 10, created: 0, image: "dummy.jpg", thumb: "dummy_thumb.jpg", fullsize: nil, preview: nil, width: 100, height: 100, audio: false, source: nil, flags: 1, user: "User", mark: 1, repost: false, variants: nil, subtitles: nil)
+    let dummyItem = Item(id: 1, promoted: nil, userId: 1, down: 0, up: 10, created: 0, image: "dummy.jpg", thumb: "dummy_thumb.jpg", fullsize: nil, preview: nil, width: 100, height: 100, audio: false, source: nil, flags: 1, user: "User", mark: 1, repost: false, variants: nil, subtitles: [ItemSubtitle(language: "de", path: "/some/path.vtt", label: "Deutsch", isDefault: true)])
     let sampleItemData = UnlimitedFeedItemDataModel(
         item: dummyItem,
         displayedTags: [ItemTag(id: 1, confidence: 1, tag: "Tag1")],
@@ -383,10 +422,12 @@ struct UnlimitedFeedItemView: View {
     )
     
     let dummyKeyboardHandler = KeyboardActionHandler()
-    
+    let previewPlayerManager = VideoPlayerManager()
+    previewPlayerManager.configure(settings: settings)
+
     return UnlimitedFeedItemView(
         itemData: sampleItemData,
-        playerManager: VideoPlayerManager(),
+        playerManager: previewPlayerManager,
         keyboardActionHandlerForVideo: dummyKeyboardHandler,
         isActive: true,
         isDummyItem: false,
@@ -401,7 +442,7 @@ struct UnlimitedFeedItemView: View {
         onShowCollectionSelection: {},
         onShareTapped: {},
         isProcessingFavorite: false,
-        onShowUserProfile: { username in print("Preview: Show profile for \(username)")} // Dummy-Implementierung
+        onShowUserProfile: { username in print("Preview: Show profile for \(username)")}
     )
     .environmentObject(settings)
     .environmentObject(authService)
