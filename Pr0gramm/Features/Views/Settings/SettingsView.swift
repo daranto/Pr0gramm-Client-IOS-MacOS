@@ -4,6 +4,7 @@
 import SwiftUI
 import os
 
+
 /// View for displaying and modifying application settings, including cache management.
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
