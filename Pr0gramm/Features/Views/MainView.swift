@@ -15,42 +15,61 @@ struct MainView: View {
     @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
+    // AppOrientationManager wird nicht mehr direkt hier benötigt, aber dieAppDelegate-Logik greift global.
 
     @State private var feedPopToRootTrigger = UUID()
 
     private var selectedTab: Tab { navigationService.selectedTab }
+
+    // --- MODIFIED: Bestimmen, ob Pr0Tok angezeigt werden soll ---
+    private var shouldShowPr0Tok: Bool {
+        // Pr0Tok anzeigen, wenn:
+        // 1. Feature in den Settings aktiviert ist
+        // 2. Das aktuelle Gerät ein iPhone ist
+        return settings.enableUnlimitedStyleFeed && UIConstants.isCurrentDeviceiPhone
+    }
+    // --- END MODIFICATION ---
 
     var body: some View {
         VStack(spacing: 0) {
             Group { // Main Content Area
                 switch selectedTab {
                 case .feed:
-                    // --- MODIFIED: Conditional View based on setting ---
-                    if settings.enableUnlimitedStyleFeed {
+                    if shouldShowPr0Tok {
                         UnlimitedStyleFeedView()
+                            .forceRotation(orientation: .portrait)
                     } else {
                         FeedView(popToRootTrigger: feedPopToRootTrigger)
+                            .forceRotation(orientation: .all)
                     }
-                    // --- END MODIFICATION ---
-                case .favorites: FavoritesView()
-                case .search: SearchView()
-                case .inbox: InboxView()
-                case .profile: ProfileView()
-                case .settings: SettingsView()
+                case .favorites:
+                    FavoritesView()
+                        .forceRotation(orientation: .all)
+                case .search:
+                    SearchView()
+                        .forceRotation(orientation: .all)
+                case .inbox:
+                    InboxView()
+                        .forceRotation(orientation: .all)
+                case .profile:
+                    ProfileView()
+                        .forceRotation(orientation: .all)
+                case .settings:
+                    SettingsView()
+                        .forceRotation(orientation: .all)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider() // Visual separator above the tab bar
+            Divider()
 
-            tabBarHStack // Custom tab bar
+            tabBarHStack
                 .background { Rectangle().fill(.bar).ignoresSafeArea(edges: .bottom) }
 
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
-    /// The horizontal stack representing the custom tab bar.
     private var tabBarHStack: some View {
         HStack(spacing: 0) {
             ForEach(Tab.allCases) { tab in
@@ -77,8 +96,8 @@ struct MainView: View {
 
 
     private func handleTap(on tab: Tab) {
-        if tab == .feed && selectedTab == .feed && !settings.enableUnlimitedStyleFeed { // Pop to root nur für Grid-Feed
-            print("Feed tab tapped again (Grid View). Triggering pop to root.");
+        if tab == .feed && selectedTab == .feed && !shouldShowPr0Tok {
+            print("Feed tab tapped again (Grid View or iPad/Mac). Triggering pop to root.");
             feedPopToRootTrigger = UUID()
         } else {
             navigationService.selectedTab = tab;
@@ -150,17 +169,18 @@ struct TabBarButtonLabel: View {
     let settings = AppSettings()
     let authService = AuthService(appSettings: settings)
     let navigationService = NavigationService()
+    let appOrientationManager = AppOrientationManager()
 
     authService.isLoggedIn = true
     authService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
-    // authService.unreadInboxTotal = 119 // Für Preview von Badges
-
-    // Um den UnlimitedStyleFeed in der Preview zu testen:
+    
     // settings.enableUnlimitedStyleFeed = true
+
 
     return MainView()
         .environmentObject(settings)
         .environmentObject(authService)
         .environmentObject(navigationService)
+        .environmentObject(appOrientationManager)
 }
 // --- END OF COMPLETE FILE ---

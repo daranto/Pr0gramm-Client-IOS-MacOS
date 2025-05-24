@@ -124,15 +124,22 @@ struct SettingsView: View {
                 Section {
                     Toggle("Feature: 'Nur Frisches anzeigen' aktivieren", isOn: $settings.enableExperimentalHideSeen)
                         .font(UIConstants.bodyFont)
-                    // --- NEW TOGGLE ---
-                    Toggle("Feature: 'pr0Tok' aktivieren", isOn: $settings.enableUnlimitedStyleFeed)
-                        .font(UIConstants.bodyFont)
-                    // --- END NEW TOGGLE ---
+                    
+                    // --- MODIFIED: Conditional Toggle for Pr0Tok based on device type ---
+                    if UIConstants.isCurrentDeviceiPhone {
+                        Toggle("Feature: 'pr0Tok' aktivieren (nur iPhone)", isOn: $settings.enableUnlimitedStyleFeed)
+                            .font(UIConstants.bodyFont)
+                    }
+                    // --- END MODIFICATION ---
                 } header: {
                      Text("Experimentelle Features")
                 } footer: {
-                     Text("Aktiviere diese Option, um die experimentelle Funktion 'Nur Frisches anzeigen' im Filter-Menü verfügbar zu machen. Diese Funktion blendet bereits gesehene Posts im Feed aus, kann aber bei der Paginierung (Nachladen älterer Posts) noch zu unerwartetem Verhalten führen.\nDer vertikale Feed ändert die Darstellung des Haupt-Feeds zu einer seitenbasierten Ansicht.")
+                    let baseFooterText = "Aktiviere diese Option, um die experimentelle Funktion 'Nur Frisches anzeigen' im Filter-Menü verfügbar zu machen. Diese Funktion blendet bereits gesehene Posts im Feed aus, kann aber bei der Paginierung (Nachladen älterer Posts) noch zu unerwartetem Verhalten führen."
+                    // --- MODIFIED: Footer text adapted based on device type ---
+                    let pr0tokFooterText = "\nDer vertikale Feed ('pr0Tok') ändert die Darstellung des Haupt-Feeds zu einer seitenbasierten Ansicht und ist nur auf dem iPhone verfügbar."
+                    Text(UIConstants.isCurrentDeviceiPhone ? baseFooterText + pr0tokFooterText : baseFooterText)
                         .font(UIConstants.footnoteFont)
+                     // --- END MODIFICATION ---
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 

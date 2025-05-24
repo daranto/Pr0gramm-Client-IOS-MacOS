@@ -6,7 +6,7 @@ import os
 
 // Identifiable Struct für Deep-Link-Daten
 struct DeepLinkData: Identifiable {
-    let id: Int // itemID dient als eindeutige ID für das Sheet
+    let id: Int
     let itemIDValue: Int
     let commentIDValue: Int?
 
@@ -17,13 +17,18 @@ struct DeepLinkData: Identifiable {
     }
 }
 
-/// The main entry point for the Pr0gramm SwiftUI application.
 @main
 struct Pr0grammApp: App {
+    // --- NEW: Add UIApplicationDelegateAdaptor ---
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    // --- END NEW ---
+
     @StateObject private var appSettings: AppSettings
     @StateObject private var authService: AuthService
     @StateObject private var navigationService = NavigationService()
     @StateObject private var scenePhaseObserver: ScenePhaseObserver
+    @StateObject private var appOrientationManager = AppOrientationManager() // Kann entfernt werden, wenn nicht mehr benötigt
+
 
     @State private var activeDeepLinkData: DeepLinkData? = nil
 
@@ -34,21 +39,20 @@ struct Pr0grammApp: App {
         let auth = AuthService(appSettings: settings)
         _appSettings = StateObject(wrappedValue: settings)
         _authService = StateObject(wrappedValue: auth)
-        // Stelle sicher, dass ScenePhaseObserver auch die authService Instanz bekommt, falls es sie für die unread counts braucht
         _scenePhaseObserver = StateObject(wrappedValue: ScenePhaseObserver(appSettings: settings, authService: auth))
-
-
+        
         configureAudioSession()
         Pr0grammApp.logger.info("Pr0grammApp init")
     }
 
     var body: some Scene {
         WindowGroup {
-            AppRootView() // Die Logik für checkInitialLoginStatus ist jetzt in AppRootView
+            AppRootView()
                 .environmentObject(appSettings)
                 .environmentObject(authService)
                 .environmentObject(navigationService)
                 .environmentObject(scenePhaseObserver)
+                .environmentObject(appOrientationManager) // Vorerst drin lassen, falls noch für andere Dinge genutzt
                 .onOpenURL { url in
                     Pr0grammApp.logger.info("App opened with URL: \(url.absoluteString)")
                     handleIncomingURL(url)
@@ -123,13 +127,14 @@ struct AppRootView: View {
     @EnvironmentObject var appSettings: AppSettings
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var scenePhaseObserver: ScenePhaseObserver
+    @EnvironmentObject var appOrientationManager: AppOrientationManager
     @Environment(\.scenePhase) var scenePhase
 
     var body: some View {
         MainView()
             .accentColor(appSettings.accentColorChoice.swiftUIColor)
             .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
-            .task { // checkInitialLoginStatus wird hier aufgerufen
+            .task {
                 await authService.checkInitialLoginStatus()
             }
             .onChange(of: scenePhase, initial: true) { oldPhase, newPhase in
