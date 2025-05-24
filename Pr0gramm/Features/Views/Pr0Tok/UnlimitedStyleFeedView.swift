@@ -1,4 +1,4 @@
-// Pr0gramm/Pr0gramm/Features/Views/UnlimitedStyleFeedView.swift
+// Pr0gramm/Pr0gramm/Features/Views/Pr0Tok/UnlimitedStyleFeedView.swift
 // --- START OF COMPLETE FILE ---
 
 import SwiftUI
@@ -119,7 +119,8 @@ struct UnlimitedStyleFeedView: View {
         return Item(id: dummyStartItemID, promoted: nil, userId: 0, down: 0, up: 0, created: 0, image: "pr0tok.png", thumb: "pr0tok.png", fullsize: "pr0tok.png", preview: nil, width: 512, height: 512, audio: false, source: nil, flags: 1, user: "Pr0Tok", mark: 0, repost: false, variants: nil, subtitles: nil)
     }
     
-    private let maxAutoRefreshPages = 3
+    // Entferne maxAutoRefreshPages, da die Schleife jetzt nur durch apiSaysNoMoreItems beendet wird
+    // private let maxAutoRefreshPages = 3
 
     init() {
         // .onAppear wird für die initiale Einrichtung verwendet
@@ -523,12 +524,13 @@ struct UnlimitedStyleFeedView: View {
         
         var allFetchedUnseenItems: [Item] = []
         var currentOlderThanIdForRefreshLoop: Int? = nil
-        var pagesAttemptedInLoop = 0
-        var apiReachedEndInLoop = false
+        var pagesAttemptedInLoop = 0 // Zähler für die geladenen Seiten
+        var apiSaysNoMoreItems = false
 
         do {
             if settings.hideSeenItems && settings.enableExperimentalHideSeen {
-                while allFetchedUnseenItems.isEmpty && pagesAttemptedInLoop < maxAutoRefreshPages && !apiReachedEndInLoop {
+                // Schleife läuft, solange keine ungesehenen Items gefunden wurden UND die API nicht das Ende signalisiert
+                while allFetchedUnseenItems.isEmpty && !apiSaysNoMoreItems {
                     if Task.isCancelled { throw CancellationError() }
                     pagesAttemptedInLoop += 1
                     Self.logger.info("RefreshItems: Auto-fetching page \(pagesAttemptedInLoop) for unseen (older: \(currentOlderThanIdForRefreshLoop ?? -1)) with flags \(currentApiFlagsForThisRefresh)")
@@ -550,14 +552,16 @@ struct UnlimitedStyleFeedView: View {
                     
                     allFetchedUnseenItems.append(contentsOf: pageItems)
                     
-                    if apiResponse.atEnd == true || apiResponse.hasOlder == false {
-                        apiReachedEndInLoop = true
+                    if apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
+                        apiSaysNoMoreItems = true
+                        Self.logger.info("API indicated end of feed during refresh loop (Page \(pagesAttemptedInLoop)).")
                     }
                     
-                    if !apiResponse.items.isEmpty && !apiReachedEndInLoop {
+                    if !apiResponse.items.isEmpty && !apiSaysNoMoreItems {
                          currentOlderThanIdForRefreshLoop = settings.feedType == .promoted ? apiResponse.items.last!.promoted ?? apiResponse.items.last!.id : apiResponse.items.last!.id
-                    } else if apiResponse.items.isEmpty && !apiReachedEndInLoop {
-                        apiReachedEndInLoop = true
+                    } else if apiResponse.items.isEmpty && !apiSaysNoMoreItems {
+                        apiSaysNoMoreItems = true
+                        Self.logger.info("API returned 0 items during refresh loop (Page \(pagesAttemptedInLoop)), assuming end.")
                     }
                 }
             } else {
@@ -567,8 +571,10 @@ struct UnlimitedStyleFeedView: View {
                     showJunkParameter: settings.apiShowJunk
                 )
                 allFetchedUnseenItems = apiResponse.items
-                apiReachedEndInLoop = apiResponse.atEnd == true || apiResponse.hasOlder == false
-                Self.logger.info("API fetch (Unlimited, no hideSeenItems) completed: \(allFetchedUnseenItems.count) items. API at end: \(apiReachedEndInLoop)")
+                if apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
+                    apiSaysNoMoreItems = true
+                }
+                Self.logger.info("API fetch (Unlimited, no hideSeenItems) completed: \(allFetchedUnseenItems.count) items. API at end: \(apiSaysNoMoreItems)")
             }
             
             if Task.isCancelled { Self.logger.info("RefreshItems (Unlimited) Task cancelled after API fetch but before UI update."); return }
@@ -579,8 +585,10 @@ struct UnlimitedStyleFeedView: View {
                 self.infoLoadingStatus = [:]
                 self.errorMessage = nil
 
+                self.canLoadMore = !apiSaysNoMoreItems // canLoadMore hängt nur vom API-Signal ab
+                
                 if allFetchedUnseenItems.isEmpty {
-                    self.canLoadMore = false
+                    Self.logger.info("Refresh (Unlimited) resulted in 0 new items. canLoadMore set to \(!apiSaysNoMoreItems) based on API signal (\(apiSaysNoMoreItems)).")
                     if self.scrolledItemID != dummyStartItemID { self.scrolledItemID = dummyStartItemID }
                     if self.activeItemID != dummyStartItemID { self.activeItemID = dummyStartItemID }
                 } else {
@@ -592,8 +600,7 @@ struct UnlimitedStyleFeedView: View {
                             self.scrolledItemID = allFetchedUnseenItems.first?.id ?? dummyStartItemID
                         }
                     }
-                    
-                    self.canLoadMore = !apiReachedEndInLoop
+                    Self.logger.info("Refresh (Unlimited) successful. canLoadMore set to \(!apiSaysNoMoreItems) based on API signal (\(apiSaysNoMoreItems)).")
                 }
                 self.flagsUsedForLastItemsLoad = currentApiFlagsForThisRefresh
             }
@@ -604,6 +611,7 @@ struct UnlimitedStyleFeedView: View {
                     items = [createDummyStartItem()]
                     activeItemID = dummyStartItemID
                     scrolledItemID = dummyStartItemID
+                    canLoadMore = true
                 }
             }
         } catch {
@@ -635,7 +643,7 @@ struct UnlimitedStyleFeedView: View {
         }
         guard let finalOlderThanId = olderThanId else {
             Self.logger.warning("Cannot load more (Unlimited): Could not determine 'older' value from real items.")
-            canLoadMore = false
+            // canLoadMore nicht auf false setzen, damit der Nutzer ggf. manuell refreshen kann
             return
         }
         
@@ -644,13 +652,14 @@ struct UnlimitedStyleFeedView: View {
         defer { Task { @MainActor in self.isLoadingMore = false } }
 
         var itemsToAppend: [Item] = []
-        var apiStillHasMore = true
+        var apiSaysNoMoreItemsAfterLoadMore = false
         var pagesForLoadMore = 0
-        let maxPagesForLoadMore = settings.hideSeenItems && settings.enableExperimentalHideSeen ? 3 : 1
+        // Entferne maxPagesForLoadMoreLoop, Schleife läuft, bis ungesehene Items gefunden werden oder API am Ende
+        // let maxPagesForLoadMoreLoop = settings.hideSeenItems && settings.enableExperimentalHideSeen ? maxAutoRefreshPages : 1
 
         do {
             var currentOlderForLoop = finalOlderThanId
-            while itemsToAppend.isEmpty && pagesForLoadMore < maxPagesForLoadMore && apiStillHasMore {
+            while itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore { // Schleife läuft weiter, solange keine Items zum Anhängen da sind UND die API nicht am Ende ist
                 if Task.isCancelled { throw CancellationError() }
                 pagesForLoadMore += 1
                 Self.logger.info("LoadMore: Fetching page \(pagesForLoadMore) (older: \(currentOlderForLoop))")
@@ -665,6 +674,7 @@ struct UnlimitedStyleFeedView: View {
                 if Task.isCancelled { throw CancellationError() }
 
                 var pageItems = apiResponse.items
+                let rawPageItemCount = pageItems.count
                 
                 if settings.hideSeenItems && settings.enableExperimentalHideSeen {
                     let originalCount = pageItems.count
@@ -676,12 +686,16 @@ struct UnlimitedStyleFeedView: View {
                 let uniqueNewPageItems = pageItems.filter { !currentItemIDs.contains($0.id) }
                 itemsToAppend.append(contentsOf: uniqueNewPageItems)
 
-                apiStillHasMore = apiResponse.atEnd == false && apiResponse.hasOlder != false
+                if apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
+                    apiSaysNoMoreItemsAfterLoadMore = true
+                    Self.logger.info("API indicated end of feed during loadMore loop (Page \(pagesForLoadMore)).")
+                }
                 
-                if !apiResponse.items.isEmpty && apiStillHasMore {
+                if rawPageItemCount > 0 && !apiSaysNoMoreItemsAfterLoadMore {
                     currentOlderForLoop = settings.feedType == .promoted ? apiResponse.items.last!.promoted ?? apiResponse.items.last!.id : apiResponse.items.last!.id
-                } else if apiResponse.items.isEmpty && apiStillHasMore {
-                    apiStillHasMore = false
+                } else if rawPageItemCount == 0 && !apiSaysNoMoreItemsAfterLoadMore {
+                    apiSaysNoMoreItemsAfterLoadMore = true
+                    Self.logger.info("API returned 0 items during loadMore loop (Page \(pagesForLoadMore)), assuming end.")
                 }
             }
             
@@ -691,12 +705,16 @@ struct UnlimitedStyleFeedView: View {
                 self.items.append(contentsOf: itemsToAppend)
                 Self.logger.info("LoadMore: Appended \(itemsToAppend.count) new items.")
             }
-            self.canLoadMore = apiStillHasMore && !itemsToAppend.isEmpty
-            if itemsToAppend.isEmpty && apiStillHasMore {
-                Self.logger.info("LoadMore: No new unseen items found after \(pagesForLoadMore) pages, but API might have more. Stopping for now.")
+            
+            self.canLoadMore = !apiSaysNoMoreItemsAfterLoadMore
+            Self.logger.info("LoadMore (Unlimited) finished. canLoadMore set to \(!apiSaysNoMoreItemsAfterLoadMore) based on API signal (\(apiSaysNoMoreItemsAfterLoadMore)).")
+            
+            if itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore && (settings.hideSeenItems && settings.enableExperimentalHideSeen) {
+                Self.logger.info("LoadMore: No new unseen items found after \(pagesForLoadMore) pages, but API might have more. Will allow further loading attempts.")
             }
 
-
+        } catch is CancellationError {
+            Self.logger.info("LoadMoreItems (Unlimited) Task API call explicitly cancelled.")
         } catch {
             Self.logger.error("API fetch (Unlimited) failed during loadMore: \(error.localizedDescription)")
              if Task.isCancelled { Self.logger.info("LoadMoreItems (Unlimited) Task cancelled after API error."); return }
@@ -1195,3 +1213,4 @@ struct ItemCommentsSheetView: View {
         .environmentObject(authService)
         .environmentObject(navService)
 }
+// --- END OF COMPLETE FILE ---
