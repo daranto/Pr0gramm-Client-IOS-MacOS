@@ -10,7 +10,6 @@ struct UnlimitedFeedItemDataModel {
     let item: Item
     let displayedTags: [ItemTag]
     let totalTagCount: Int
-    let showingAllTags: Bool
     let comments: [ItemComment]
     let itemInfoStatus: InfoLoadingStatus
 }
@@ -97,11 +96,13 @@ struct UnlimitedStyleFeedView: View {
 
     @State private var cachedDetails: [Int: ItemsInfoResponse] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
-    @State private var showAllTagsForItem: Set<Int> = []
-    
+        
     @State private var showingTagSearchSheet = false
     @State private var tagForSearchSheet: String? = nil
     
+    @State private var showingAllTagsSheet = false
+    @State private var itemForTagSheet: Item? = nil
+
     @State private var showingAddTagSheet = false
     @State private var newTagTextForSheet = ""
     @State private var addTagErrorForSheet: String? = nil
@@ -113,17 +114,18 @@ struct UnlimitedStyleFeedView: View {
     @State private var flagsUsedForLastItemsLoad: Int? = nil
     
     @State private var currentRefreshFeedTask: Task<Void, Never>? = nil
+    @State private var debouncedRefreshTask: Task<Void, Never>? = nil
 
     private let dummyStartItemID = -1
     private func createDummyStartItem() -> Item {
         return Item(id: dummyStartItemID, promoted: nil, userId: 0, down: 0, up: 0, created: 0, image: "pr0tok.png", thumb: "pr0tok.png", fullsize: "pr0tok.png", preview: nil, width: 512, height: 512, audio: false, source: nil, flags: 1, user: "Pr0Tok", mark: 0, repost: false, variants: nil, subtitles: nil)
     }
     
-    // Entferne maxAutoRefreshPages, da die Schleife jetzt nur durch apiSaysNoMoreItems beendet wird
-    // private let maxAutoRefreshPages = 3
-
     init() {
-        // .onAppear wird für die initiale Einrichtung verwendet
+        _items = State(initialValue: [createDummyStartItem()])
+        _activeItemID = State(initialValue: dummyStartItemID)
+        _scrolledItemID = State(initialValue: dummyStartItemID)
+        Self.logger.info("UnlimitedStyleFeedView init: Set initial items with dummy, active/scrolled to dummyID.")
     }
 
     var body: some View {
@@ -139,8 +141,12 @@ struct UnlimitedStyleFeedView: View {
                     Button {
                         Task {
                             Self.logger.info("Refresh button tapped for UnlimitedStyleFeedView.")
+                            debouncedRefreshTask?.cancel()
                             currentRefreshFeedTask?.cancel()
-                            Self.logger.debug("Cancelled previous refresh task (if any) due to manual refresh.")
+                            Self.logger.debug("Cancelled previous refresh/debounced task (if any) due to manual refresh.")
+                            
+                            playerManager.cleanupPlayer()
+                            Self.logger.info("Player cleaned up due to manual refresh.")
                             
                             await MainActor.run {
                                 self.items = [createDummyStartItem()]
@@ -152,9 +158,8 @@ struct UnlimitedStyleFeedView: View {
                                 self.canLoadMore = true
                                 self.isLoadingMore = false
                                 self.flagsUsedForLastItemsLoad = nil
-                                self.showAllTagsForItem = []
                             }
-                            Self.logger.info("UI and data states reset for manual refresh.")
+                            Self.logger.info("UI and data states reset for manual refresh. Scrolled to dummy.")
                             
                             currentRefreshFeedTask = Task {
                                 if Task.isCancelled {
@@ -197,6 +202,36 @@ struct UnlimitedStyleFeedView: View {
                     }
                 }
             }
+            .sheet(item: $itemForTagSheet, onDismiss: { itemForTagSheet = nil }) { itemToShowTagsFor in
+                AllTagsSheetView(
+                    item: itemToShowTagsFor,
+                    cachedDetails: $cachedDetails,
+                    infoLoadingStatus: $infoLoadingStatus,
+                    onTagTapped: { tagString in
+                        self.itemForTagSheet = nil
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(100))
+                            self.tagForSearchSheet = tagString
+                            self.showingTagSearchSheet = true
+                        }
+                    },
+                    onUpvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: 1) } },
+                    onDownvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: -1) } },
+                    onRetryLoadDetails: { Task { await loadItemDetailsIfNeeded(for: itemToShowTagsFor, forceReload: true)} },
+                    onShowAddTagSheet: {
+                        self.itemForTagSheet = nil
+                        Task {
+                            try? await Task.sleep(for: .milliseconds(100))
+                            self.newTagTextForSheet = ""
+                            self.addTagErrorForSheet = nil
+                            self.isAddingTagsInSheet = false
+                            self.showingAddTagSheet = true
+                        }
+                    }
+                )
+                .environmentObject(settings)
+                .environmentObject(authService)
+            }
             .sheet(isPresented: $showingAddTagSheet) { addTagSheetContent() }
             .sheet(item: $fullscreenImageTarget) { (target: FullscreenImageTarget) in
                 FullscreenImageView(item: target.item)
@@ -214,35 +249,96 @@ struct UnlimitedStyleFeedView: View {
                 keyboardActionHandlerInstance.seekBackwardAction = playerManager.seekBackward
                 Self.logger.info("UnlimitedStyleFeedView.onAppear - Konfiguration abgeschlossen.")
                 
-                if items.isEmpty || (items.count == 1 && items.first?.id == dummyStartItemID && scrolledItemID == dummyStartItemID) {
-                    if items.first?.id != dummyStartItemID {
-                        items.insert(createDummyStartItem(), at: 0)
-                    } else if items.isEmpty {
-                        items = [createDummyStartItem()]
-                    }
+                if items.isEmpty || items.first?.id != dummyStartItemID {
+                    items = [createDummyStartItem()]
                     scrolledItemID = dummyStartItemID
                     activeItemID = dummyStartItemID
-                    Self.logger.info("UnlimitedStyleFeedView.onAppear: Initializing/ensuring dummy item is present and active.")
+                    Self.logger.info("UnlimitedStyleFeedView.onAppear: Corrected items to ensure dummy is first and active.")
+                } else if scrolledItemID == nil {
+                    scrolledItemID = dummyStartItemID
+                    activeItemID = dummyStartItemID
+                    Self.logger.info("UnlimitedStyleFeedView.onAppear: scrolledItemID was nil, set to dummyID.")
                 }
             }
-            .task(id: "\(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType)-\(settings.hideSeenItems)") {
-                Self.logger.info("UnlimitedStyleFeedView .task triggered. ID: \(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType.displayName)-\(settings.hideSeenItems)")
+            .task(id: "\(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType.rawValue)-\(settings.hideSeenItems)") {
+                Self.logger.info("UnlimitedStyleFeedView .task triggered for state change. ID: \(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType.displayName)-\(settings.hideSeenItems)")
                 
+                debouncedRefreshTask?.cancel()
                 currentRefreshFeedTask?.cancel()
-                
-                currentRefreshFeedTask = Task {
-                    if Task.isCancelled {
-                        Self.logger.info("New refresh task was cancelled before starting.")
-                        return
+
+                playerManager.cleanupPlayer()
+                await MainActor.run {
+                    self.items = [createDummyStartItem()]
+                    self.cachedDetails = [:]
+                    self.infoLoadingStatus = [:]
+                    self.activeItemID = dummyStartItemID
+                    self.scrolledItemID = dummyStartItemID
+                    self.errorMessage = nil
+                    self.canLoadMore = true
+                    self.isLoadingMore = false
+                }
+                Self.logger.info("UI reset to dummy item before starting debounced refresh.")
+
+                debouncedRefreshTask = Task {
+                    do {
+                        try await Task.sleep(for: .milliseconds(300))
+                        guard !Task.isCancelled else {
+                            Self.logger.info("Debounced refresh task was cancelled during sleep.")
+                            return
+                        }
+                        
+                        if self.isLoadingFeed {
+                             Self.logger.info("Debounced refresh: isLoadingFeed is true, skipping.")
+                             return
+                        }
+
+                        Self.logger.info("Starting new debounced refresh task due to parameter change.")
+                        currentRefreshFeedTask = Task {
+                            if Task.isCancelled {
+                                Self.logger.info("Actual refresh (from debounced) was cancelled before starting.")
+                                return
+                            }
+                            await refreshItems()
+                        }
+                    } catch is CancellationError {
+                        Self.logger.info("Debounced refresh task (outer) was cancelled.")
+                    } catch {
+                        Self.logger.error("Error in debounced refresh task sleep: \(error.localizedDescription)")
                     }
-                    Self.logger.info("Starting new refresh task due to parameter change.")
-                    await refreshItems()
                 }
             }
             .onDisappear {
                 Self.logger.info("UnlimitedStyleFeedView.onDisappear - Cleaning up player.")
                 playerManager.cleanupPlayer()
                 currentRefreshFeedTask?.cancel()
+                debouncedRefreshTask?.cancel()
+            }
+            .onChange(of: activeItemID) { oldValue, newValue in
+                guard let newActiveID = newValue, newActiveID != dummyStartItemID else { return }
+                guard let currentIndex = items.firstIndex(where: { $0.id == newActiveID }) else {
+                    Self.logger.warning("activeItemID \(newActiveID) changed, but not found in items. Cannot preload.")
+                    return
+                }
+
+                Self.logger.info("Active item changed to ID: \(newActiveID) at index \(currentIndex). Initiating preloading for N+1 and N+2.")
+
+                let nextIndex = currentIndex + 1
+                if nextIndex < items.count && items[nextIndex].id != dummyStartItemID {
+                    let itemToPreloadNext = items[nextIndex]
+                    Task {
+                        Self.logger.debug("Preloading details for N+1: Item ID \(itemToPreloadNext.id)")
+                        await loadItemDetailsIfNeeded(for: itemToPreloadNext)
+                    }
+                }
+
+                let overNextIndex = currentIndex + 2
+                if overNextIndex < items.count && items[overNextIndex].id != dummyStartItemID {
+                    let itemToPreloadOverNext = items[overNextIndex]
+                    Task {
+                        Self.logger.debug("Preloading details for N+2: Item ID \(itemToPreloadOverNext.id)")
+                        await loadItemDetailsIfNeeded(for: itemToPreloadOverNext)
+                    }
+                }
             }
         }
     }
@@ -304,10 +400,8 @@ struct UnlimitedStyleFeedView: View {
                                 isActive: activeItemID == item.id,
                                 isDummyItem: item.id == dummyStartItemID,
                                 onToggleShowAllTags: {
-                                    if showAllTagsForItem.contains(item.id) {
-                                        showAllTagsForItem.remove(item.id)
-                                    } else {
-                                        showAllTagsForItem.insert(item.id)
+                                    if item.id != dummyStartItemID {
+                                        self.itemForTagSheet = item
                                     }
                                 },
                                 onUpvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: 1) } },
@@ -337,9 +431,6 @@ struct UnlimitedStyleFeedView: View {
                                 if item.id != dummyStartItemID && item.id == items.last?.id && canLoadMore && !isLoadingMore && !isLoadingFeed {
                                     Task { await loadMoreItems() }
                                 }
-                                if activeItemID == item.id && item.id != dummyStartItemID {
-                                    Task { await loadItemDetailsIfNeeded(for: item) }
-                                }
                             }
                             .scrollTransition(axis: .vertical) { content, phase in
                                 content
@@ -365,10 +456,10 @@ struct UnlimitedStyleFeedView: View {
                     guard let newId = newValue else { return }
                     
                     if newId == dummyStartItemID {
-                        activeItemID = newId
-                        Self.logger.info("Scrolled to dummy start item.")
-                        if playerManager.playerItemID != nil {
+                        if activeItemID != dummyStartItemID {
                             playerManager.cleanupPlayer()
+                            activeItemID = newId
+                            Self.logger.info("Scrolled to dummy start item. Player cleaned.")
                         }
                         return
                     }
@@ -405,8 +496,7 @@ struct UnlimitedStyleFeedView: View {
                                     }
                                 }
                             }
-                            Task { await loadItemDetailsIfNeeded(for: currentItem) }
-                            Self.logger.info("Scrolled to item \(currentItem.id), setting active. Details loading initiated.")
+                            Self.logger.info("Scrolled to item \(currentItem.id), setting active. Details loading will be initiated by activeItemID change.")
                         }
                     }
                 }
@@ -421,7 +511,6 @@ struct UnlimitedStyleFeedView: View {
                 item: item,
                 displayedTags: [],
                 totalTagCount: 0,
-                showingAllTags: false,
                 comments: [],
                 itemInfoStatus: .loaded
             )
@@ -429,8 +518,7 @@ struct UnlimitedStyleFeedView: View {
 
         let details = cachedDetails[item.id]
         let allItemTags = details?.tags.sorted { $0.confidence > $1.confidence } ?? []
-        let shouldShowAll = showAllTagsForItem.contains(item.id)
-        let tagsForDisplayLogic = shouldShowAll ? allItemTags : Array(allItemTags.prefix(initialVisibleTagCount))
+        let tagsForDisplayLogic = Array(allItemTags.prefix(initialVisibleTagCount))
 
         let commentsToDisplay = details?.comments ?? []
         let currentInfoStatus = infoLoadingStatus[item.id] ?? .idle
@@ -439,7 +527,6 @@ struct UnlimitedStyleFeedView: View {
             item: item,
             displayedTags: tagsForDisplayLogic,
             totalTagCount: allItemTags.count,
-            showingAllTags: shouldShowAll,
             comments: commentsToDisplay,
             itemInfoStatus: currentInfoStatus
         )
@@ -488,15 +575,23 @@ struct UnlimitedStyleFeedView: View {
             return
         }
         
-        let currentApiFlagsForThisRefresh = settings.apiFlags
-        Self.logger.info("RefreshItems (Unlimited) Task started. Attempting with apiFlags: \(currentApiFlagsForThisRefresh)")
-        
         await MainActor.run {
+            if self.items.first?.id != dummyStartItemID || self.items.count > 1 || self.scrolledItemID != dummyStartItemID {
+                self.items = [createDummyStartItem()]
+                self.activeItemID = dummyStartItemID
+                self.scrolledItemID = dummyStartItemID
+                Self.logger.info("RefreshItems: Explicitly set UI to dummy item at the beginning of refresh logic.")
+            }
             self.isLoadingFeed = true
             self.errorMessage = nil
             self.canLoadMore = true
             self.isLoadingMore = false
+            self.cachedDetails = [:]
+            self.infoLoadingStatus = [:]
         }
+        
+        let currentApiFlagsForThisRefresh = settings.apiFlags
+        Self.logger.info("RefreshItems (Unlimited) Task started. Attempting with apiFlags: \(currentApiFlagsForThisRefresh)")
 
         defer {
             Task { @MainActor in
@@ -509,11 +604,6 @@ struct UnlimitedStyleFeedView: View {
 
         guard settings.hasActiveContentFilter || currentApiFlagsForThisRefresh != 0 else {
             await MainActor.run {
-                self.items = [createDummyStartItem()]
-                self.cachedDetails = [:]
-                self.infoLoadingStatus = [:]
-                self.activeItemID = dummyStartItemID
-                self.scrolledItemID = dummyStartItemID
                 self.errorMessage = nil
                 self.canLoadMore = false
                 self.flagsUsedForLastItemsLoad = currentApiFlagsForThisRefresh
@@ -524,12 +614,11 @@ struct UnlimitedStyleFeedView: View {
         
         var allFetchedUnseenItems: [Item] = []
         var currentOlderThanIdForRefreshLoop: Int? = nil
-        var pagesAttemptedInLoop = 0 // Zähler für die geladenen Seiten
+        var pagesAttemptedInLoop = 0
         var apiSaysNoMoreItems = false
 
         do {
             if settings.hideSeenItems && settings.enableExperimentalHideSeen {
-                // Schleife läuft, solange keine ungesehenen Items gefunden wurden UND die API nicht das Ende signalisiert
                 while allFetchedUnseenItems.isEmpty && !apiSaysNoMoreItems {
                     if Task.isCancelled { throw CancellationError() }
                     pagesAttemptedInLoop += 1
@@ -581,38 +670,50 @@ struct UnlimitedStyleFeedView: View {
 
             await MainActor.run {
                 self.items = [createDummyStartItem()] + allFetchedUnseenItems
-                self.cachedDetails = [:]
-                self.infoLoadingStatus = [:]
                 self.errorMessage = nil
-
-                self.canLoadMore = !apiSaysNoMoreItems // canLoadMore hängt nur vom API-Signal ab
+                self.canLoadMore = !apiSaysNoMoreItems
                 
                 if allFetchedUnseenItems.isEmpty {
                     Self.logger.info("Refresh (Unlimited) resulted in 0 new items. canLoadMore set to \(!apiSaysNoMoreItems) based on API signal (\(apiSaysNoMoreItems)).")
                     if self.scrolledItemID != dummyStartItemID { self.scrolledItemID = dummyStartItemID }
                     if self.activeItemID != dummyStartItemID { self.activeItemID = dummyStartItemID }
                 } else {
-                    if self.scrolledItemID == dummyStartItemID || self.items.count == (allFetchedUnseenItems.count + 1) {
-                         if self.scrolledItemID != dummyStartItemID { self.scrolledItemID = dummyStartItemID }
-                         if self.activeItemID != dummyStartItemID { self.activeItemID = dummyStartItemID }
-                    } else if let firstReal = allFetchedUnseenItems.first, self.scrolledItemID != firstReal.id {
-                        if !allFetchedUnseenItems.contains(where: {$0.id == self.scrolledItemID}) {
-                            self.scrolledItemID = allFetchedUnseenItems.first?.id ?? dummyStartItemID
-                        }
-                    }
-                    Self.logger.info("Refresh (Unlimited) successful. canLoadMore set to \(!apiSaysNoMoreItems) based on API signal (\(apiSaysNoMoreItems)).")
+                    // scrolledItemID should remain dummyStartItemID after a refresh,
+                    // until user interaction or the .onAppear of UnlimitedFeedItemView for the first real item.
+                    // This allows the dummy item to be potentially visible first.
+                    Self.logger.info("Refresh (Unlimited) successful. \(allFetchedUnseenItems.count) new items added. scrolledItemID remains on dummy. canLoadMore set to \(!apiSaysNoMoreItems).")
                 }
                 self.flagsUsedForLastItemsLoad = currentApiFlagsForThisRefresh
             }
+
+            if !allFetchedUnseenItems.isEmpty {
+                let firstRealItemIndexAfterDummy = 1
+                
+                if items.indices.contains(firstRealItemIndexAfterDummy) {
+                    let initialActiveItem = items[firstRealItemIndexAfterDummy]
+                    Self.logger.debug("Refresh complete: Preloading details for initial active item: \(initialActiveItem.id)")
+                    await loadItemDetailsIfNeeded(for: initialActiveItem)
+
+                    let nextIndex = firstRealItemIndexAfterDummy + 1
+                    if items.indices.contains(nextIndex) && items[nextIndex].id != dummyStartItemID {
+                        let itemToPreloadNext = items[nextIndex]
+                        Self.logger.debug("Refresh complete: Preloading details for N+1: Item ID \(itemToPreloadNext.id)")
+                        await loadItemDetailsIfNeeded(for: itemToPreloadNext)
+                    }
+
+                    let overNextIndex = firstRealItemIndexAfterDummy + 2
+                    if items.indices.contains(overNextIndex) && items[overNextIndex].id != dummyStartItemID {
+                        let itemToPreloadOverNext = items[overNextIndex]
+                        Self.logger.debug("Refresh complete: Preloading details for N+2: Item ID \(itemToPreloadOverNext.id)")
+                        await loadItemDetailsIfNeeded(for: itemToPreloadOverNext)
+                    }
+                }
+            }
+
         } catch is CancellationError {
             Self.logger.info("RefreshItems (Unlimited) Task API call explicitly cancelled.")
             if items.count <= 1 {
-                await MainActor.run {
-                    items = [createDummyStartItem()]
-                    activeItemID = dummyStartItemID
-                    scrolledItemID = dummyStartItemID
-                    canLoadMore = true
-                }
+                await MainActor.run { canLoadMore = true }
             }
         } catch {
             Self.logger.error("API fetch (Unlimited) failed during refresh: \(error.localizedDescription)")
@@ -620,11 +721,6 @@ struct UnlimitedStyleFeedView: View {
             await MainActor.run {
                 self.errorMessage = "Fehler beim Laden: \(error.localizedDescription)"
                 self.canLoadMore = false
-                self.items = [createDummyStartItem()]
-                self.cachedDetails = [:]
-                self.infoLoadingStatus = [:]
-                self.activeItemID = dummyStartItemID
-                self.scrolledItemID = dummyStartItemID
             }
         }
     }
@@ -643,7 +739,6 @@ struct UnlimitedStyleFeedView: View {
         }
         guard let finalOlderThanId = olderThanId else {
             Self.logger.warning("Cannot load more (Unlimited): Could not determine 'older' value from real items.")
-            // canLoadMore nicht auf false setzen, damit der Nutzer ggf. manuell refreshen kann
             return
         }
         
@@ -654,12 +749,10 @@ struct UnlimitedStyleFeedView: View {
         var itemsToAppend: [Item] = []
         var apiSaysNoMoreItemsAfterLoadMore = false
         var pagesForLoadMore = 0
-        // Entferne maxPagesForLoadMoreLoop, Schleife läuft, bis ungesehene Items gefunden werden oder API am Ende
-        // let maxPagesForLoadMoreLoop = settings.hideSeenItems && settings.enableExperimentalHideSeen ? maxAutoRefreshPages : 1
 
         do {
             var currentOlderForLoop = finalOlderThanId
-            while itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore { // Schleife läuft weiter, solange keine Items zum Anhängen da sind UND die API nicht am Ende ist
+            while itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore {
                 if Task.isCancelled { throw CancellationError() }
                 pagesForLoadMore += 1
                 Self.logger.info("LoadMore: Fetching page \(pagesForLoadMore) (older: \(currentOlderForLoop))")
@@ -1024,66 +1117,49 @@ struct UnlimitedFeedItemView: View {
                     .foregroundColor(.white)
                 }
             case .loaded:
-                if !itemData.displayedTags.isEmpty || itemData.showingAllTags {
-                    if itemData.showingAllTags {
-                        FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
-                            ForEach(itemData.displayedTags) { tag in
-                                UnlimitedVotableTagView(
-                                    tag: tag,
-                                    currentVote: authService.votedTagStates[tag.id] ?? 0,
-                                    isVoting: authService.isVotingTag[tag.id] ?? false,
-                                    truncateText: false,
-                                    onUpvote: { onUpvoteTag(tag.id) },
-                                    onDownvote: { onDownvoteTag(tag.id) },
-                                    onTapTag: { onTagTapped(tag.tag) }
-                                )
-                            }
-                            if authService.isLoggedIn {
-                                Button {
-                                    onShowAddTagSheet()
-                                } label: {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.caption.bold())
-                                        .foregroundColor(.white.opacity(0.8))
-                                        .padding(EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6))
-                                        .background(Color.black.opacity(0.3))
-                                        .clipShape(Circle())
-                                }
-                                .buttonStyle(.plain)
-                            }
+                if !itemData.displayedTags.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(itemData.displayedTags) { tag in
+                            UnlimitedVotableTagView(
+                                tag: tag,
+                                currentVote: authService.votedTagStates[tag.id] ?? 0,
+                                isVoting: authService.isVotingTag[tag.id] ?? false,
+                                truncateText: true,
+                                onUpvote: { onUpvoteTag(tag.id) },
+                                onDownvote: { onDownvoteTag(tag.id) },
+                                onTapTag: { onTagTapped(tag.tag) }
+                            )
                         }
-                    } else {
-                        HStack(spacing: 6) {
-                            ForEach(itemData.displayedTags) { tag in
-                                UnlimitedVotableTagView(
-                                    tag: tag,
-                                    currentVote: authService.votedTagStates[tag.id] ?? 0,
-                                    isVoting: authService.isVotingTag[tag.id] ?? false,
-                                    truncateText: true,
-                                    onUpvote: { onUpvoteTag(tag.id) },
-                                    onDownvote: { onDownvoteTag(tag.id) },
-                                    onTapTag: { onTagTapped(tag.tag) }
-                                )
+                        if itemData.totalTagCount > itemData.displayedTags.count {
+                            let remainingCount = itemData.totalTagCount - itemData.displayedTags.count
+                            Button {
+                                onToggleShowAllTags()
+                            } label: {
+                                Text("+\(remainingCount) mehr")
+                                    .font(.caption.bold())
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.black.opacity(0.3))
+                                    .clipShape(Capsule())
                             }
-                            if itemData.totalTagCount > itemData.displayedTags.count {
-                                let remainingCount = itemData.totalTagCount - itemData.displayedTags.count
-                                Button {
-                                    onToggleShowAllTags()
-                                } label: {
-                                    Text("+\(remainingCount) mehr")
-                                        .font(.caption.bold())
-                                        .foregroundColor(.white.opacity(0.8))
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(Color.black.opacity(0.3))
-                                        .clipShape(Capsule())
-                                }
-                                .buttonStyle(.plain)
+                            .buttonStyle(.plain)
+                        } else if authService.isLoggedIn && itemData.totalTagCount == 0 {
+                            Button {
+                                onShowAddTagSheet()
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.callout)
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .padding(EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6))
+                                    .background(Color.black.opacity(0.3))
+                                    .clipShape(Circle())
                             }
+                            .buttonStyle(.plain)
                         }
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
                     }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 } else if itemData.totalTagCount > 0 {
                     Text("Keine Tags (Filter?).")
                         .font(.caption)
