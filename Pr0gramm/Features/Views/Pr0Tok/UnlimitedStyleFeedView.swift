@@ -70,6 +70,11 @@ struct UnlimitedStyleFeedView: View {
     @State private var sharePreparationErrorGlobal: String? = nil
     @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
     @State private var isProcessingFavoriteGlobal: [Int: Bool] = [:]
+    
+    // --- NEW: State for User Profile Sheet ---
+    @State private var userProfileSheetUsername: String? = nil
+    // --- END NEW ---
+
 
     private let dummyStartItemID = -1
     private func createDummyStartItem() -> Item {
@@ -212,9 +217,17 @@ struct UnlimitedStyleFeedView: View {
                 .environmentObject(settings)
                 .presentationDetents([.medium, .large])
             }
-            .onChange(of: collectionSelectionSheetTarget) { oldValue, newValue in // DEBUG LOG
+            .onChange(of: collectionSelectionSheetTarget) { oldValue, newValue in
                 Self.logger.info("DEBUG: collectionSelectionSheetTarget changed from \(String(describing: oldValue?.item.id)) to \(String(describing: newValue?.item.id)). Sheet should appear: \(newValue != nil)")
             }
+            // --- NEW: Sheet for User Profile ---
+            .sheet(item: $userProfileSheetUsername) { usernameToDisplay in
+                UserProfileSheetView(username: usernameToDisplay)
+                    .environmentObject(authService)
+                    .environmentObject(settings)
+                    .environmentObject(playerManager) // PlayerManager an das Sheet weitergeben
+            }
+            // --- END NEW ---
             .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoadingFeed)) {
                  Button("OK") { errorMessage = nil }
             } message: {
@@ -380,7 +393,8 @@ struct UnlimitedStyleFeedView: View {
                          onToggleFavorite: {},
                          onShowCollectionSelection: {},
                          onShareTapped: {},
-                         isProcessingFavorite: false
+                         isProcessingFavorite: false,
+                         onShowUserProfile: { _ in } // Dummy callback
                      )
                      .frame(height: 200)
                  }
@@ -434,9 +448,7 @@ struct UnlimitedStyleFeedView: View {
                                     }
                                 },
                                 onShowCollectionSelection: {
-                                    // --- DEBUG LOG in Callback ---
                                     Self.logger.debug("onShowCollectionSelection callback TRIGGERED in UnlimitedStyleFeedView for item.id \(item.id). Current activeItemID: \(String(describing: self.activeItemID))")
-                                    // --- END DEBUG LOG ---
                                     if let activeId = self.activeItemID, activeId != dummyStartItemID,
                                        let currentItem = self.items.first(where: { $0.id == activeId }) {
                                         Self.logger.info("Long press on favorite for item \(currentItem.id) (active). Setting collectionSelectionSheetTarget.")
@@ -454,7 +466,13 @@ struct UnlimitedStyleFeedView: View {
                                         self.sharePreparationErrorGlobal = nil
                                     }
                                 },
-                                isProcessingFavorite: isProcessingFavoriteGlobal[item.id] ?? false
+                                isProcessingFavorite: isProcessingFavoriteGlobal[item.id] ?? false,
+                                // --- NEW: Pass onShowUserProfile callback ---
+                                onShowUserProfile: { username in
+                                    Self.logger.info("Request to show profile for \(username) from item \(item.id)")
+                                    self.userProfileSheetUsername = username
+                                }
+                                // --- END NEW ---
                             )
                             .id(item.id)
                             .frame(height: geometry.size.height)

@@ -85,6 +85,9 @@ struct UnlimitedFeedItemView: View {
     let onShowCollectionSelection: () -> Void
     let onShareTapped: () -> Void
     let isProcessingFavorite: Bool
+    // --- NEW: Callback for showing user profile ---
+    let onShowUserProfile: (String) -> Void
+    // --- END NEW ---
 
 
     var item: Item { itemData.item }
@@ -110,9 +113,18 @@ struct UnlimitedFeedItemView: View {
                     Spacer()
                     HStack(alignment: .bottom) {
                         VStack(alignment: .leading, spacing: 8) {
+                            // --- MODIFIED: Add onTapGesture to username Text ---
                             Text("@\(item.user)")
                                 .font(.headline).bold()
                                 .foregroundColor(.white)
+                                .contentShape(Rectangle()) // Make sure the tap area is sufficient
+                                .onTapGesture {
+                                    if !item.user.isEmpty {
+                                        Self.logger.info("Username '\(item.user)' tapped. Calling onShowUserProfile.")
+                                        onShowUserProfile(item.user)
+                                    }
+                                }
+                            // --- END MODIFICATION ---
                             
                             tagSection
                         }
@@ -310,14 +322,11 @@ struct UnlimitedFeedItemView: View {
             EmptyView()
         } else {
             VStack(spacing: 25) {
-                // Herz-Button (Favoriten)
                 Button {
-                    onToggleFavorite() // Klick auf Herz = Standardfavoriten
+                    onToggleFavorite()
                 } label: {
                     if isProcessingFavorite {
-                        ProgressView()
-                            .tint(.white)
-                            .scaleEffect(1.2)
+                        ProgressView().tint(.white).scaleEffect(1.2)
                             .frame(width: 28, height: 28)
                     } else {
                         Image(systemName: itemData.isFavorited ? "heart.fill" : "heart")
@@ -326,10 +335,9 @@ struct UnlimitedFeedItemView: View {
                     }
                 }
                 .disabled(isProcessingFavorite || !authService.isLoggedIn)
-                .highPriorityGesture(
+                .highPriorityGesture( // Behält HighPriority für LongPress
                     LongPressGesture(minimumDuration: 0.5)
                         .onEnded { _ in
-                            // --- DEBUG LOGS ---
                             Self.logger.debug("Long press detected on heart button for item \(item.id). Calling onShowCollectionSelection.")
                             if authService.isLoggedIn && !isProcessingFavorite {
                                 Self.logger.debug("Conditions met (isLoggedIn: \(authService.isLoggedIn), !isProcessingFavorite: \(!isProcessingFavorite)), actually calling onShowCollectionSelection.")
@@ -337,11 +345,9 @@ struct UnlimitedFeedItemView: View {
                             } else {
                                 Self.logger.debug("Conditions for onShowCollectionSelection NOT met. isLoggedIn: \(authService.isLoggedIn), isProcessingFavorite: \(isProcessingFavorite)")
                             }
-                            // --- END DEBUG LOGS ---
                         }
                 )
                 
-                // Kommentar-Button
                 Button {
                     Self.logger.info("Kommentar-Button getippt für Item \(item.id)")
                     showingCommentsSheet = true
@@ -349,7 +355,6 @@ struct UnlimitedFeedItemView: View {
                     Image(systemName: "message.fill").font(.title).foregroundColor(.white)
                 }
 
-                // Teilen-Button
                 Button {
                     onShareTapped()
                 } label: {
@@ -395,7 +400,8 @@ struct UnlimitedFeedItemView: View {
         onToggleFavorite: {},
         onShowCollectionSelection: {},
         onShareTapped: {},
-        isProcessingFavorite: false
+        isProcessingFavorite: false,
+        onShowUserProfile: { username in print("Preview: Show profile for \(username)")} // Dummy-Implementierung
     )
     .environmentObject(settings)
     .environmentObject(authService)
