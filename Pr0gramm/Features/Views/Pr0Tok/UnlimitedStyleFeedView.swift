@@ -420,7 +420,6 @@ struct UnlimitedStyleFeedView: View {
                 Button("Erneut versuchen") { Task { await refreshItems() } }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // --- MODIFIED: Bedingung vereinfacht ---
         } else if items.count <= 1 && !isLoadingFeed && errorMessage == nil && (items.first?.id == dummyStartItemID || items.isEmpty) {
              VStack {
                  if items.first?.id == dummyStartItemID {
@@ -439,7 +438,9 @@ struct UnlimitedStyleFeedView: View {
                          isProcessingFavorite: false,
                          onShowUserProfile: { _ in },
                          onWillBeginFullScreenPr0Tok: handleWillBeginFullscreen,
-                         onWillEndFullScreenPr0Tok: handleWillEndFullscreen
+                         onWillEndFullScreenPr0Tok: handleWillEndFullscreen,
+                         onUpvoteItem: {}, // Dummy
+                         onDownvoteItem: {} // Dummy
                      )
                      .frame(height: 200)
                  }
@@ -449,7 +450,6 @@ struct UnlimitedStyleFeedView: View {
                     .padding()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // --- END MODIFICATION ---
         } else {
             GeometryReader { geometry in
                 ScrollView(.vertical) {
@@ -518,7 +518,11 @@ struct UnlimitedStyleFeedView: View {
                                     self.userProfileSheetUsername = username
                                 },
                                 onWillBeginFullScreenPr0Tok: handleWillBeginFullscreen,
-                                onWillEndFullScreenPr0Tok: handleWillEndFullscreen
+                                onWillEndFullScreenPr0Tok: handleWillEndFullscreen,
+                                // --- NEW: Pass vote actions ---
+                                onUpvoteItem: { Task { await handleItemVoteTap(voteType: 1) } },
+                                onDownvoteItem: { Task { await handleItemVoteTap(voteType: -1) } }
+                                // --- END NEW ---
                             )
                             .id(item.id)
                             .frame(height: geometry.size.height)
@@ -730,9 +734,7 @@ struct UnlimitedStyleFeedView: View {
         var apiSaysNoMoreItems = false
 
         do {
-            // --- MODIFIED: Bedingung vereinfacht ---
             if settings.hideSeenItems {
-            // --- END MODIFICATION ---
                 while allFetchedUnseenItems.isEmpty && !apiSaysNoMoreItems {
                     if Task.isCancelled { throw CancellationError() }
                     pagesAttemptedInLoop += 1
@@ -883,9 +885,7 @@ struct UnlimitedStyleFeedView: View {
                 var pageItems = apiResponse.items
                 let rawPageItemCount = pageItems.count
                 
-                // --- MODIFIED: Bedingung vereinfacht ---
                 if settings.hideSeenItems {
-                // --- END MODIFICATION ---
                     let originalCount = pageItems.count
                     pageItems.removeAll { settings.seenItemIDs.contains($0.id) }
                     Self.logger.info("LoadMore: Filtered \(originalCount - pageItems.count) seen items. \(pageItems.count) unseen remaining.")
@@ -918,9 +918,7 @@ struct UnlimitedStyleFeedView: View {
             self.canLoadMore = !apiSaysNoMoreItemsAfterLoadMore
             Self.logger.info("LoadMore (Unlimited) finished. canLoadMore set to \(!apiSaysNoMoreItemsAfterLoadMore) based on API signal (\(apiSaysNoMoreItemsAfterLoadMore)).")
             
-            // --- MODIFIED: Bedingung vereinfacht ---
             if itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore && settings.hideSeenItems {
-            // --- END MODIFICATION ---
                 Self.logger.info("LoadMore: No new unseen items found after \(pagesForLoadMore) pages, but API might have more. Will allow further loading attempts.")
             }
 
@@ -1004,6 +1002,51 @@ struct UnlimitedStyleFeedView: View {
             return "Ein unbekannter Fehler ist aufgetreten."
         }
     }
+
+    // --- NEW: Item Vote Handler ---
+    private func handleItemVoteTap(voteType: Int) async {
+        guard let activeId = activeItemID, activeId != dummyStartItemID else {
+            Self.logger.warning("Item Vote: No active item.")
+            return
+        }
+        guard let itemIndex = items.firstIndex(where: { $0.id == activeId }) else {
+            Self.logger.warning("Item Vote: Active item \(activeId) not found in local items list.")
+            return
+        }
+
+        let previousVoteStateForRevert = authService.votedItemStates[activeId] ?? 0
+        
+        await authService.performVote(itemId: activeId, voteType: voteType)
+
+        // Stelle sicher, dass das Item noch das aktive ist und in der Liste existiert
+        guard self.activeItemID == activeId, let updatedItemIndex = items.firstIndex(where: { $0.id == activeId }) else {
+             Self.logger.warning("Could not update local item score for \(activeId): activeItemID changed or item no longer in list.")
+             return
+        }
+
+        let newVoteState = authService.votedItemStates[activeId] ?? 0
+
+        if previousVoteStateForRevert != newVoteState {
+            var deltaUp = 0
+            var deltaDown = 0
+            
+            if newVoteState == 1 && previousVoteStateForRevert == 0 { deltaUp = 1 }
+            else if newVoteState == 1 && previousVoteStateForRevert == -1 { deltaUp = 1; deltaDown = -1 }
+            else if newVoteState == 0 && previousVoteStateForRevert == 1 { deltaUp = -1 }
+            else if newVoteState == 0 && previousVoteStateForRevert == -1 { deltaDown = -1 }
+            else if newVoteState == -1 && previousVoteStateForRevert == 0 { deltaDown = 1 }
+            else if newVoteState == -1 && previousVoteStateForRevert == 1 { deltaUp = -1; deltaDown = 1 }
+
+            var mutableItem = items[updatedItemIndex]
+            mutableItem.up += deltaUp
+            mutableItem.down += deltaDown
+            items[updatedItemIndex] = mutableItem // Aktualisiere das Item in der @State-Liste
+            Self.logger.info("Updated local item \(activeId) score based on final vote state: deltaUp=\(deltaUp), deltaDown=\(deltaDown). New counts: up=\(items[updatedItemIndex].up), down=\(items[updatedItemIndex].down)")
+        } else {
+            Self.logger.info("Vote state for item \(activeId) did not effectively change. No local score update.")
+        }
+    }
+    // --- END NEW ---
 
     @ViewBuilder
     private func addTagSheetContent() -> some View {

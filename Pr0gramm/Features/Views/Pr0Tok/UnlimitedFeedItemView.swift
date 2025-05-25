@@ -89,6 +89,8 @@ struct UnlimitedFeedItemView: View {
     let onShowUserProfile: (String) -> Void
     let onWillBeginFullScreenPr0Tok: () -> Void
     let onWillEndFullScreenPr0Tok: () -> Void
+    let onUpvoteItem: () -> Void
+    let onDownvoteItem: () -> Void
 
 
     var item: Item { itemData.item }
@@ -195,17 +197,17 @@ struct UnlimitedFeedItemView: View {
         .onChange(of: isActive) { oldValue, newValue in
             if isDummyItem { return }
 
-            if newValue { // Wenn die Zelle aktiv wird
+            if newValue {
                 if item.isVideo {
-                    if playerManager.playerItemID == item.id { // Player existiert für dieses Item
+                    if playerManager.playerItemID == item.id {
                         Self.logger.debug("UnlimitedFeedItemView: Item \(item.id) became active. Player exists. Requesting play.")
-                        playerManager.requestPlay(for: item.id) // Fordere Play an
-                    } else { // Player existiert nicht oder für ein anderes Item
-                        playerManager.setupPlayerIfNeeded(for: item, isFullscreen: false) // Setup (setzt shouldAutoplayWhenReady)
+                        playerManager.requestPlay(for: item.id)
+                    } else {
+                        playerManager.setupPlayerIfNeeded(for: item, isFullscreen: false)
                         Self.logger.debug("UnlimitedFeedItemView: Item \(item.id) became active. Player setup initiated (shouldAutoplayWhenReady will be handled).")
                     }
                 }
-            } else { // Wenn die Zelle inaktiv wird
+            } else {
                 if item.isVideo && playerManager.playerItemID == item.id {
                      playerManager.player?.pause()
                      Self.logger.debug("UnlimitedFeedItemView: Player paused via isActive becoming false for item \(item.id)")
@@ -244,8 +246,8 @@ struct UnlimitedFeedItemView: View {
                  CustomVideoPlayerRepresentable(
                      player: player,
                      handler: keyboardActionHandlerForVideo,
-                     onWillBeginFullScreen: onWillBeginFullScreenPr0Tok, // Geändert
-                     onWillEndFullScreen: onWillEndFullScreenPr0Tok,     // Geändert
+                     onWillBeginFullScreen: onWillBeginFullScreenPr0Tok,
+                     onWillEndFullScreen: onWillEndFullScreenPr0Tok,
                      horizontalSizeClass: nil
                  )
                  .id("video_\(item.id)")
@@ -358,6 +360,38 @@ struct UnlimitedFeedItemView: View {
             EmptyView()
         } else {
             VStack(spacing: 25) {
+                if !(authService.isVoting[item.id] ?? false) {
+                    Button(action: onUpvoteItem) {
+                        Image(systemName: itemData.currentVote == 1 ? "plus.circle.fill" : "plus.circle")
+                            .font(.title)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(itemData.currentVote == 1 ? Color.white : Color.white,
+                                             itemData.currentVote == 1 ? Color.green : Color.white.opacity(0.7))
+                    }
+                    .disabled(!authService.isLoggedIn || (authService.isVoting[item.id] ?? false))
+                } else {
+                    ProgressView().tint(.white).scaleEffect(1.2)
+                        .frame(width: 28, height: 28)
+                }
+
+                Text("\(item.up - item.down)")
+                    .font(.callout.weight(.medium))
+                    .foregroundColor(.white)
+                    .shadow(radius: 1)
+
+                if !(authService.isVoting[item.id] ?? false) {
+                    Button(action: onDownvoteItem) {
+                        Image(systemName: itemData.currentVote == -1 ? "minus.circle.fill" : "minus.circle")
+                            .font(.title)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(itemData.currentVote == -1 ? Color.white : Color.white,
+                                             itemData.currentVote == -1 ? Color.red : Color.white.opacity(0.7))
+                    }
+                    .disabled(!authService.isLoggedIn || (authService.isVoting[item.id] ?? false))
+                } else {
+                    Spacer().frame(width: 28, height: 28)
+                }
+
                 Button {
                     onToggleFavorite()
                 } label: {
@@ -388,13 +422,17 @@ struct UnlimitedFeedItemView: View {
                     Self.logger.info("Kommentar-Button getippt für Item \(item.id)")
                     showingCommentsSheet = true
                 } label: {
-                    Image(systemName: "message.fill").font(.title).foregroundColor(.white)
+                    // --- MODIFIED: Icon geändert ---
+                    Image(systemName: "message").font(.title).foregroundColor(.white)
+                    // --- END MODIFICATION ---
                 }
 
                 Button {
                     onShareTapped()
                 } label: {
-                    Image(systemName: "arrowshape.turn.up.right.fill").font(.title).foregroundColor(.white)
+                    // --- MODIFIED: Icon geändert ---
+                    Image(systemName: "arrowshape.turn.up.right").font(.title).foregroundColor(.white)
+                    // --- END MODIFICATION ---
                 }
             }
         }
@@ -407,7 +445,7 @@ struct UnlimitedFeedItemView: View {
     let navService = NavigationService()
     settings.enableUnlimitedStyleFeed = true
     
-    let dummyItem = Item(id: 1, promoted: nil, userId: 1, down: 0, up: 10, created: 0, image: "dummy.jpg", thumb: "dummy_thumb.jpg", fullsize: nil, preview: nil, width: 100, height: 100, audio: false, source: nil, flags: 1, user: "User", mark: 1, repost: false, variants: nil, subtitles: [ItemSubtitle(language: "de", path: "/some/path.vtt", label: "Deutsch", isDefault: true)])
+    let dummyItem = Item(id: 1, promoted: nil, userId: 1, down: 10, up: 100, created: 0, image: "dummy.jpg", thumb: "dummy_thumb.jpg", fullsize: nil, preview: nil, width: 100, height: 100, audio: false, source: nil, flags: 1, user: "User", mark: 1, repost: false, variants: nil, subtitles: [ItemSubtitle(language: "de", path: "/some/path.vtt", label: "Deutsch", isDefault: true)])
     let sampleItemData = UnlimitedFeedItemDataModel(
         item: dummyItem,
         displayedTags: [ItemTag(id: 1, confidence: 1, tag: "Tag1")],
@@ -440,8 +478,10 @@ struct UnlimitedFeedItemView: View {
         onShareTapped: {},
         isProcessingFavorite: false,
         onShowUserProfile: { username in print("Preview: Show profile for \(username)")},
-        onWillBeginFullScreenPr0Tok: { print("Preview: Will begin fullscreen") }, // Korrigiert
-        onWillEndFullScreenPr0Tok: { print("Preview: Will end fullscreen") }     // Korrigiert
+        onWillBeginFullScreenPr0Tok: { print("Preview: Will begin fullscreen") },
+        onWillEndFullScreenPr0Tok: { print("Preview: Will end fullscreen") },
+        onUpvoteItem: { print("Preview: Upvote Item") },
+        onDownvoteItem: { print("Preview: Downvote Item") }
     )
     .environmentObject(settings)
     .environmentObject(authService)
