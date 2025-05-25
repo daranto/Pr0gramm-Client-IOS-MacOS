@@ -536,11 +536,13 @@ struct ConversationMessageRow: View {
 
             VStack(alignment: isSentByCurrentUser ? .trailing : .leading, spacing: 2) {
                 Text(attributedMessageContent)
-                    .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                    .fixedSize(horizontal: false, vertical: true) // Erlaubt mehrzeiligen Text
+                    .multilineTextAlignment(.leading) // Text immer linksbündig
+                    .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
                     .background(backgroundColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
-                    .frame(minWidth: 40) // Mindestbreite für sehr kurze Nachrichten
-
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .frame(minWidth: 50, maxWidth: UIScreen.main.bounds.width * 0.75) // Maximale Breite begrenzen
+                
                 HStack(spacing: 4) { // Für Zeitstempel und ggf. Lesestatus-Icon
                     Text(formattedTimestamp(for: message.created))
                         .font(.caption2)
