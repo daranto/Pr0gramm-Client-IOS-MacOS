@@ -4,6 +4,7 @@
 import SwiftUI
 import os
 import Kingfisher
+import UIKit // Für UIPasteboard
 
 fileprivate struct UnlimitedVotableTagView: View {
     let tag: ItemTag
@@ -86,6 +87,8 @@ struct UnlimitedFeedItemView: View {
     let onShareTapped: () -> Void
     let isProcessingFavorite: Bool
     let onShowUserProfile: (String) -> Void
+    let onWillBeginFullScreenPr0Tok: () -> Void
+    let onWillEndFullScreenPr0Tok: () -> Void
 
 
     var item: Item { itemData.item }
@@ -101,12 +104,13 @@ struct UnlimitedFeedItemView: View {
         ZStack(alignment: .bottom) {
             mediaContentLayer
                 .zIndex(0)
+                .contentShape(Rectangle())
                 .onTapGesture {
                     if !item.isVideo && !isDummyItem {
                         onShowFullscreenImage(item)
                     }
                 }
-                .allowsHitTesting(!item.isVideo && !isDummyItem)
+                .allowsHitTesting(!isDummyItem)
             
             if isActive && item.isVideo && playerManager.playerItemID == item.id {
                 VStack {
@@ -191,27 +195,20 @@ struct UnlimitedFeedItemView: View {
         .onChange(of: isActive) { oldValue, newValue in
             if isDummyItem { return }
 
-            if newValue {
-                if item.isVideo && playerManager.playerItemID == item.id {
-                    if playerManager.player?.timeControlStatus != .playing {
-                        playerManager.player?.play()
-                        Self.logger.debug("UnlimitedFeedItemView: Player started via isActive change for item \(item.id)")
+            if newValue { // Wenn die Zelle aktiv wird
+                if item.isVideo {
+                    if playerManager.playerItemID == item.id { // Player existiert für dieses Item
+                        Self.logger.debug("UnlimitedFeedItemView: Item \(item.id) became active. Player exists. Requesting play.")
+                        playerManager.requestPlay(for: item.id) // Fordere Play an
+                    } else { // Player existiert nicht oder für ein anderes Item
+                        playerManager.setupPlayerIfNeeded(for: item, isFullscreen: false) // Setup (setzt shouldAutoplayWhenReady)
+                        Self.logger.debug("UnlimitedFeedItemView: Item \(item.id) became active. Player setup initiated (shouldAutoplayWhenReady will be handled).")
                     }
-                } else if item.isVideo {
-                    playerManager.setupPlayerIfNeeded(for: item, isFullscreen: false)
-                    Self.logger.debug("UnlimitedFeedItemView: Player setup initiated via isActive for item \(item.id)")
-                     Task {
-                         try? await Task.sleep(for: .milliseconds(100))
-                         if self.isActive && playerManager.playerItemID == item.id && playerManager.player?.timeControlStatus != .playing {
-                             playerManager.player?.play()
-                             Self.logger.debug("UnlimitedFeedItemView: Explicit play after setup for item \(item.id)")
-                         }
-                     }
                 }
-            } else {
+            } else { // Wenn die Zelle inaktiv wird
                 if item.isVideo && playerManager.playerItemID == item.id {
                      playerManager.player?.pause()
-                     Self.logger.debug("UnlimitedFeedItemView: Player paused via isActive change for item \(item.id)")
+                     Self.logger.debug("UnlimitedFeedItemView: Player paused via isActive becoming false for item \(item.id)")
                 }
             }
         }
@@ -240,32 +237,32 @@ struct UnlimitedFeedItemView: View {
             Image("pr0tok")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: .infinity) // Zentriert das Dummy-Bild
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(50)
         } else if item.isVideo {
              if isActive, let player = playerManager.player, playerManager.playerItemID == item.id {
                  CustomVideoPlayerRepresentable(
                      player: player,
                      handler: keyboardActionHandlerForVideo,
-                     onWillBeginFullScreen: { /* TODO */ },
-                     onWillEndFullScreen: { /* TODO */ },
+                     onWillBeginFullScreen: onWillBeginFullScreenPr0Tok, // Geändert
+                     onWillEndFullScreen: onWillEndFullScreenPr0Tok,     // Geändert
                      horizontalSizeClass: nil
                  )
                  .id("video_\(item.id)")
              } else {
                  KFImage(item.thumbnailUrl)
                      .resizable()
-                     .aspectRatio(contentMode: .fill) // Füllt den verfügbaren Platz
-                     .frame(maxWidth: .infinity, maxHeight: .infinity) // Nimmt allen Platz ein
-                     .clipped() // Verhindert Überlappen, falls Aspect Ratio nicht passt
+                     .aspectRatio(contentMode: .fill)
+                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                     .clipped()
                      .overlay(Color.black.opacity(0.3))
                      .overlay(ProgressView().scaleEffect(1.5).tint(.white).opacity(isActive && playerManager.playerItemID != item.id ? 1 : 0))
              }
         } else {
             KFImage(item.imageUrl)
                 .resizable()
-                .aspectRatio(contentMode: .fit) // Behält Aspekt bei und füllt, zentriert
-                .frame(maxWidth: .infinity, maxHeight: .infinity) // Zentriert das Bild im verfügbaren Raum
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
         
@@ -442,7 +439,9 @@ struct UnlimitedFeedItemView: View {
         onShowCollectionSelection: {},
         onShareTapped: {},
         isProcessingFavorite: false,
-        onShowUserProfile: { username in print("Preview: Show profile for \(username)")}
+        onShowUserProfile: { username in print("Preview: Show profile for \(username)")},
+        onWillBeginFullScreenPr0Tok: { print("Preview: Will begin fullscreen") }, // Korrigiert
+        onWillEndFullScreenPr0Tok: { print("Preview: Will end fullscreen") }     // Korrigiert
     )
     .environmentObject(settings)
     .environmentObject(authService)

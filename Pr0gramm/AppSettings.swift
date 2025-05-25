@@ -134,8 +134,10 @@ class AppSettings: ObservableObject {
     private static let showPOLKey = "showPOLPreference_v1"
     private static let maxImageCacheSizeMBKey = "maxImageCacheSizeMB_v1"
     private static let commentSortOrderKey = "commentSortOrder_v1"
-    private static let hideSeenItemsKey = "hideSeenItems_v1"
-    private static let enableExperimentalHideSeenKey = "enableExperimentalHideSeen_v1"
+    // --- MODIFIED: enableExperimentalHideSeenKey entfernt ---
+    // private static let enableExperimentalHideSeenKey = "enableExperimentalHideSeen_v1"
+    // --- END MODIFICATION ---
+    private static let hideSeenItemsKey = "hideSeenItems_v1" // Bleibt, da der UserDefault-Key derselbe sein kann
     private static let subtitleActivationModeKey = "subtitleActivationMode_v1"
     private static let selectedCollectionIdForFavoritesKey = "selectedCollectionIdForFavorites_v1"
     private static let colorSchemeSettingKey = "colorSchemeSetting_v1"
@@ -144,7 +146,7 @@ class AppSettings: ObservableObject {
     private static let accentColorChoiceKey = "accentColorChoice_v1"
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
-    private static let enableUnlimitedStyleFeedKey = "enableUnlimitedStyleFeed_v1"
+    private static let enableUnlimitedStyleFeedKey = "enableUnlimitedStyleFeed_v1" // Bleibt experimentell
     private var keyValueStoreChangeObserver: NSObjectProtocol?
 
     @Published var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
@@ -177,28 +179,20 @@ class AppSettings: ObservableObject {
             Self.logger.info("Comment sort order changed to: \(self.commentSortOrder.displayName)")
         }
     }
+    
+    // --- MODIFIED: enableExperimentalHideSeen Property entfernt ---
+    // @Published var enableExperimentalHideSeen: Bool { ... }
+    // --- END MODIFICATION ---
+
     @Published var hideSeenItems: Bool {
         didSet {
-            if enableExperimentalHideSeen {
-                 UserDefaults.standard.set(hideSeenItems, forKey: Self.hideSeenItemsKey)
-                 Self.logger.info("Hide seen items setting changed to: \(self.hideSeenItems)")
-            } else if hideSeenItems {
-                 Self.logger.warning("Attempted to set hideSeenItems to true while experimental feature is disabled. Forcing back to false.")
-                 Task { @MainActor in self.hideSeenItems = false }
-            }
+            // --- MODIFIED: Bedingung entfernt, speichert immer ---
+            UserDefaults.standard.set(hideSeenItems, forKey: Self.hideSeenItemsKey)
+            Self.logger.info("Hide seen items setting changed to: \(self.hideSeenItems)")
+            // --- END MODIFICATION ---
         }
     }
-    @Published var enableExperimentalHideSeen: Bool {
-        didSet {
-            UserDefaults.standard.set(enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey)
-            Self.logger.info("Setting 'Enable Experimental Hide Seen' changed to: \(self.enableExperimentalHideSeen)")
-            if !enableExperimentalHideSeen {
-                self.hideSeenItems = false
-                Self.logger.info("Experimental 'Hide Seen' disabled. Forcing 'hideSeenItems' setting to false.")
-                 UserDefaults.standard.removeObject(forKey: Self.hideSeenItemsKey)
-            }
-        }
-    }
+
     @Published var subtitleActivationMode: SubtitleActivationMode {
         didSet {
             UserDefaults.standard.set(subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey)
@@ -247,7 +241,7 @@ class AppSettings: ObservableObject {
         }
     }
     
-    @Published var enableUnlimitedStyleFeed: Bool {
+    @Published var enableUnlimitedStyleFeed: Bool { // Bleibt als experimentelles Feature
         didSet {
             if oldValue != enableUnlimitedStyleFeed {
                 UserDefaults.standard.set(enableUnlimitedStyleFeed, forKey: Self.enableUnlimitedStyleFeedKey)
@@ -263,7 +257,7 @@ class AppSettings: ObservableObject {
     @Published private(set) var seenItemIDs: Set<Int> = []
 
     private var saveSeenItemsTask: Task<Void, Never>?
-    private let saveSeenItemsDebounceDelay: Duration = .seconds(1) // Kürzere Verzögerung für schnellere Reaktion
+    private let saveSeenItemsDebounceDelay: Duration = .seconds(1)
 
     var favoritesSettingsChangedPublisher: AnyPublisher<Void, Never> {
         let sfwPublisher = $showSFW.map { _ in () }.eraseToAnyPublisher()
@@ -371,11 +365,12 @@ class AppSettings: ObservableObject {
         let initialMaxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) as? Int ?? 100
         let initialRawCommentSortOrder = UserDefaults.standard.integer(forKey: Self.commentSortOrderKey)
         let initialCommentSortOrder = CommentSortOrder(rawValue: initialRawCommentSortOrder) ?? .date
-        let initialEnableExperimentalHideSeen = UserDefaults.standard.bool(forKey: Self.enableExperimentalHideSeenKey)
-        var initialHideSeenItems = false
-        if initialEnableExperimentalHideSeen {
-            initialHideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
-        }
+        
+        // --- MODIFIED: Initialisierung von hideSeenItems ---
+        // Liest direkt aus UserDefaults, Default ist false, wenn nicht vorhanden.
+        let initialHideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
+        // --- END MODIFICATION ---
+
         let initialRawSubtitleActivationMode = UserDefaults.standard.integer(forKey: Self.subtitleActivationModeKey)
         let initialSubtitleActivationMode = SubtitleActivationMode(rawValue: initialRawSubtitleActivationMode) ?? .automatic
         let initialSelectedCollectionId = UserDefaults.standard.object(forKey: Self.selectedCollectionIdForFavoritesKey) as? Int
@@ -389,7 +384,7 @@ class AppSettings: ObservableObject {
         let initialResetFiltersOnAppOpen = UserDefaults.standard.bool(forKey: Self.resetFiltersOnAppOpenKey)
         let initialRawAccentColor = UserDefaults.standard.string(forKey: Self.accentColorChoiceKey)
         let initialAccentColor = AccentColorChoice(rawValue: initialRawAccentColor ?? AccentColorChoice.blue.rawValue) ?? .blue
-        let initialEnableUnlimitedStyleFeed = UserDefaults.standard.bool(forKey: Self.enableUnlimitedStyleFeedKey)
+        let initialEnableUnlimitedStyleFeed = UserDefaults.standard.bool(forKey: Self.enableUnlimitedStyleFeedKey) // Bleibt experimentell
 
         self.isVideoMuted = initialIsVideoMuted
         self.feedType = initialFeedType
@@ -400,7 +395,7 @@ class AppSettings: ObservableObject {
         self.showPOL = initialShowPOL
         self.maxImageCacheSizeMB = initialMaxImageCacheSizeMB
         self.commentSortOrder = initialCommentSortOrder
-        self.enableExperimentalHideSeen = initialEnableExperimentalHideSeen
+        // enableExperimentalHideSeen wurde entfernt
         self.hideSeenItems = initialHideSeenItems
         self.subtitleActivationMode = initialSubtitleActivationMode
         self.selectedCollectionIdForFavorites = initialSelectedCollectionId
@@ -415,7 +410,7 @@ class AppSettings: ObservableObject {
         Self.logger.info("- feedType: \(self.feedType.displayName)")
         Self.logger.info("- showSFW: \(self.showSFW), showNSFW: \(self.showNSFW), showNSFL: \(self.showNSFL), showNSFP: \(self.showNSFP), showPOL: \(self.showPOL)")
         Self.logger.info("- apiFlags computed (assuming logged out for init): \(self.apiFlags), apiPromoted computed: \(String(describing: self.apiPromoted)), apiShowJunk computed: \(self.apiShowJunk)")
-        Self.logger.info("- enableExperimentalHideSeen: \(self.enableExperimentalHideSeen)")
+        // enableExperimentalHideSeen Log entfernt
         Self.logger.info("- hideSeenItems (actual): \(self.hideSeenItems)")
         Self.logger.info("- subtitleActivationMode: \(self.subtitleActivationMode.displayName)")
         Self.logger.info("- selectedCollectionIdForFavorites: \(self.selectedCollectionIdForFavorites != nil ? String(self.selectedCollectionIdForFavorites!) : "nil")")
@@ -423,13 +418,15 @@ class AppSettings: ObservableObject {
         Self.logger.info("- gridSize: \(self.gridSize.displayName)")
         Self.logger.info("- resetFiltersOnAppOpen: \(self.resetFiltersOnAppOpen)")
         Self.logger.info("- accentColorChoice: \(self.accentColorChoice.displayName)")
-        Self.logger.info("- enableUnlimitedStyleFeed: \(self.enableUnlimitedStyleFeed)")
+        Self.logger.info("- enableUnlimitedStyleFeed: \(self.enableUnlimitedStyleFeed)") // Bleibt
 
 
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
-        if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil && self.enableExperimentalHideSeen { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
-        if UserDefaults.standard.object(forKey: Self.enableExperimentalHideSeenKey) == nil { UserDefaults.standard.set(self.enableExperimentalHideSeen, forKey: Self.enableExperimentalHideSeenKey) }
+        // --- MODIFIED: Default für hideSeenItemsKey setzen ---
+        if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
+        // enableExperimentalHideSeenKey wird nicht mehr benötigt
+        // --- END MODIFICATION ---
         if UserDefaults.standard.object(forKey: Self.subtitleActivationModeKey) == nil { UserDefaults.standard.set(self.subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey) }
         if UserDefaults.standard.object(forKey: Self.colorSchemeSettingKey) == nil { UserDefaults.standard.set(self.colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey) }
         if UserDefaults.standard.object(forKey: Self.gridSizeSettingKey) == nil { UserDefaults.standard.set(self.gridSize.rawValue, forKey: Self.gridSizeSettingKey) }
@@ -469,13 +466,12 @@ class AppSettings: ObservableObject {
         }
         Self.logger.info("Cleared in-memory seen items set.")
         
-        // Detached task for file operations
         Task.detached { [cacheService = self.cacheService, cloudStore = self.cloudStore] in
             await cacheService.clearCache(forKey: Self.localSeenItemsCacheKey)
             Self.logger.info("Cleared local seen items cache file via CacheService (background).")
             
             cloudStore.removeObject(forKey: Self.iCloudSeenItemsKey)
-            let syncSuccess = cloudStore.synchronize() // This is blocking
+            let syncSuccess = cloudStore.synchronize()
             Self.logger.info("Removed seen items key from iCloud KVS. Synchronize requested: \(syncSuccess) (background).")
         }
     }
@@ -541,9 +537,7 @@ class AppSettings: ObservableObject {
         await updateDataCacheSize()
     }
 
-    // --- MODIFIED: markItemAsSeen and related functions ---
     func markItemAsSeen(id: Int) {
-        // Must be called on MainActor due to @Published property access.
         guard !seenItemIDs.contains(id) else {
             Self.logger.trace("Item \(id) was already marked as seen (in-memory).")
             return
@@ -551,14 +545,13 @@ class AppSettings: ObservableObject {
         
         var updatedIDs = seenItemIDs
         updatedIDs.insert(id)
-        seenItemIDs = updatedIDs // Update @Published var on MainActor for UI reactivity
+        seenItemIDs = updatedIDs
         Self.logger.debug("Marked item \(id) as seen (in-memory). Total seen: \(self.seenItemIDs.count). Scheduling save.")
 
         scheduleSaveSeenItems()
     }
 
     func markItemsAsSeen(ids: Set<Int>) {
-        // Must be called on MainActor.
         let newIDs = ids.subtracting(seenItemIDs)
         guard !newIDs.isEmpty else {
             Self.logger.trace("No new items to mark as seen from the provided batch.")
@@ -568,18 +561,15 @@ class AppSettings: ObservableObject {
         Self.logger.debug("Marking \(newIDs.count) new items as seen (in-memory).")
         var idsToUpdate = seenItemIDs
         idsToUpdate.formUnion(newIDs)
-        seenItemIDs = idsToUpdate // UI update
+        seenItemIDs = idsToUpdate
         Self.logger.info("Marked \(newIDs.count) items as seen (in-memory). Total seen: \(self.seenItemIDs.count). Scheduling save.")
         
         scheduleSaveSeenItems()
     }
     
     private func scheduleSaveSeenItems() {
-        // Must be called on MainActor.
-        saveSeenItemsTask?.cancel() // Cancel existing task
+        saveSeenItemsTask?.cancel()
         
-        // Capture the current seenItemIDs for the save operation.
-        // This ensures the task saves the state *at the time it was scheduled* (after debounce).
         let idsToSave = self.seenItemIDs
         
         saveSeenItemsTask = Task {
@@ -589,8 +579,7 @@ class AppSettings: ObservableObject {
                     Self.logger.info("Debounced save task for seen items cancelled during sleep.")
                     return
                 }
-                // Perform the actual saving in a detached task to avoid blocking main actor.
-                Task.detached(priority: .utility) { [weak self] in // Low priority
+                Task.detached(priority: .utility) { [weak self] in
                     guard let self = self else { return }
                     await self.performActualSaveOfSeenIDs(ids: idsToSave)
                 }
@@ -603,18 +592,15 @@ class AppSettings: ObservableObject {
     }
 
     public func forceSaveSeenItems() async {
-        // Must be called on MainActor.
         saveSeenItemsTask?.cancel()
         Self.logger.info("Force save seen items requested. Current debounced task (if any) cancelled.")
-        let currentIDsToSave = self.seenItemIDs // Get current state on MainActor
-        // Perform the actual saving in a detached task.
+        let currentIDsToSave = self.seenItemIDs
         Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
             await self.performActualSaveOfSeenIDs(ids: currentIDsToSave)
         }
     }
 
-    // This function runs off the MainActor.
     private func performActualSaveOfSeenIDs(ids: Set<Int>) async {
         Self.logger.debug("BG Save: Saving \(ids.count) seen item IDs to local cache...")
         await cacheService.saveSeenIDs(ids, forKey: Self.localSeenItemsCacheKey)
@@ -623,13 +609,12 @@ class AppSettings: ObservableObject {
         do {
             let data = try JSONEncoder().encode(ids)
             self.cloudStore.set(data, forKey: Self.iCloudSeenItemsKey)
-            let syncSuccess = self.cloudStore.synchronize() // This is blocking
+            let syncSuccess = self.cloudStore.synchronize()
             Self.logger.info("BG Save: Saved seen IDs to iCloud KVS. Synchronize requested: \(syncSuccess).")
         } catch {
             Self.logger.error("BG Save: Failed to encode or save seen IDs to iCloud KVS: \(error.localizedDescription)")
         }
     }
-    // --- END MODIFICATION ---
 
 
     private func loadSeenItemIDs() async {

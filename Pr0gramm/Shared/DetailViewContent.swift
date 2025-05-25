@@ -20,7 +20,7 @@ struct DetailImageView: View {
         KFImage(item.imageUrl)
             .placeholder { Rectangle().fill(.secondary.opacity(0.1)).overlay(ProgressView()) }
             .onFailure { error in logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)") }
-            .cancelOnDisappear(true)
+            .cancelOnDisappear(false)
             .resizable()
             .aspectRatio(contentMode: .fit)
             .id(item.id)
@@ -238,7 +238,6 @@ struct DetailViewContent: View {
     @ViewBuilder private var voteCounterView: some View {
         let benis = item.up - item.down
         HStack(spacing: 6) {
-            // --- MODIFIED: Reihenfolge der Buttons getauscht ---
             Button(action: downvoteAction) {
                 Image(systemName: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
                     .symbolRenderingMode(.palette)
@@ -264,7 +263,6 @@ struct DetailViewContent: View {
             }
             .buttonStyle(.plain)
             .disabled(!authService.isLoggedIn)
-            // --- END MODIFICATION ---
         }
     }
 
@@ -843,11 +841,14 @@ struct DetailViewContent: View {
             } catch {
                 DetailViewContent.logger.error("Failed to download video for sharing (item \(item.id)): \(error.localizedDescription)")
                 sharePreparationError = "Video-Download fehlgeschlagen."
+                // Als Fallback die URL direkt teilen, falls Download scheitert
                 itemToShare = ShareableItemWrapper(itemsToShare: [mediaUrl])
             }
         } else {
+            // Für Bilder verwenden wir Kingfisher, um vom Cache zu profitieren
             DetailViewContent.logger.info("Attempting to download image for sharing from URL: \(mediaUrl.absoluteString)")
             do {
+                // Versuche, das Bild aus dem Cache zu holen oder herunterzuladen
                 let result: Result<ImageLoadingResult, KingfisherError> = await withCheckedContinuation { continuation in
                     KingfisherManager.shared.downloader.downloadImage(with: mediaUrl, options: nil) { result in
                         continuation.resume(returning: result)
@@ -860,11 +861,14 @@ struct DetailViewContent: View {
                     DetailViewContent.logger.info("Image downloaded and prepared successfully for sharing.")
                     itemToShare = ShareableItemWrapper(itemsToShare: [downloadedImage])
                 case .failure(let error):
+                    // Nur loggen, wenn es kein Abbruch war
                     if error.isTaskCancelled || error.isNotCurrentTask {
                         DetailViewContent.logger.info("Image download for sharing cancelled (item \(item.id)).")
                     } else {
                         DetailViewContent.logger.error("Failed to download image for sharing (item \(item.id)): \(error.localizedDescription)")
                         sharePreparationError = "Bild-Download fehlgeschlagen."
+                        // Fallback: URL teilen
+                        // itemToShare = ShareableItemWrapper(itemsToShare: [mediaUrl])
                     }
                 }
             }
@@ -885,6 +889,7 @@ struct DetailViewContent: View {
     }
 }
 
+// --- Preview Code ---
 @MainActor
 struct PreviewWrapper: View {
     @State var previewLinkTarget: PreviewLinkTarget? = nil

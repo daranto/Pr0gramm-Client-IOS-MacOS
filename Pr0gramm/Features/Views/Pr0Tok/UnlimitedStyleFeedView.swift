@@ -17,9 +17,6 @@ struct UnlimitedFeedItemDataModel {
     let currentVote: Int
 }
 
-// UnlimitedVotableTagView wurde nach UnlimitedFeedItemView.swift verschoben
-
-
 struct UnlimitedStyleFeedView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
@@ -58,9 +55,12 @@ struct UnlimitedStyleFeedView: View {
     
     @State private var fullscreenImageTarget: FullscreenImageTarget? = nil
     
-    private let initialVisibleTagCount = 2
+    private let initialVisibleTagCountInItemView = 2
     @State private var flagsUsedForLastItemsLoad: Int? = nil
-    
+    @State private var feedTypeUsedForLastLoad: FeedType? = nil
+    @State private var hideSeenUsedForLastLoad: Bool? = nil
+    @State private var loggedInUsedForLastLoad: Bool? = nil
+
     @State private var currentRefreshFeedTask: Task<Void, Never>? = nil
     @State private var debouncedRefreshTask: Task<Void, Never>? = nil
 
@@ -71,9 +71,10 @@ struct UnlimitedStyleFeedView: View {
     @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
     @State private var isProcessingFavoriteGlobal: [Int: Bool] = [:]
     
-    // --- NEW: State for User Profile Sheet ---
     @State private var userProfileSheetUsername: String? = nil
-    // --- END NEW ---
+    
+    @State private var wasPlayingBeforeFullscreen: Bool = false
+    @State private var isCurrentlyInSystemFullscreen: Bool = false
 
 
     private let dummyStartItemID = -1
@@ -117,8 +118,11 @@ struct UnlimitedStyleFeedView: View {
                                 self.errorMessage = nil
                                 self.canLoadMore = true
                                 self.isLoadingMore = false
-                                self.flagsUsedForLastItemsLoad = nil
                                 self.isProcessingFavoriteGlobal = [:]
+                                self.flagsUsedForLastItemsLoad = nil
+                                self.feedTypeUsedForLastLoad = nil
+                                self.hideSeenUsedForLastLoad = nil
+                                self.loggedInUsedForLastLoad = nil
                             }
                             Self.logger.info("UI and data states reset for manual refresh. Scrolled to dummy.")
                             
@@ -220,38 +224,16 @@ struct UnlimitedStyleFeedView: View {
             .onChange(of: collectionSelectionSheetTarget) { oldValue, newValue in
                 Self.logger.info("DEBUG: collectionSelectionSheetTarget changed from \(String(describing: oldValue?.item.id)) to \(String(describing: newValue?.item.id)). Sheet should appear: \(newValue != nil)")
             }
-            // --- NEW: Sheet for User Profile ---
             .sheet(item: $userProfileSheetUsername) { usernameToDisplay in
                 UserProfileSheetView(username: usernameToDisplay)
                     .environmentObject(authService)
                     .environmentObject(settings)
-                    .environmentObject(playerManager) // PlayerManager an das Sheet weitergeben
+                    .environmentObject(playerManager)
             }
-            // --- END NEW ---
             .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoadingFeed)) {
                  Button("OK") { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "Unbekannter Fehler")
-            }
-            .confirmationDialog(
-                "Teilen & Kopieren",
-                isPresented: .init(
-                    get: { showingShareOptionsForItemID != nil },
-                    set: { if !$0 { showingShareOptionsForItemID = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                Button("Medium teilen/speichern") {
-                    Task { await prepareAndShareMediaForActiveItem() }
-                }
-                Button("Post-Link (pr0gramm.com)") {
-                    copyPostLinkForActiveItem()
-                }
-                Button("Direkter Medien-Link") {
-                    copyMediaLinkForActiveItem()
-                }
-            } message: {
-                Text("Wähle eine Aktion:")
             }
             .onAppear {
                 playerManager.configure(settings: settings)
@@ -261,36 +243,62 @@ struct UnlimitedStyleFeedView: View {
                 keyboardActionHandlerInstance.seekBackwardAction = playerManager.seekBackward
                 Self.logger.info("UnlimitedStyleFeedView.onAppear - Konfiguration abgeschlossen.")
                 
-                if items.isEmpty || items.first?.id != dummyStartItemID {
-                    items = [createDummyStartItem()]
-                    scrolledItemID = dummyStartItemID
-                    activeItemID = dummyStartItemID
-                    Self.logger.info("UnlimitedStyleFeedView.onAppear: Corrected items to ensure dummy is first and active.")
+                let isInitialOrResetState = items.isEmpty || (items.count == 1 && items.first?.id == dummyStartItemID)
+                
+                if isInitialOrResetState && flagsUsedForLastItemsLoad == nil {
+                     Self.logger.info("UnlimitedStyleFeedView.onAppear: Initial launch or full reset state. Active/Scrolled set to dummy.")
+                     activeItemID = dummyStartItemID
+                     scrolledItemID = dummyStartItemID
                 } else if scrolledItemID == nil {
-                    scrolledItemID = dummyStartItemID
-                    activeItemID = dummyStartItemID
-                    Self.logger.info("UnlimitedStyleFeedView.onAppear: scrolledItemID was nil, set to dummyID.")
+                     Self.logger.info("UnlimitedStyleFeedView.onAppear: scrolledItemID was nil, reset to activeItemID or dummyID.")
+                     scrolledItemID = activeItemID ?? dummyStartItemID
                 }
             }
             .task(id: "\(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType.rawValue)-\(settings.hideSeenItems)") {
-                Self.logger.info("UnlimitedStyleFeedView .task triggered for state change. ID: \(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType.displayName)-\(settings.hideSeenItems)")
+                guard !isCurrentlyInSystemFullscreen else {
+                    Self.logger.info("Task for parameter change skipped: Currently in system fullscreen.")
+                    return
+                }
+
+                let currentApiFlags = settings.apiFlags
+                let currentFeedType = settings.feedType
+                let currentHideSeen = settings.hideSeenItems
+                let currentLoggedIn = authService.isLoggedIn
+
+                Self.logger.info("UnlimitedStyleFeedView .task triggered. Current ID: \(currentLoggedIn)-\(currentApiFlags)-\(currentFeedType.displayName)-\(currentHideSeen). Previous ID: \(loggedInUsedForLastLoad ?? false)-\(flagsUsedForLastItemsLoad ?? -1)-\(feedTypeUsedForLastLoad?.displayName ?? "nil")-\(hideSeenUsedForLastLoad ?? false)")
+
+                let parametersActuallyChanged = (flagsUsedForLastItemsLoad != currentApiFlags ||
+                                                 feedTypeUsedForLastLoad != currentFeedType ||
+                                                 hideSeenUsedForLastLoad != currentHideSeen ||
+                                                 loggedInUsedForLastLoad != currentLoggedIn)
                 
+                let isConsideredInitialLaunch = flagsUsedForLastItemsLoad == nil
+                let performFullResetAndLoad = isConsideredInitialLaunch || parametersActuallyChanged
+
+                if !performFullResetAndLoad && !(items.isEmpty || (items.count == 1 && items.first?.id == dummyStartItemID)) {
+                     Self.logger.info("Task triggered, but no relevant parameters changed and items already loaded. Skipping feed reset and refresh.")
+                     return
+                }
+                Self.logger.info("Parameters changed or initial load. Proceeding with task logic. PerformFullResetAndLoad: \(performFullResetAndLoad)")
+
                 debouncedRefreshTask?.cancel()
                 currentRefreshFeedTask?.cancel()
-
-                playerManager.cleanupPlayer()
-                await MainActor.run {
-                    self.items = [createDummyStartItem()]
-                    self.cachedDetails = [:]
-                    self.infoLoadingStatus = [:]
-                    self.activeItemID = dummyStartItemID
-                    self.scrolledItemID = dummyStartItemID
-                    self.errorMessage = nil
-                    self.canLoadMore = true
-                    self.isLoadingMore = false
-                    self.isProcessingFavoriteGlobal = [:]
+                
+                if performFullResetAndLoad {
+                    playerManager.cleanupPlayer()
+                    await MainActor.run {
+                        self.items = [createDummyStartItem()]
+                        self.cachedDetails = [:]
+                        self.infoLoadingStatus = [:]
+                        self.activeItemID = dummyStartItemID
+                        self.scrolledItemID = dummyStartItemID
+                        self.errorMessage = nil
+                        self.canLoadMore = true
+                        self.isLoadingMore = false
+                        self.isProcessingFavoriteGlobal = [:]
+                    }
+                    Self.logger.info("UI reset to dummy item before starting debounced refresh due to parameter change or initial load.")
                 }
-                Self.logger.info("UI reset to dummy item before starting debounced refresh.")
 
                 debouncedRefreshTask = Task {
                     do {
@@ -300,12 +308,12 @@ struct UnlimitedStyleFeedView: View {
                             return
                         }
                         
-                        if self.isLoadingFeed {
-                             Self.logger.info("Debounced refresh: isLoadingFeed is true, skipping.")
+                        if self.isLoadingFeed && !performFullResetAndLoad {
+                             Self.logger.info("Debounced refresh: isLoadingFeed is true (and no full reset), skipping.")
                              return
                         }
 
-                        Self.logger.info("Starting new debounced refresh task due to parameter change.")
+                        Self.logger.info("Starting new debounced refresh task.")
                         currentRefreshFeedTask = Task {
                             if Task.isCancelled {
                                 Self.logger.info("Actual refresh (from debounced) was cancelled before starting.")
@@ -321,8 +329,13 @@ struct UnlimitedStyleFeedView: View {
                 }
             }
             .onDisappear {
-                Self.logger.info("UnlimitedStyleFeedView.onDisappear - Cleaning up player.")
-                playerManager.cleanupPlayer()
+                Self.logger.info("UnlimitedStyleFeedView.onDisappear.")
+                if !isCurrentlyInSystemFullscreen {
+                    playerManager.cleanupPlayer()
+                    Self.logger.info("Player cleaned up because view disappeared and not in system fullscreen.")
+                } else {
+                    Self.logger.info("Player NOT cleaned up on disappear: Currently in system fullscreen.")
+                }
                 currentRefreshFeedTask?.cancel()
                 debouncedRefreshTask?.cancel()
             }
@@ -355,6 +368,35 @@ struct UnlimitedStyleFeedView: View {
             }
         }
     }
+    
+    private func handleWillBeginFullscreen() {
+        Self.logger.info("handleWillBeginFullscreen called.")
+        self.wasPlayingBeforeFullscreen = playerManager.player?.timeControlStatus == .playing
+        self.isCurrentlyInSystemFullscreen = true
+    }
+
+    private func handleWillEndFullscreen() {
+        Self.logger.info("handleWillEndFullscreen called.")
+        self.isCurrentlyInSystemFullscreen = false
+        if self.wasPlayingBeforeFullscreen {
+            if let currentActiveId = self.activeItemID,
+               let currentItem = self.items.first(where: { $0.id == currentActiveId }),
+               currentItem.isVideo {
+                
+                playerManager.setupPlayerIfNeeded(for: currentItem, isFullscreen: false)
+                
+                Task {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    if playerManager.playerItemID == currentItem.id && playerManager.player?.timeControlStatus != .playing {
+                        Self.logger.info("Attempting to resume player for item \(currentItem.id) after exiting fullscreen.")
+                        playerManager.player?.play()
+                    }
+                }
+            }
+        }
+        self.wasPlayingBeforeFullscreen = false
+    }
+
 
     @ViewBuilder
     private var feedControls: some View {
@@ -378,6 +420,7 @@ struct UnlimitedStyleFeedView: View {
                 Button("Erneut versuchen") { Task { await refreshItems() } }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // --- MODIFIED: Bedingung vereinfacht ---
         } else if items.count <= 1 && !isLoadingFeed && errorMessage == nil && (items.first?.id == dummyStartItemID || items.isEmpty) {
              VStack {
                  if items.first?.id == dummyStartItemID {
@@ -394,16 +437,19 @@ struct UnlimitedStyleFeedView: View {
                          onShowCollectionSelection: {},
                          onShareTapped: {},
                          isProcessingFavorite: false,
-                         onShowUserProfile: { _ in } // Dummy callback
+                         onShowUserProfile: { _ in },
+                         onWillBeginFullScreenPr0Tok: handleWillBeginFullscreen,
+                         onWillEndFullScreenPr0Tok: handleWillEndFullscreen
                      )
                      .frame(height: 200)
                  }
-                Text(settings.hideSeenItems && settings.enableExperimentalHideSeen ? "Keine neuen Posts, die den Filtern entsprechen." : "Keine Posts für die aktuellen Filter gefunden.")
+                Text(settings.hideSeenItems ? "Keine neuen Posts, die den Filtern entsprechen." : "Keine Posts für die aktuellen Filter gefunden.")
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .padding()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // --- END MODIFICATION ---
         } else {
             GeometryReader { geometry in
                 ScrollView(.vertical) {
@@ -467,12 +513,12 @@ struct UnlimitedStyleFeedView: View {
                                     }
                                 },
                                 isProcessingFavorite: isProcessingFavoriteGlobal[item.id] ?? false,
-                                // --- NEW: Pass onShowUserProfile callback ---
                                 onShowUserProfile: { username in
                                     Self.logger.info("Request to show profile for \(username) from item \(item.id)")
                                     self.userProfileSheetUsername = username
-                                }
-                                // --- END NEW ---
+                                },
+                                onWillBeginFullScreenPr0Tok: handleWillBeginFullscreen,
+                                onWillEndFullScreenPr0Tok: handleWillEndFullscreen
                             )
                             .id(item.id)
                             .frame(height: geometry.size.height)
@@ -524,15 +570,15 @@ struct UnlimitedStyleFeedView: View {
                             }
                         }
                         
-                        if currentItem.id != dummyStartItemID {
+                        if currentItem.id != dummyStartItemID && !isCurrentlyInSystemFullscreen {
                             playerManager.setupPlayerIfNeeded(for: currentItem, isFullscreen: false)
                             
                             if currentItem.isVideo && activeItemID == currentItem.id {
                                 if previousActiveItemID != currentItem.id || playerManager.player?.timeControlStatus != .playing {
                                     Task {
                                         try? await Task.sleep(for: .milliseconds(250))
-                                        guard self.activeItemID == currentItem.id, let player = playerManager.player else {
-                                            Self.logger.debug("Player start skipped for item \(currentItem.id): activeItemID changed or player nil during delay.")
+                                        guard self.activeItemID == currentItem.id, let player = playerManager.player, !self.isCurrentlyInSystemFullscreen else {
+                                            Self.logger.debug("Player start skipped for item \(currentItem.id): activeItemID changed, player nil, or in fullscreen during delay.")
                                             return
                                         }
                                         if player.status == .readyToPlay {
@@ -546,6 +592,8 @@ struct UnlimitedStyleFeedView: View {
                                 }
                             }
                             Self.logger.info("Scrolled to item \(currentItem.id), setting active. Details loading will be initiated by activeItemID change.")
+                        } else if isCurrentlyInSystemFullscreen {
+                            Self.logger.info("Scrolled to item \(currentItem.id) but currently in system fullscreen. Player setup deferred.")
                         }
                     }
                 }
@@ -572,7 +620,7 @@ struct UnlimitedStyleFeedView: View {
 
         let details = cachedDetails[item.id]
         let allItemTags = details?.tags.sorted { $0.confidence > $1.confidence } ?? []
-        let tagsForDisplayLogic = Array(allItemTags.prefix(initialVisibleTagCount))
+        let tagsForDisplayLogic = Array(allItemTags.prefix(initialVisibleTagCountInItemView))
 
         let commentsToDisplay = details?.comments ?? []
         let currentInfoStatus = infoLoadingStatus[item.id] ?? .idle
@@ -632,7 +680,7 @@ struct UnlimitedStyleFeedView: View {
         }
         
         await MainActor.run {
-            if self.items.first?.id != dummyStartItemID || self.items.count > 1 || self.scrolledItemID != dummyStartItemID {
+            if !(self.items.count == 1 && self.items.first?.id == dummyStartItemID) && !self.items.isEmpty {
                 self.items = [createDummyStartItem()]
                 self.activeItemID = dummyStartItemID
                 self.scrolledItemID = dummyStartItemID
@@ -648,6 +696,10 @@ struct UnlimitedStyleFeedView: View {
         }
         
         let currentApiFlagsForThisRefresh = settings.apiFlags
+        let currentFeedTypeForThisRefresh = settings.feedType
+        let currentHideSeenForThisRefresh = settings.hideSeenItems
+        let currentLoggedInForThisRefresh = authService.isLoggedIn
+
         Self.logger.info("RefreshItems (Unlimited) Task started. Attempting with apiFlags: \(currentApiFlagsForThisRefresh)")
 
         defer {
@@ -664,6 +716,9 @@ struct UnlimitedStyleFeedView: View {
                 self.errorMessage = nil
                 self.canLoadMore = false
                 self.flagsUsedForLastItemsLoad = currentApiFlagsForThisRefresh
+                self.feedTypeUsedForLastLoad = currentFeedTypeForThisRefresh
+                self.hideSeenUsedForLastLoad = currentHideSeenForThisRefresh
+                self.loggedInUsedForLastLoad = currentLoggedInForThisRefresh
             }
             Self.logger.info("Refresh (Unlimited) aborted: No active content filter (apiFlags: \(currentApiFlagsForThisRefresh)). UI shows dummy item.")
             return
@@ -675,7 +730,9 @@ struct UnlimitedStyleFeedView: View {
         var apiSaysNoMoreItems = false
 
         do {
-            if settings.hideSeenItems && settings.enableExperimentalHideSeen {
+            // --- MODIFIED: Bedingung vereinfacht ---
+            if settings.hideSeenItems {
+            // --- END MODIFICATION ---
                 while allFetchedUnseenItems.isEmpty && !apiSaysNoMoreItems {
                     if Task.isCancelled { throw CancellationError() }
                     pagesAttemptedInLoop += 1
@@ -738,6 +795,9 @@ struct UnlimitedStyleFeedView: View {
                     Self.logger.info("Refresh (Unlimited) successful. \(allFetchedUnseenItems.count) new items added. scrolledItemID remains on dummy. canLoadMore set to \(!apiSaysNoMoreItems).")
                 }
                 self.flagsUsedForLastItemsLoad = currentApiFlagsForThisRefresh
+                self.feedTypeUsedForLastLoad = currentFeedTypeForThisRefresh
+                self.hideSeenUsedForLastLoad = currentHideSeenForThisRefresh
+                self.loggedInUsedForLastLoad = currentLoggedInForThisRefresh
             }
 
             if !allFetchedUnseenItems.isEmpty {
@@ -823,7 +883,9 @@ struct UnlimitedStyleFeedView: View {
                 var pageItems = apiResponse.items
                 let rawPageItemCount = pageItems.count
                 
-                if settings.hideSeenItems && settings.enableExperimentalHideSeen {
+                // --- MODIFIED: Bedingung vereinfacht ---
+                if settings.hideSeenItems {
+                // --- END MODIFICATION ---
                     let originalCount = pageItems.count
                     pageItems.removeAll { settings.seenItemIDs.contains($0.id) }
                     Self.logger.info("LoadMore: Filtered \(originalCount - pageItems.count) seen items. \(pageItems.count) unseen remaining.")
@@ -856,7 +918,9 @@ struct UnlimitedStyleFeedView: View {
             self.canLoadMore = !apiSaysNoMoreItemsAfterLoadMore
             Self.logger.info("LoadMore (Unlimited) finished. canLoadMore set to \(!apiSaysNoMoreItemsAfterLoadMore) based on API signal (\(apiSaysNoMoreItemsAfterLoadMore)).")
             
-            if itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore && (settings.hideSeenItems && settings.enableExperimentalHideSeen) {
+            // --- MODIFIED: Bedingung vereinfacht ---
+            if itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore && settings.hideSeenItems {
+            // --- END MODIFICATION ---
                 Self.logger.info("LoadMore: No new unseen items found after \(pagesForLoadMore) pages, but API might have more. Will allow further loading attempts.")
             }
 

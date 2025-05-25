@@ -39,6 +39,8 @@ struct FeedView: View {
 
     @StateObject private var playerManager = VideoPlayerManager()
     @State private var refreshTask: Task<Void, Never>? = nil
+    
+    @State private var nextOlderThanIdForApiCall: Int? = nil
 
 
     private let apiService = APIService()
@@ -61,17 +63,18 @@ struct FeedView: View {
         if settings.feedType != .junk {
             key += "_flags_\(settings.apiFlags)"
         }
+        // --- MODIFIED: Bedingung vereinfacht ---
+        if settings.hideSeenItems {
+            key += "_onlyfresh"
+        }
+        // --- END MODIFICATION ---
         return key
     }
 
-
     private var displayedItems: [Item] {
-        if settings.hideSeenItems {
-            return items.filter { !settings.seenItemIDs.contains($0.id) }
-        } else {
-            return items
-        }
+        return items
     }
+
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -141,7 +144,6 @@ struct FeedView: View {
                 FeedView.logger.debug("FeedView disappeared, cancelling tasks if active.")
             }
             .onChange(of: popToRootTrigger) { if !navigationPath.isEmpty { navigationPath = NavigationPath() } }
-            .onChange(of: settings.seenItemIDs) { _, _ in FeedView.logger.trace("FeedView detected change in seenItemIDs, body will update.") }
             .onChange(of: settings.hideSeenItems) { _, newValue in
                 FeedView.logger.info("Hide seen items setting changed to: \(newValue)")
                 triggerRefreshTask(resetInitialLoad: true)
@@ -162,9 +164,11 @@ struct FeedView: View {
         if showNoFilterMessage { noFilterContentView }
         else if isLoading && (items.isEmpty || !didLoadInitially) {
             ProgressView("Lade...").frame(maxWidth: .infinity, maxHeight: .infinity)
+        // --- MODIFIED: Bedingung vereinfacht ---
         } else if displayedItems.isEmpty && !isLoading && errorMessage == nil && !showNoFilterMessage {
-             let message = settings.hideSeenItems && settings.enableExperimentalHideSeen ? "Keine neuen Posts, die den Filtern entsprechen." : "Keine Posts für die aktuellen Filter gefunden."
+             let message = settings.hideSeenItems ? "Keine neuen Posts, die den Filtern entsprechen." : "Keine Posts für die aktuellen Filter gefunden."
              Text(message).foregroundColor(.secondary).multilineTextAlignment(.center).padding().frame(maxWidth: .infinity, maxHeight: .infinity)
+        // --- END MODIFICATION ---
         } else { scrollViewContent }
     }
 
@@ -205,15 +209,20 @@ struct FeedView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity).refreshable { await refreshItems() }
     }
 
-    // MARK: - Data Loading Methods
-
     @MainActor
     func refreshItems() async {
         guard !isLoading else { FeedView.logger.info("RefreshItems skipped: isLoading is true."); return }
         didLoadInitially = false
         FeedView.logger.info("RefreshItems Task started.")
         guard !Task.isCancelled else { FeedView.logger.info("RefreshItems Task cancelled before starting."); return }
-        guard settings.hasActiveContentFilter else { await MainActor.run { if !self.showNoFilterMessage || !self.items.isEmpty { self.items = []; self.showNoFilterMessage = true; self.canLoadMore = false; self.isLoadingMore = false; self.errorMessage = nil; FeedView.logger.debug("Cleared items and set showNoFilterMessage.") } }; return }
+        guard settings.hasActiveContentFilter else {
+            await MainActor.run {
+                if !self.showNoFilterMessage || !self.items.isEmpty {
+                    self.items = []; self.showNoFilterMessage = true; self.canLoadMore = false; self.isLoadingMore = false; self.errorMessage = nil;
+                    FeedView.logger.debug("Cleared items and set showNoFilterMessage.")
+                }
+            }; return
+        }
         guard let currentCacheKey = Optional(self.feedCacheKey) else { await MainActor.run { self.errorMessage = "Interner Cache-Fehler." }; return }
         
         let showLoadingIndicatorTask: Task<Void, Never>? = Task { @MainActor in
@@ -225,7 +234,8 @@ struct FeedView: View {
             if self.showNoFilterMessage { self.showNoFilterMessage = false };
             self.errorMessage = nil
             self.items = []
-            FeedView.logger.debug("Cleared items at start of refresh.")
+            self.nextOlderThanIdForApiCall = nil
+            FeedView.logger.debug("Cleared items and nextOlderThanIdForApiCall at start of refresh.")
         }
         canLoadMore = true; isLoadingMore = false
         
@@ -240,43 +250,98 @@ struct FeedView: View {
         let currentApiFlags = settings.apiFlags; let currentFeedTypePromoted = settings.apiPromoted; let currentShowJunk = settings.apiShowJunk
         FeedView.logger.info("Starting API fetch for refresh (FeedType: \(settings.feedType.displayName), Flags: \(currentApiFlags), Promoted: \(String(describing: currentFeedTypePromoted)), Junk: \(currentShowJunk)). Strategy: REPLACE.")
         
-        do {
-            let apiResponse = try await apiService.fetchItems(
-                flags: currentApiFlags,
-                promoted: currentFeedTypePromoted,
-                showJunkParameter: currentShowJunk
-            )
-            let fetchedItemsFromAPI = apiResponse.items
+        var fetchedItemsForThisRefresh: [Item] = []
+        var lastRawItemFromApiResponse: Item? = nil
+        var pagesAttemptedInLoop = 0
+        var apiSaysNoMoreItems = false
 
-            guard !Task.isCancelled else { FeedView.logger.info("RefreshItems Task cancelled after API fetch."); return }
-            FeedView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) items received for refresh.")
-            
-            await MainActor.run {
-                 self.items = fetchedItemsFromAPI
-                if fetchedItemsFromAPI.isEmpty {
-                    self.canLoadMore = false
-                    FeedView.logger.info("Refresh returned 0 items. Setting canLoadMore to false.")
-                } else {
-                    let atEnd = apiResponse.atEnd ?? false
-                    let hasOlder = apiResponse.hasOlder ?? true
-                    if atEnd {
-                        self.canLoadMore = false
-                        FeedView.logger.info("API indicates atEnd=true. Setting canLoadMore to false.")
-                    } else if hasOlder == false { // Nur false, nicht nil
-                        self.canLoadMore = false
-                        FeedView.logger.info("API indicates hasOlder=false. Setting canLoadMore to false.")
-                    } else {
-                        self.canLoadMore = true
-                        FeedView.logger.info("API indicates more items might be available for refresh (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+        do {
+            // --- MODIFIED: Bedingung vereinfacht ---
+            if settings.hideSeenItems {
+            // --- END MODIFICATION ---
+                var olderParamForLoop: Int? = nil
+                while fetchedItemsForThisRefresh.isEmpty && !apiSaysNoMoreItems {
+                    if Task.isCancelled { throw CancellationError() }
+                    pagesAttemptedInLoop += 1
+                    FeedView.logger.info("Refresh (Grid): Auto-fetching page \(pagesAttemptedInLoop) for unseen (older: \(olderParamForLoop ?? -1))")
+
+                    let apiResponse = try await apiService.fetchItems(
+                        flags: currentApiFlags,
+                        promoted: currentFeedTypePromoted,
+                        olderThanId: olderParamForLoop,
+                        showJunkParameter: currentShowJunk
+                    )
+                    if Task.isCancelled { throw CancellationError() }
+
+                    let rawPageItems = apiResponse.items
+                    lastRawItemFromApiResponse = rawPageItems.last
+                    var pageItemsToFilter = rawPageItems
+                    let rawPageItemCount = pageItemsToFilter.count
+                    FeedView.logger.info("API (Grid auto-refresh page \(pagesAttemptedInLoop)) fetched \(rawPageItemCount) items.")
+
+                    pageItemsToFilter.removeAll { settings.seenItemIDs.contains($0.id) }
+                    FeedView.logger.info("Filtered \(rawPageItemCount - pageItemsToFilter.count) seen items from Grid auto-refresh page \(pagesAttemptedInLoop). \(pageItemsToFilter.count) unseen remaining.")
+                    
+                    fetchedItemsForThisRefresh.append(contentsOf: pageItemsToFilter)
+                    
+                    if apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
+                        apiSaysNoMoreItems = true
+                        FeedView.logger.info("API indicated end of feed during Grid refresh loop (Page \(pagesAttemptedInLoop)).")
+                    }
+                    
+                    if rawPageItemCount > 0 && !apiSaysNoMoreItems {
+                         olderParamForLoop = settings.feedType == .promoted ? rawPageItems.last!.promoted ?? rawPageItems.last!.id : rawPageItems.last!.id
+                    } else if rawPageItemCount == 0 && !apiSaysNoMoreItems {
+                        apiSaysNoMoreItems = true
+                        FeedView.logger.info("API returned 0 items during Grid refresh loop (Page \(pagesAttemptedInLoop)), assuming end.")
                     }
                 }
+                 if fetchedItemsForThisRefresh.isEmpty && !apiSaysNoMoreItems {
+                    FeedView.logger.warning("Scanned \(pagesAttemptedInLoop) pages for unseen items in Grid refresh, but found none. API did not report end.")
+                }
+            } else {
+                let apiResponse = try await apiService.fetchItems(
+                    flags: currentApiFlags,
+                    promoted: currentFeedTypePromoted,
+                    showJunkParameter: currentShowJunk
+                )
+                fetchedItemsForThisRefresh = apiResponse.items
+                lastRawItemFromApiResponse = fetchedItemsForThisRefresh.last
+                if apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
+                    apiSaysNoMoreItems = true
+                }
+                FeedView.logger.info("API fetch (Grid, no hideSeenItems) completed: \(fetchedItemsForThisRefresh.count) items. API at end: \(apiSaysNoMoreItems)")
+            }
+
+            guard !Task.isCancelled else { FeedView.logger.info("RefreshItems Task cancelled after API fetch."); return }
+            
+            await MainActor.run {
+                 self.items = fetchedItemsForThisRefresh
+                 self.canLoadMore = !apiSaysNoMoreItems
                  FeedView.logger.info("FeedView updated (REPLACED). Count: \(self.items.count). Can load more: \(self.canLoadMore)")
+                 
+                 if let lastRaw = lastRawItemFromApiResponse {
+                     self.nextOlderThanIdForApiCall = settings.feedType == .promoted ? lastRaw.promoted ?? lastRaw.id : lastRaw.id
+                 } else if !fetchedItemsForThisRefresh.isEmpty {
+                     let lastInCurrent = fetchedItemsForThisRefresh.last!
+                     self.nextOlderThanIdForApiCall = settings.feedType == .promoted ? lastInCurrent.promoted ?? lastInCurrent.id : lastInCurrent.id
+                 } else {
+                     self.nextOlderThanIdForApiCall = nil
+                 }
+                 FeedView.logger.info("Next older ID for API (after refresh) set to: \(self.nextOlderThanIdForApiCall ?? -1)")
+                 
                  if !navigationPath.isEmpty { navigationPath = NavigationPath(); FeedView.logger.info("Popped navigation due to refresh.") }
                  self.showNoFilterMessage = false
                  self.didLoadInitially = true
             }
-            await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: currentCacheKey)
-            await settings.updateCacheSizes()
+            // --- MODIFIED: Bedingung vereinfacht ---
+            if !settings.hideSeenItems {
+            // --- END MODIFICATION ---
+                await settings.saveItemsToCache(fetchedItemsForThisRefresh, forKey: currentCacheKey)
+                await settings.updateCacheSizes()
+            } else {
+                FeedView.logger.info("Skipping cache save for Grid refresh because 'Nur Frisches anzeigen' is active.")
+            }
         } catch is CancellationError { FeedView.logger.info("RefreshItems Task API call explicitly cancelled.") }
           catch {
             FeedView.logger.error("API fetch failed during refresh: \(error.localizedDescription)")
@@ -286,84 +351,141 @@ struct FeedView: View {
                 if self.items.isEmpty { self.errorMessage = "Fehler beim Laden: \(error.localizedDescription)" }
                 else { FeedView.logger.warning("Showing potentially stale data because API refresh failed: \(error.localizedDescription)") }
                 self.canLoadMore = false
+                self.nextOlderThanIdForApiCall = nil
             }
           }
-    }
-
-    private func getIdForLoadMore() -> Int? {
-        guard let lastItem = items.last else { FeedView.logger.warning("Cannot load more: No original items to get ID from."); return nil }
-        if settings.feedType == .promoted {
-            guard let promotedId = lastItem.promoted else {
-                 FeedView.logger.error("Cannot load more: Promoted feed active but last original item (ID: \(lastItem.id)) has no 'promoted' ID.")
-                 Task { await MainActor.run { self.canLoadMore = false } }
-                 return nil
-            }
-            FeedView.logger.info("Using PROMOTED ID \(promotedId) from last original item for 'older' parameter.")
-            return promotedId
-        } else {
-             FeedView.logger.info("Using ITEM ID \(lastItem.id) from last original item for 'older' parameter (for New or Junk feed).")
-             return lastItem.id
-        }
     }
 
     @MainActor
     func loadMoreItems() async {
         guard settings.hasActiveContentFilter else { FeedView.logger.warning("Skipping loadMoreItems: No active content filter selected."); await MainActor.run { canLoadMore = false }; return }
         guard !isLoadingMore && canLoadMore && !isLoading else { FeedView.logger.debug("Skipping loadMoreItems: State prevents loading (isLoadingMore: \(isLoadingMore), canLoadMore: \(canLoadMore), isLoading: \(isLoading))"); return }
-        guard let olderValue = getIdForLoadMore() else { FeedView.logger.warning("Skipping loadMoreItems: Could not determine 'older' value."); await MainActor.run { canLoadMore = false }; return }
+        
+        guard let olderValueForThisApiCall = nextOlderThanIdForApiCall else {
+            FeedView.logger.warning("Skipping loadMoreItems: nextOlderThanIdForApiCall is nil. End of feed likely reached or error.")
+            await MainActor.run { self.canLoadMore = false }
+            return
+        }
+
         guard let currentCacheKey = Optional(self.feedCacheKey) else { FeedView.logger.error("Cannot load more: Cache key is nil."); return }
         
         await MainActor.run { isLoadingMore = true }
-        FeedView.logger.info("--- Starting loadMoreItems older than \(olderValue) ---")
-        defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; FeedView.logger.info("--- Finished loadMoreItems older than \(olderValue) (isLoadingMore set to false via defer) ---") } } }
+        FeedView.logger.info("--- Starting loadMoreItems older than \(olderValueForThisApiCall) ---")
+        defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; FeedView.logger.info("--- Finished loadMoreItems (isLoadingMore set to false via defer) ---") } } }
         
-        do {
-            let apiResponse = try await apiService.fetchItems(
-                flags: settings.apiFlags,
-                promoted: settings.apiPromoted,
-                olderThanId: olderValue,
-                showJunkParameter: settings.apiShowJunk
-            )
-            let newItems = apiResponse.items
+        var itemsToAppend: [Item] = []
+        var apiSaysNoMoreItemsAfterLoadMore = false
+        var pagesAttemptedInLoopForLoadMore = 0
+        var currentOlderForLoopProgress: Int? = olderValueForThisApiCall
+        var lastRawItemFromApiLoop: Item? = nil
 
-            guard !Task.isCancelled else { FeedView.logger.info("LoadMoreItems Task cancelled after API fetch."); return }
-            FeedView.logger.info("Loaded \(newItems.count) more items from API (requesting older than \(olderValue)).");
-            var appendedItemCount = 0
-            
-            await MainActor.run {
-                if newItems.isEmpty {
-                    FeedView.logger.info("Reached end of feed (API returned empty list for older than \(olderValue)).")
-                    self.canLoadMore = false // Wenn 0 Items geladen werden, gibt es nichts mehr.
-                } else {
-                    let currentIDs = Set(self.items.map { $0.id })
-                    let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
-                    if uniqueNewItems.isEmpty {
-                        FeedView.logger.warning("All loaded items (older than \(olderValue)) were duplicates. Assuming end of actual new content.")
-                        self.canLoadMore = false // Wenn nur Duplikate kommen, gibt es auch nichts Neues mehr.
-                    } else {
-                        self.items.append(contentsOf: uniqueNewItems)
-                        appendedItemCount = uniqueNewItems.count
-                        FeedView.logger.info("Appended \(uniqueNewItems.count) unique items to original list. Total items: \(self.items.count)")
-                        
-                        let atEnd = apiResponse.atEnd ?? false
-                        let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil, to potentially try again
-                        if atEnd {
-                            self.canLoadMore = false
-                            FeedView.logger.info("API indicates atEnd=true after loadMore.")
-                        } else if hasOlder == false { // Nur false, nicht nil
-                            self.canLoadMore = false
-                            FeedView.logger.info("API indicates hasOlder=false after loadMore.")
+        do {
+            // --- MODIFIED: Bedingung vereinfacht ---
+            if settings.hideSeenItems {
+            // --- END MODIFICATION ---
+                while itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore {
+                    if Task.isCancelled { throw CancellationError() }
+                    pagesAttemptedInLoopForLoadMore += 1
+                    FeedView.logger.info("LoadMore (Grid): Auto-fetching page \(pagesAttemptedInLoopForLoadMore) for unseen (older: \(currentOlderForLoopProgress ?? -1))")
+
+                    let apiResponse = try await apiService.fetchItems(
+                        flags: settings.apiFlags,
+                        promoted: settings.apiPromoted,
+                        olderThanId: currentOlderForLoopProgress,
+                        showJunkParameter: settings.apiShowJunk
+                    )
+                    if Task.isCancelled { throw CancellationError() }
+                    
+                    let rawPageItems = apiResponse.items
+                    lastRawItemFromApiLoop = rawPageItems.last
+                    var pageItemsToFilter = rawPageItems
+                    let rawPageItemCount = pageItemsToFilter.count
+                    FeedView.logger.info("API (Grid loadMore page \(pagesAttemptedInLoopForLoadMore)) fetched \(rawPageItemCount) items.")
+
+                    pageItemsToFilter.removeAll { settings.seenItemIDs.contains($0.id) }
+                     FeedView.logger.info("Filtered \(rawPageItemCount - pageItemsToFilter.count) seen items from Grid loadMore page \(pagesAttemptedInLoopForLoadMore). \(pageItemsToFilter.count) unseen remaining.")
+
+                    let currentItemIDsInState = Set(self.items.map { $0.id })
+                    let uniqueNewPageItems = pageItemsToFilter.filter { !currentItemIDsInState.contains($0.id) }
+                    itemsToAppend.append(contentsOf: uniqueNewPageItems)
+
+                    if apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
+                        apiSaysNoMoreItemsAfterLoadMore = true
+                        FeedView.logger.info("API indicated end of feed during Grid loadMore loop (Page \(pagesAttemptedInLoopForLoadMore)).")
+                    }
+                    
+                    if rawPageItemCount > 0 && !apiSaysNoMoreItemsAfterLoadMore {
+                        if let lastRawItem = rawPageItems.last {
+                             currentOlderForLoopProgress = settings.feedType == .promoted ?
+                                                        lastRawItem.promoted ?? lastRawItem.id :
+                                                        lastRawItem.id
                         } else {
-                            self.canLoadMore = true
-                            FeedView.logger.info("API indicates more items might be available after loadMore (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
+                            apiSaysNoMoreItemsAfterLoadMore = true
+                            FeedView.logger.warning("rawPageItemCount > 0 but apiResponse.items.last was nil in LoadMore. Assuming end.")
                         }
+                    } else if rawPageItemCount == 0 && !apiSaysNoMoreItemsAfterLoadMore {
+                         apiSaysNoMoreItemsAfterLoadMore = true
+                         FeedView.logger.info("API returned 0 items during Grid loadMore loop (Page \(pagesAttemptedInLoopForLoadMore)), assuming end.")
                     }
                 }
+                if itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore {
+                    FeedView.logger.warning("Scanned \(pagesAttemptedInLoopForLoadMore) pages for unseen items in Grid loadMore, but found none. API did not report end.")
+                }
+            } else {
+                 let apiResponse = try await apiService.fetchItems(
+                    flags: settings.apiFlags,
+                    promoted: settings.apiPromoted,
+                    olderThanId: olderValueForThisApiCall,
+                    showJunkParameter: settings.apiShowJunk
+                )
+                let currentItemIDs = Set(self.items.map { $0.id })
+                itemsToAppend = apiResponse.items.filter { !currentItemIDs.contains($0.id) }
+                lastRawItemFromApiLoop = apiResponse.items.last
+
+                if apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
+                    apiSaysNoMoreItemsAfterLoadMore = true
+                }
+                FeedView.logger.info("API fetch (Grid loadMore, no hideSeenItems) completed: \(itemsToAppend.count) new unique items. API at end: \(apiSaysNoMoreItemsAfterLoadMore)")
             }
-            if appendedItemCount > 0 {
+            
+            guard !Task.isCancelled else { FeedView.logger.info("LoadMoreItems Task cancelled after API fetch."); return }
+            
+            await MainActor.run {
+                if !itemsToAppend.isEmpty {
+                    self.items.append(contentsOf: itemsToAppend)
+                    FeedView.logger.info("Appended \(itemsToAppend.count) unique items to list. Total items: \(self.items.count)")
+                }
+                
+                self.canLoadMore = !apiSaysNoMoreItemsAfterLoadMore
+                
+                if let lastRaw = lastRawItemFromApiLoop {
+                    self.nextOlderThanIdForApiCall = settings.feedType == .promoted ? lastRaw.promoted ?? lastRaw.id : lastRaw.id
+                     FeedView.logger.info("Next older ID for API (after loadMore) set to: \(self.nextOlderThanIdForApiCall ?? -1)")
+                } else if apiSaysNoMoreItemsAfterLoadMore {
+                    self.nextOlderThanIdForApiCall = nil
+                     FeedView.logger.info("Next older ID for API set to nil due to API end signal and no new items from this fetch.")
+                // --- MODIFIED: Bedingung vereinfacht ---
+                } else if itemsToAppend.isEmpty && settings.hideSeenItems {
+                // --- END MODIFICATION ---
+                    self.nextOlderThanIdForApiCall = currentOlderForLoopProgress
+                     FeedView.logger.info("No unseen items found in loop, but API not at end. nextOlderThanIdForApiCall remains \(self.nextOlderThanIdForApiCall ?? -1) for next attempt.")
+                }
+                
+                // --- MODIFIED: Bedingung vereinfacht ---
+                if itemsToAppend.isEmpty && self.canLoadMore && settings.hideSeenItems {
+                // --- END MODIFICATION ---
+                     FeedView.logger.info("No new unseen items appended, but API doesn't signal end. Allowing further load attempts for 'Nur Frisches'. Max scan pages attempted in this run: \(pagesAttemptedInLoopForLoadMore)")
+                }
+                FeedView.logger.info("LoadMore (Grid) finished. canLoadMore set to \(self.canLoadMore).")
+            }
+            // --- MODIFIED: Bedingung vereinfacht ---
+            if !itemsToAppend.isEmpty && !settings.hideSeenItems {
+            // --- END MODIFICATION ---
                 let itemsToSave = await MainActor.run { self.items }
                 await settings.saveItemsToCache(itemsToSave, forKey: currentCacheKey)
                 await settings.updateCacheSizes()
+            } else if !itemsToAppend.isEmpty {
+                 FeedView.logger.info("Skipping cache save for Grid loadMore because 'Nur Frisches anzeigen' is active.")
             }
         } catch is CancellationError {
              FeedView.logger.info("LoadMoreItems Task API call explicitly cancelled.")
@@ -371,7 +493,8 @@ struct FeedView: View {
             FeedView.logger.error("API fetch failed during loadMoreItems: \(error.localizedDescription)")
             await MainActor.run {
                 if items.isEmpty { errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" }
-                 FeedView.logger.warning("Load more failed, allowing potential retry on scroll. canLoadMore remains \(canLoadMore).")
+                 self.canLoadMore = false
+                 self.nextOlderThanIdForApiCall = nil
             }
         }
     }

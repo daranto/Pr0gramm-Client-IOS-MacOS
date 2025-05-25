@@ -20,7 +20,8 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
     override func viewDidLoad() {
         super.viewDidLoad()
         self.delegate = self // Set self as the delegate to receive fullscreen callbacks
-        Self.logger.debug("viewDidLoad: Delegate set.")
+        self.showsPlaybackControls = true
+        Self.logger.debug("viewDidLoad: Delegate set, showsPlaybackControls set to true.")
     }
 
     /// Overrides the default key commands to remove the standard arrow key behaviors
@@ -37,9 +38,7 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
             }
             return true // Keep commands without specific input defined
         }
-         // --- MODIFIED: Log filtered commands ---
          Self.logger.trace("Filtered KeyCommands: \(nonArrowCommands.compactMap { $0.input })")
-         // --- END MODIFICATION ---
         return nonArrowCommands
     }
 
@@ -60,7 +59,6 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
                 Self.logger.debug("Right arrow detected, calling next action.")
                 actionHandler?.selectNextAction?() // Trigger custom action
                 didHandleEvent = true
-            // --- NEW: Handle Up/Down arrows ---
             case .keyboardUpArrow:
                 Self.logger.debug("Up arrow detected, calling seek forward action.")
                 actionHandler?.seekForwardAction?() // Trigger seek forward
@@ -69,7 +67,6 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
                 Self.logger.debug("Down arrow detected, calling seek backward action.")
                 actionHandler?.seekBackwardAction?() // Trigger seek backward
                 didHandleEvent = true
-            // --- END NEW ---
             default:
                 break // Ignore other keys
             }
@@ -103,14 +100,23 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
                               willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
         Self.logger.debug("Delegate: willBeginFullScreenPresentation - Calling Callback")
         willBeginFullScreen?()
+        // --- MODIFIED: Explizites Pausieren entfernt ---
+        // if player?.timeControlStatus == .playing {
+        //     player?.pause()
+        //     Self.logger.debug("Player paused because fullscreen will begin.")
+        // }
+        Self.logger.debug("Player will NOT be explicitly paused by this delegate method when entering fullscreen.")
+        // --- END MODIFICATION ---
     }
 
     func playerViewController(_ playerViewController: AVPlayerViewController,
                               willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
-        Self.logger.debug("Delegate: willEndFullScreenPresentation - Calling Callback after animation")
+        Self.logger.debug("Delegate: willEndFullScreenPresentation - Coordinating animation...")
         coordinator.animate(
             alongsideTransition: nil,
-            completion: { (context: UIViewControllerTransitionCoordinatorContext) in
+            completion: { [weak self] (context: UIViewControllerTransitionCoordinatorContext) in
+                guard let self = self else { return }
+                Self.logger.debug("Delegate: willEndFullScreenPresentation - Animation complete. Calling Callback.")
                 self.willEndFullScreen?()
             }
         )

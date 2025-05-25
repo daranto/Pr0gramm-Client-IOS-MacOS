@@ -4,6 +4,7 @@
 import SwiftUI
 import os
 
+
 /// View for displaying and modifying application settings, including cache management.
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
@@ -51,6 +52,10 @@ struct SettingsView: View {
                         }
                     }
                     .font(UIConstants.bodyFont)
+                    if UIConstants.isCurrentDeviceiPhone {
+                        Toggle("pr0Tok aktivieren", isOn: $settings.enableUnlimitedStyleFeed)
+                            .font(UIConstants.bodyFont)
+                    }
                     
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
@@ -120,29 +125,7 @@ struct SettingsView: View {
                     .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
                 }
 
-
-                Section {
-                    Toggle("Feature: 'Nur Frisches anzeigen' aktivieren", isOn: $settings.enableExperimentalHideSeen)
-                        .font(UIConstants.bodyFont)
-                    
-                    // --- MODIFIED: Conditional Toggle for Pr0Tok based on device type ---
-                    if UIConstants.isCurrentDeviceiPhone {
-                        Toggle("Feature: 'pr0Tok' aktivieren (nur iPhone)", isOn: $settings.enableUnlimitedStyleFeed)
-                            .font(UIConstants.bodyFont)
-                    }
-                    // --- END MODIFICATION ---
-                } header: {
-                     Text("Experimentelle Features")
-                } footer: {
-                    let baseFooterText = "Aktiviere diese Option, um die experimentelle Funktion 'Nur Frisches anzeigen' im Filter-Menü verfügbar zu machen. Diese Funktion blendet bereits gesehene Posts im Feed aus, kann aber bei der Paginierung (Nachladen älterer Posts) noch zu unerwartetem Verhalten führen."
-                    // --- MODIFIED: Footer text adapted based on device type ---
-                    let pr0tokFooterText = "\nDer vertikale Feed ('pr0Tok') ändert die Darstellung des Haupt-Feeds zu einer seitenbasierten Ansicht und ist nur auf dem iPhone verfügbar."
-                    Text(UIConstants.isCurrentDeviceiPhone ? baseFooterText + pr0tokFooterText : baseFooterText)
-                        .font(UIConstants.footnoteFont)
-                     // --- END MODIFICATION ---
-                }
-                .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
-
+            
                 Section {
                     Button("Gesehene Posts zurücksetzen", role: .destructive) {
                         showingClearSeenItemsAlert = true
@@ -152,7 +135,9 @@ struct SettingsView: View {
                 } header: {
                      Text("Anzeige-Verlauf")
                 } footer: {
-                     Text("Entfernt die Markierungen für bereits angesehene Bilder und Videos. Die Posts erscheinen wieder als 'neu'. Die Option, gesehene Posts auszublenden, muss ggf. unter 'Experimentelle Features' aktiviert werden.")
+                     // --- MODIFIED: Footer-Text angepasst ---
+                     Text("Entfernt die Markierungen für bereits angesehene Bilder und Videos. Die Posts erscheinen wieder als 'neu', wenn 'Nur Frisches anzeigen' deaktiviert ist, oder werden wieder im Feed berücksichtigt, wenn es aktiv ist.")
+                     // --- END MODIFICATION ---
                         .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)

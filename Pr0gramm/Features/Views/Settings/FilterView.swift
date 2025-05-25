@@ -11,22 +11,11 @@ struct FilterView: View {
     @EnvironmentObject var authService: AuthService
     @Environment(\.dismiss) var dismiss
 
-    /// The FeedType that should dictate the filter disabling behavior (e.g., for Junk feed).
-    /// If nil, feed-type specific disabling is ignored (e.g., for Favorites).
     let relevantFeedTypeForFilterBehavior: FeedType?
-
-    /// Determines if feed-specific options (Type) should be hidden.
     let hideFeedOptions: Bool
-    /// Determines if the "Hide Seen Items" toggle should be shown,
-    /// assuming settings.enableExperimentalHideSeen is also true.
     let showHideSeenItemsToggle: Bool
 
 
-    /// Initializer allows specifying whether to hide feed options and the "hide seen" toggle.
-    /// - Parameter relevantFeedTypeForFilterBehavior: The `FeedType` (if any) that influences filter availability.
-    /// - Parameter hideFeedOptions: Set to `true` to hide the Feed Type picker. Defaults to `false`.
-    /// - Parameter showHideSeenItemsToggle: Set to `false` to explicitly hide the "Hide Seen Items" toggle,
-    ///   even if the experimental feature is enabled. Defaults to `true`.
     init(relevantFeedTypeForFilterBehavior: FeedType?, hideFeedOptions: Bool = false, showHideSeenItemsToggle: Bool = true) {
         self.relevantFeedTypeForFilterBehavior = relevantFeedTypeForFilterBehavior
         self.hideFeedOptions = hideFeedOptions
@@ -36,10 +25,11 @@ struct FilterView: View {
     var body: some View {
         NavigationStack {
             Form {
-                // Section for Feed Type Selection and Hide Seen toggle
-                if !hideFeedOptions || (settings.enableExperimentalHideSeen && showHideSeenItemsToggle) {
+                // --- MODIFIED: Section für Feed Typ und "Nur Frisches anzeigen" ---
+                // Die Section wird angezeigt, wenn entweder Feed-Optionen gezeigt werden sollen ODER der "Nur Frisches anzeigen"-Toggle gezeigt werden soll
+                if !hideFeedOptions || showHideSeenItemsToggle {
                     Section {
-                        if !hideFeedOptions { // Feed Type Picker
+                        if !hideFeedOptions {
                             Picker("Feed Typ", selection: $settings.feedType) {
                                 ForEach(FeedType.allCases) { type in
                                     Text(type.displayName).tag(type)
@@ -49,54 +39,44 @@ struct FilterView: View {
                             .pickerStyle(.segmented)
                         }
 
-                        if settings.enableExperimentalHideSeen && showHideSeenItemsToggle {
-                            Toggle("Nur Frisches anzeigen (Experimentell)", isOn: $settings.hideSeenItems)
+                        // "Nur Frisches anzeigen" wird jetzt immer angeboten, wenn showHideSeenItemsToggle true ist
+                        if showHideSeenItemsToggle {
+                            Toggle("Nur Frisches anzeigen", isOn: $settings.hideSeenItems)
                                 .font(UIConstants.bodyFont)
                         }
 
                     } header: {
                         Text("Anzeige")
                     } footer: {
-                        if settings.enableExperimentalHideSeen && showHideSeenItemsToggle {
+                        if showHideSeenItemsToggle {
                              Text("Blendet Posts aus, die du bereits in der Detailansicht geöffnet hast.")
                                 .font(UIConstants.footnoteFont)
                         }
                     }
                      .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
                 }
+                // --- END MODIFICATION ---
 
 
-                // Section for Content Filters
                 Section {
-                    // SFW Toggle ist immer sichtbar
                     Toggle("SFW", isOn: $settings.showSFW)
                         .font(UIConstants.bodyFont)
-                        // Deaktiviert, wenn der relevante Feed-Typ Junk ist UND der User eingeloggt ist.
                         .disabled(relevantFeedTypeForFilterBehavior == .junk && authService.isLoggedIn)
                         .onChange(of: settings.showSFW) { _, newValue in
-                            // Wenn eingeloggt und SFW aktiviert wird, und der relevante Feed-Typ nicht Junk ist, dann NSFP mitziehen
                             if authService.isLoggedIn && relevantFeedTypeForFilterBehavior != .junk && newValue {
                                 settings.showNSFP = true
                             }
-                            // Wenn SFW deaktiviert wird und eingeloggt (und relevanter Feed-Typ nicht Junk), dann NSFP auch deaktivieren
                             else if authService.isLoggedIn && relevantFeedTypeForFilterBehavior != .junk && !newValue {
                                 settings.showNSFP = false
                             }
                         }
                     
-                    // NSFP ist sichtbar, wenn:
-                    // 1. User nicht eingeloggt ist ODER
-                    // 2. User eingeloggt ist UND der relevante Feed-Typ Junk ist (obwohl es hier disabled ist).
-                    // Dies spiegelt wider, dass für ausgeloggte User NSFP eine explizite Option ist,
-                    // und für eingeloggte User im Junk-Feed SFW+NSFP fix ist.
                     if !authService.isLoggedIn || (relevantFeedTypeForFilterBehavior == .junk && authService.isLoggedIn) {
                         Toggle("NSFP (Not Safe for Public)", isOn: $settings.showNSFP)
                              .font(UIConstants.bodyFont)
-                             // Deaktiviert, wenn der relevante Feed-Typ Junk ist UND der User eingeloggt ist.
                              .disabled(relevantFeedTypeForFilterBehavior == .junk && authService.isLoggedIn)
                     }
 
-                    // NSFW, NSFL, POL nur für eingeloggte User (und wenn relevanter Feed-Typ nicht Junk ist)
                     if authService.isLoggedIn && relevantFeedTypeForFilterBehavior != .junk {
                         Toggle("NSFW (Not Safe for Work)", isOn: $settings.showNSFW)
                             .font(UIConstants.bodyFont)
@@ -105,7 +85,6 @@ struct FilterView: View {
                         Toggle("POL (Politik)", isOn: $settings.showPOL)
                              .font(UIConstants.bodyFont)
                     } else if !authService.isLoggedIn && relevantFeedTypeForFilterBehavior != .junk {
-                        // Hinweis für ausgeloggte User, wenn der Kontext kein Junk-Feed ist.
                         Text("Melde dich an, um NSFW/NSFL Filter anzupassen.")
                            .font(UIConstants.bodyFont)
                            .foregroundColor(.secondary)
@@ -113,14 +92,13 @@ struct FilterView: View {
                 } header: {
                     Text("Inhaltsfilter")
                 } footer: {
-                    // Angepasster Footer-Text basierend auf dem Kontext
                     if authService.isLoggedIn && relevantFeedTypeForFilterBehavior == .junk {
                         Text("Im 'Müll'-Feed werden nur SFW und NSFP Inhalte angezeigt. Andere Filter sind hier nicht anwendbar.")
                             .font(UIConstants.footnoteFont)
-                    } else if authService.isLoggedIn { // Gilt für Feed/Promoted und Favoriten/Suche (wenn relevantFeedType nicht .junk ist)
+                    } else if authService.isLoggedIn {
                         Text("SFW beinhaltet bei eingeloggten Nutzern automatisch auch NSFP.")
                             .font(UIConstants.footnoteFont)
-                    } else { // Ausgeloggt
+                    } else {
                         Text("Für ausgeloggte Nutzer wird nur SFW Inhalt angezeigt. NSFP ist ein Teil von SFW. Melde dich an für mehr Optionen.")
                             .font(UIConstants.footnoteFont)
                     }
@@ -145,8 +123,8 @@ struct FilterView: View {
 
 #Preview("Feed Context (Logged In, Feed=Promoted)") {
     let previewSettings = AppSettings()
-    previewSettings.enableExperimentalHideSeen = true
-    previewSettings.feedType = .promoted // Für diesen Preview-Fall
+    // enableExperimentalHideSeen wird nicht mehr gesetzt
+    previewSettings.feedType = .promoted
     let previewAuthService = AuthService(appSettings: previewSettings)
     previewAuthService.isLoggedIn = true
     previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: true)
@@ -157,8 +135,8 @@ struct FilterView: View {
 
 #Preview("Feed Context (Logged In, Feed=Junk)") {
     let previewSettings = AppSettings()
-    previewSettings.enableExperimentalHideSeen = true
-    previewSettings.feedType = .junk // Wichtig für diesen Preview-Fall
+    // enableExperimentalHideSeen wird nicht mehr gesetzt
+    previewSettings.feedType = .junk
     let previewAuthService = AuthService(appSettings: previewSettings)
     previewAuthService.isLoggedIn = true
     previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: true)
@@ -169,31 +147,29 @@ struct FilterView: View {
 
 #Preview("Favorites Context (Logged In)") {
     let previewSettings = AppSettings()
-    previewSettings.enableExperimentalHideSeen = true
+    // enableExperimentalHideSeen wird nicht mehr gesetzt
     let previewAuthService = AuthService(appSettings: previewSettings)
     previewAuthService.isLoggedIn = true
     previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: true)
-    // Für Favoriten ist der relevantFeedType nil
-    return FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
+    return FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false) // showHideSeenItemsToggle hier false, da es in Favorites nicht relevant ist
         .environmentObject(previewSettings)
         .environmentObject(previewAuthService)
 }
 
 #Preview("Search Context (Logged In, SearchFeedType=Promoted)") {
     let previewSettings = AppSettings()
-    previewSettings.enableExperimentalHideSeen = true
+    // enableExperimentalHideSeen wird nicht mehr gesetzt
     let previewAuthService = AuthService(appSettings: previewSettings)
     previewAuthService.isLoggedIn = true
     previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: true)
-    // SearchView würde seinen eigenen searchFeedType hier übergeben
-    return FilterView(relevantFeedTypeForFilterBehavior: .promoted, hideFeedOptions: true, showHideSeenItemsToggle: false)
+    return FilterView(relevantFeedTypeForFilterBehavior: .promoted, hideFeedOptions: true, showHideSeenItemsToggle: false) // showHideSeenItemsToggle hier false
         .environmentObject(previewSettings)
         .environmentObject(previewAuthService)
 }
 
 #Preview("Logged Out (relevantFeedType = .promoted)") {
     let previewSettings = AppSettings()
-    previewSettings.enableExperimentalHideSeen = true
+    // enableExperimentalHideSeen wird nicht mehr gesetzt
     let previewAuthService = AuthService(appSettings: previewSettings)
     previewAuthService.isLoggedIn = false
     previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: false)
