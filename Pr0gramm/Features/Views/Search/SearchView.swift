@@ -25,6 +25,10 @@ struct SearchView: View {
 
     @State private var searchFeedType: FeedType = .promoted
     @State private var showingFilterSheet = false
+    
+    @State private var helpPostPreviewTarget: PreviewLinkTarget? = nil
+    @State private var isLoadingHelpPost: Bool = false
+    
 
     @State private var minBenisScore: Double = 0
     @State private var isBenisSliderEditing: Bool = false
@@ -45,6 +49,8 @@ struct SearchView: View {
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "SearchView")
+    
+    private let helpPostId = 2782197
     
     private var gridColumns: [GridItem] {
         let isMac = ProcessInfo.processInfo.isiOSAppOnMac
@@ -111,6 +117,22 @@ struct SearchView: View {
                      .environmentObject(settings)
                      .environmentObject(authService)
             }
+            .sheet(item: $helpPostPreviewTarget) { target in
+                NavigationStack {
+                    LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
+                        .environmentObject(settings)
+                        .environmentObject(authService)
+                        .navigationTitle("Suchhilfe")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Schließen") {
+                                    helpPostPreviewTarget = nil
+                                }
+                            }
+                        }
+                }
+            }
             .onChange(of: navigationService.pendingSearchTag) { _, newTag in
                 if let tagToSearch = newTag, !tagToSearch.isEmpty {
                     SearchView.logger.info("Received pending search tag via onChange: '\(tagToSearch)'")
@@ -159,6 +181,22 @@ struct SearchView: View {
             .onChange(of: settings.showNSFW) { _, _ in triggerSearchOnFilterChange() }
             .onChange(of: settings.showNSFL) { _, _ in triggerSearchOnFilterChange() }
             .onChange(of: settings.showPOL) { _, _ in triggerSearchOnFilterChange() }
+            // --- NEW: Toolbar mit Hilfe-Button ---
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        Task { await loadAndShowHelpPost() }
+                    } label: {
+                        if isLoadingHelpPost {
+                            ProgressView().scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "questionmark.circle")
+                        }
+                    }
+                    .disabled(isLoading || isLoadingMore || isLoadingHelpPost)
+                }
+            }
+            // --- END NEW ---
         }
     }
     
@@ -375,6 +413,28 @@ struct SearchView: View {
     }
 
     @MainActor
+    private func loadAndShowHelpPost() async {
+        guard !isLoadingHelpPost else { return }
+        isLoadingHelpPost = true
+        errorMessage = nil
+        
+        SearchView.logger.info("Loading help post with ID: \(helpPostId)")
+        do {
+            let item = try await apiService.fetchItem(id: helpPostId, flags: 1)
+            if let fetchedItem = item {
+                helpPostPreviewTarget = PreviewLinkTarget(itemID: fetchedItem.id, commentID: nil)
+            } else {
+                errorMessage = "Suchhilfe konnte nicht geladen werden."
+                SearchView.logger.warning("Could not fetch help post \(helpPostId). API returned nil.")
+            }
+        } catch {
+            errorMessage = "Fehler beim Laden der Suchhilfe: \(error.localizedDescription)"
+            SearchView.logger.error("Failed to fetch help post \(helpPostId): \(error.localizedDescription)")
+        }
+        isLoadingHelpPost = false
+    }
+
+    @MainActor
     private func performSearch(isInitialSearch: Bool) async {
         let userEnteredSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let scoreTagComponent: String?
@@ -383,22 +443,23 @@ struct SearchView: View {
         if currentMinScoreInt > 0 { scoreTagComponent = "s:\(currentMinScoreInt)" }
         else { scoreTagComponent = nil }
 
-        var combinedTagsForAPI = ""
-        if !userEnteredSearchText.isEmpty { combinedTagsForAPI += userEnteredSearchText }
+        var queryParts: [String] = []
+        if !userEnteredSearchText.isEmpty {
+            queryParts.append(userEnteredSearchText)
+        }
         if let sTag = scoreTagComponent {
-            if !combinedTagsForAPI.isEmpty { combinedTagsForAPI += " " }
-            combinedTagsForAPI += sTag
+            queryParts.append(sTag)
         }
         
+        let combinedQuery = queryParts.joined(separator: " ")
+        
         let effectiveSearchQueryForAPITags: String
-        if !combinedTagsForAPI.isEmpty { effectiveSearchQueryForAPITags = "! \(combinedTagsForAPI)" }
-        else {
-            if userEnteredSearchText.isEmpty && currentMinScoreInt == 0 && isInitialSearch { effectiveSearchQueryForAPITags = "" }
-            else if userEnteredSearchText.isEmpty && currentMinScoreInt == 0 && !isInitialSearch {
-                SearchView.logger.info("Load more skipped: Text and Benis are empty."); canLoadMore = false; isLoadingMore = false; return
-            } else {
-                SearchView.logger.info("Search effectively skipped: query empty."); items = []; hasSearched = true; errorMessage = nil; isLoading = false; isLoadingMore = false; canLoadMore = false; return
-            }
+        if combinedQuery.isEmpty {
+            effectiveSearchQueryForAPITags = ""
+        } else if userEnteredSearchText.hasPrefix("!") {
+            effectiveSearchQueryForAPITags = combinedQuery
+        } else {
+            effectiveSearchQueryForAPITags = "!(\(combinedQuery))"
         }
         
         guard !effectiveSearchQueryForAPITags.isEmpty || (userEnteredSearchText.isEmpty && currentMinScoreInt == 0 && isInitialSearch) else {
@@ -428,7 +489,7 @@ struct SearchView: View {
             let apiResponse = try await apiService.fetchItems(
                 flags: apiFlagsForSearch,
                 promoted: apiPromotedForSearch,
-                tags: effectiveSearchQueryForAPITags,
+                tags: effectiveSearchQueryForAPITags.isEmpty ? nil : effectiveSearchQueryForAPITags,
                 olderThanId: olderThanIdForAPI,
                 showJunkParameter: apiShowJunkForSearch
             )
@@ -517,25 +578,19 @@ struct SearchView: View {
         logger.info("Tag '\(trimmedTerm)' added to GLOBAL search history (UserDefaults). Count: \(currentGlobalHistory.count)")
     }
 
-    // --- MODIFIED: deleteSearchHistoryItem with forced rebuild ---
     private func deleteSearchHistoryItem(at offsets: IndexSet) {
         var temporaryCopy = searchHistoryItems
         temporaryCopy.remove(atOffsets: offsets)
         
-        // Force SwiftUI to rebuild the list by briefly emptying and then repopulating
-        // This is a workaround for potential UICollectionView inconsistency issues.
-        searchHistoryItems = [] // Empty it first
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { // Short delay
-            self.searchHistoryItems = temporaryCopy // Repopulate
+        searchHistoryItems = []
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+            self.searchHistoryItems = temporaryCopy
             
-            // Persist the actual change to UserDefaults
             let historyStrings = self.searchHistoryItems.map { $0.term }
             UserDefaults.standard.set(historyStrings, forKey: Self.searchHistoryKey)
             SearchView.logger.info("Deleted item from search history. Saved updated history to UserDefaults. Count: \(self.searchHistoryItems.count)")
         }
     }
-    // --- END MODIFICATION ---
-
 
     private func clearSearchHistory() {
         searchHistoryItems.removeAll()

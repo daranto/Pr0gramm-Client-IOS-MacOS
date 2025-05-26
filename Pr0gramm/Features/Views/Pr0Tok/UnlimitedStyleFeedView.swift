@@ -42,8 +42,7 @@ struct UnlimitedStyleFeedView: View {
     @State private var cachedDetails: [Int: ItemsInfoResponse] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
         
-    @State private var showingTagSearchSheet = false
-    @State private var tagForSearchSheet: String? = nil
+    @State private var tagForSearchSheet: String? = nil // sheet(item:) übernimmt auch das Anzeigen
     
     @State private var showingAllTagsSheet = false
     @State private var itemForTagSheet: Item? = nil
@@ -154,20 +153,14 @@ struct UnlimitedStyleFeedView: View {
                     .environmentObject(settings)
                     .environmentObject(authService)
             }
-            .sheet(isPresented: $showingTagSearchSheet, onDismiss: { tagForSearchSheet = nil }) {
-                if let tag = tagForSearchSheet {
-                    NavigationStack {
-                        TagSearchView(currentSearchTag: .constant(tag))
-                            .environmentObject(settings)
-                            .environmentObject(authService)
-                            .navigationTitle("Suche: \(tag)")
-                            .navigationBarTitleDisplayMode(.inline)
-                            .toolbar {
-                                ToolbarItem(placement: .confirmationAction) {
-                                    Button("Schließen") { showingTagSearchSheet = false }
-                                }
-                            }
-                    }
+            .sheet(item: $tagForSearchSheet, onDismiss: { tagForSearchSheet = nil }) { tag in
+                NavigationStack {
+                    TagSearchView(currentSearchTag: .constant(tag))
+                        .environmentObject(settings)
+                        .environmentObject(authService)
+                        .navigationTitle("\(tag)")
+                        .navigationBarTitleDisplayMode(.inline)
+               
                 }
             }
             .sheet(item: $itemForTagSheet, onDismiss: { itemForTagSheet = nil }) { itemToShowTagsFor in
@@ -180,7 +173,6 @@ struct UnlimitedStyleFeedView: View {
                         Task {
                             try? await Task.sleep(for: .milliseconds(100))
                             self.tagForSearchSheet = tagString
-                            self.showingTagSearchSheet = true
                         }
                     },
                     onUpvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: 1) } },
@@ -494,7 +486,6 @@ struct UnlimitedStyleFeedView: View {
                                 onDownvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: -1) } },
                                 onTagTapped: { tagString in
                                     self.tagForSearchSheet = tagString
-                                    self.showingTagSearchSheet = true
                                 },
                                 onRetryLoadDetails: {
                                     Task { await loadItemDetailsIfNeeded(for: item, forceReload: true) }

@@ -47,7 +47,7 @@ struct TagSearchView: View {
             VStack(spacing: 0) {
                 searchContentView
             }
-            .navigationTitle("Suche: \(currentSearchTag)")
+            .navigationTitle("\(currentSearchTag)")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -154,19 +154,28 @@ struct TagSearchView: View {
 
     @MainActor
     private func performSearch(isInitialSearch: Bool) async {
-        let tagToSearch = currentSearchTag
-        let effectiveSearchQueryForAPITags = "! \(tagToSearch)"
+        let tagToSearch = currentSearchTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tagToSearch.isEmpty else {
+            TagSearchView.logger.info("Perform search skipped: tagToSearch is empty."); items = []; hasSearched = true; errorMessage = nil; isLoading = false; isLoadingMore = false; canLoadMore = false; return
+        }
+        
+        let apiTagsParameter: String
+        if tagToSearch.hasPrefix("!") || tagToSearch.contains(":") { // z.B. s:100, u:user, oder vom Nutzer !tag
+            apiTagsParameter = tagToSearch
+        } else {
+            apiTagsParameter = "!(\(tagToSearch))" // Standard-Tag-Suche, klammern für Sicherheit
+        }
 
         if isInitialSearch {
             items = []
             isLoading = true; errorMessage = nil; hasSearched = false; canLoadMore = true
-            TagSearchView.logger.info("Performing INITIAL search: Tag='\(tagToSearch)', API Query='\(effectiveSearchQueryForAPITags)', FeedType=\(settings.feedType.displayName), Flags=\(settings.apiFlags)")
+            TagSearchView.logger.info("Performing INITIAL search: Tag='\(tagToSearch)', API Query='\(apiTagsParameter)', FeedType=\(settings.feedType.displayName), Flags=\(settings.apiFlags)")
         } else {
             guard !isLoadingMore && canLoadMore else {
                 TagSearchView.logger.debug("Load more skipped: Tag='\(tagToSearch)'"); return
             }
             isLoadingMore = true
-            TagSearchView.logger.info("Performing LOAD MORE: Tag='\(tagToSearch)', API Query='\(effectiveSearchQueryForAPITags)', OlderThan=\(items.last?.id ?? -1)")
+            TagSearchView.logger.info("Performing LOAD MORE: Tag='\(tagToSearch)', API Query='\(apiTagsParameter)', OlderThan=\(items.last?.id ?? -1)")
         }
 
         defer { Task { @MainActor in if isInitialSearch { self.isLoading = false } else { self.isLoadingMore = false }; self.hasSearched = true } }
@@ -183,7 +192,7 @@ struct TagSearchView: View {
             let apiResponse = try await apiService.fetchItems(
                 flags: settings.apiFlags,
                 promoted: settings.apiPromoted,
-                tags: effectiveSearchQueryForAPITags,
+                tags: apiTagsParameter,
                 olderThanId: olderThanIdForAPI,
                 showJunkParameter: settings.apiShowJunk
             )
@@ -212,11 +221,11 @@ struct TagSearchView: View {
                      TagSearchView.logger.info("\(isInitialSearch ? "Search" : "LoadMore") for tag '\(tagToSearch)' returned 0 items. Setting canLoadMore to false.")
                  } else {
                      let atEnd = apiResponse.atEnd ?? false
-                     let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
+                     let hasOlder = apiResponse.hasOlder ?? true
                      if atEnd {
                          self.canLoadMore = false
                          TagSearchView.logger.info("API indicates atEnd=true for tag '\(tagToSearch)'. Setting canLoadMore to false.")
-                     } else if hasOlder == false { // Nur false, nicht nil
+                     } else if hasOlder == false {
                          self.canLoadMore = false
                          TagSearchView.logger.info("API indicates hasOlder=false for tag '\(tagToSearch)'. Setting canLoadMore to false.")
                      } else {
