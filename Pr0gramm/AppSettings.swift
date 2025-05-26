@@ -449,7 +449,7 @@ class AppSettings: ObservableObject {
             self.showSFW = true
             self.showNSFW = false
             self.showNSFL = false
-            self.showPOL = false
+            // POL bleibt unverändert, da es bereits SFW ist
             if self.isUserLoggedInForApiFlags {
                 self.showNSFP = true
             }
