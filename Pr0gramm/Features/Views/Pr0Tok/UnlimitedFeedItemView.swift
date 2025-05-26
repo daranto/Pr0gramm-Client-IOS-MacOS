@@ -103,22 +103,45 @@ struct UnlimitedFeedItemView: View {
 
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            mediaContentLayer
-                .zIndex(0)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if !item.isVideo && !isDummyItem {
-                        onShowFullscreenImage(item)
-                    }
+        // --- MODIFIED: Hauptstruktur mit Overlay für UI-Elemente ---
+        mediaContentLayer
+            .contentShape(Rectangle()) // Video/Bild soll Taps für Controls/Fullscreen empfangen
+            .onTapGesture {
+                if item.isVideo {
+                    Self.logger.trace("Media content (video) tapped, AVPlayerViewController should handle controls visibility.")
+                } else if !isDummyItem {
+                    Self.logger.trace("Media content (image) tapped, showing fullscreen.")
+                    onShowFullscreenImage(item)
                 }
-                .allowsHitTesting(!isDummyItem)
-            
-            if isActive && item.isVideo && playerManager.playerItemID == item.id {
-                VStack {
-                    Spacer()
+            }
+            .allowsHitTesting(!isDummyItem) // Dummy Item soll nicht tappbar sein
+            .overlay(alignment: .bottom) { // UI-Elemente als Overlay
+                if !isDummyItem {
+                    bottomControlsOverlay
+                }
+            }
+            .overlay(alignment: .top) { // Subtitle Error als Overlay oben
+                 if isActive && item.isVideo && playerManager.playerItemID == item.id {
+                    if let subtitleError = playerManager.subtitleError, !subtitleError.isEmpty {
+                        VStack {
+                            Text("Untertitel: \(subtitleError)")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .padding(5)
+                                .background(Material.ultraThin)
+                                .cornerRadius(5)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                                .padding(.top, 50)
+                            Spacer()
+                        }
+                        .allowsHitTesting(false)
+                    }
+                 }
+            }
+            .overlay(alignment: .bottom) { // Subtitles als Overlay unten, aber über der Control Bar
+                 if isActive && item.isVideo && playerManager.playerItemID == item.id {
                     if let subtitle = playerManager.currentSubtitleText, !subtitle.isEmpty {
-                         Text(subtitle)
+                        Text(subtitle)
                              .font(UIConstants.footnoteFont.weight(.medium))
                              .foregroundColor(.white)
                              .padding(.horizontal, 10)
@@ -127,105 +150,102 @@ struct UnlimitedFeedItemView: View {
                              .cornerRadius(6)
                              .multilineTextAlignment(.center)
                              .padding(.horizontal)
+                             // Positioniere es relativ zur geschätzten Höhe der Control Bar und Safe Area
                              .padding(.bottom, bottomUIBarHeightEstimate + (bottomSafeAreaPadding > 0 ? bottomSafeAreaPadding : 10) + 10)
                              .transition(.opacity.animation(.easeInOut(duration: 0.2)))
                              .id("pr0tok_subtitle_\(item.id)_\(subtitle)")
-                             .allowsHitTesting(false)
+                             .allowsHitTesting(false) // Subtitles sollen keine Taps abfangen
                     }
-                }
-                .zIndex(0.5)
-                
-                if let subtitleError = playerManager.subtitleError, !subtitleError.isEmpty {
-                    VStack {
-                        Text("Untertitel: \(subtitleError)")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                            .padding(5)
-                            .background(Material.ultraThin)
-                            .cornerRadius(5)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                            .padding(.top, 50)
-                        Spacer()
-                    }
-                    .allowsHitTesting(false)
-                    .zIndex(0.5)
                 }
             }
+            // --- END MODIFICATION ---
+            .background(Color.black)
+            .clipped()
+            .onChange(of: isActive) { oldValue, newValue in
+                if isDummyItem { return }
 
-            if !isDummyItem {
-                VStack {
-                    Spacer()
-                    HStack(alignment: .bottom) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("@\(item.user)")
-                                .font(.headline).bold()
-                                .foregroundColor(.white)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    if !item.user.isEmpty {
-                                        Self.logger.info("Username '\(item.user)' tapped. Calling onShowUserProfile.")
-                                        onShowUserProfile(item.user)
-                                    }
-                                }
-                            
-                            tagSection
+                if newValue {
+                    if item.isVideo {
+                        if playerManager.playerItemID == item.id {
+                            Self.logger.debug("UnlimitedFeedItemView: Item \(item.id) became active. Player exists. Requesting play.")
+                            playerManager.requestPlay(for: item.id)
+                        } else {
+                            playerManager.setupPlayerIfNeeded(for: item, isFullscreen: false)
+                            Self.logger.debug("UnlimitedFeedItemView: Item \(item.id) became active. Player setup initiated (shouldAutoplayWhenReady will be handled).")
+                             Task {
+                                 try? await Task.sleep(for: .milliseconds(50))
+                                 playerManager.requestPlay(for: item.id)
+                             }
                         }
-                        .padding(.leading)
-                        .padding(.bottom, bottomSafeAreaPadding)
-
-                        Spacer()
-
-                        interactionButtons
-                            .padding(.trailing)
-                            .padding(.bottom, bottomSafeAreaPadding)
                     }
-                    .padding(.bottom, 10)
-                    .background(
-                        LinearGradient(
-                            gradient: Gradient(colors: [Color.black.opacity(0.0), Color.black.opacity(0.6)]),
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                }
-                .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
-                .zIndex(1)
-            }
-        }
-        .background(Color.black)
-        .clipped()
-        .onChange(of: isActive) { oldValue, newValue in
-            if isDummyItem { return }
-
-            if newValue {
-                if item.isVideo {
-                    if playerManager.playerItemID == item.id {
-                        Self.logger.debug("UnlimitedFeedItemView: Item \(item.id) became active. Player exists. Requesting play.")
-                        playerManager.requestPlay(for: item.id)
-                    } else {
-                        playerManager.setupPlayerIfNeeded(for: item, isFullscreen: false)
-                        Self.logger.debug("UnlimitedFeedItemView: Item \(item.id) became active. Player setup initiated (shouldAutoplayWhenReady will be handled).")
+                } else {
+                    if item.isVideo && playerManager.playerItemID == item.id {
+                         playerManager.player?.pause()
+                         Self.logger.debug("UnlimitedFeedItemView: Player paused via isActive becoming false for item \(item.id)")
                     }
                 }
-            } else {
-                if item.isVideo && playerManager.playerItemID == item.id {
-                     playerManager.player?.pause()
-                     Self.logger.debug("UnlimitedFeedItemView: Player paused via isActive becoming false for item \(item.id)")
-                }
             }
-        }
-        .sheet(isPresented: $showingCommentsSheet) {
-            ItemCommentsSheetView(
-                itemId: itemData.item.id,
-                uploaderName: itemData.item.user,
-                initialComments: itemData.comments,
-                initialInfoStatusProp: itemData.itemInfoStatus,
-                onRetryLoadDetails: onRetryLoadDetails
-            )
-            .environmentObject(settings)
-            .environmentObject(authService)
-        }
+            .sheet(isPresented: $showingCommentsSheet) {
+                ItemCommentsSheetView(
+                    itemId: itemData.item.id,
+                    uploaderName: itemData.item.user,
+                    initialComments: itemData.comments,
+                    initialInfoStatusProp: itemData.itemInfoStatus,
+                    onRetryLoadDetails: onRetryLoadDetails
+                )
+                .environmentObject(settings)
+                .environmentObject(authService)
+            }
     }
+
+    // --- KORRIGIERTE VERSION: Ausgelagerte View für die unteren Controls ---
+    @ViewBuilder
+    private var bottomControlsOverlay: some View {
+        // Verwende ZStack mit expliziter Ausrichtung für bessere Touch-Kontrolle
+        ZStack(alignment: .bottom) {
+            // Gradient-Hintergrund - nur für visuellen Effekt, blockiert keine Touches
+            LinearGradient(
+                gradient: Gradient(colors: [Color.black.opacity(0.0), Color.black.opacity(0.0)]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .allowsHitTesting(false) // Wichtig: Gradient soll keine Touches abfangen
+            
+            // Content mit präziser Positionierung am unteren Rand
+            HStack(alignment: .bottom) {
+                // Linke Seite: Username und Tags
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("@\(item.user)")
+                        .font(.headline).bold()
+                        .foregroundColor(.white)
+                        .background(Color.clear) // Explizit transparenter Hintergrund
+                        .onTapGesture {
+                            if !item.user.isEmpty {
+                                Self.logger.info("Username '\(item.user)' tapped. Calling onShowUserProfile.")
+                                onShowUserProfile(item.user)
+                            }
+                        }
+                    
+                    tagSection
+                        .background(Color.clear) // Explizit transparenter Hintergrund
+                }
+                .padding(.leading)
+                .background(Color.clear) // Explizit transparenter Hintergrund
+                
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false) // Spacer soll definitiv keine Touches abfangen
+                
+                // Rechte Seite: Interaction Buttons
+                interactionButtons
+                    .padding(.trailing)
+                    .background(Color.clear) // Explizit transparenter Hintergrund
+            }
+            .padding(.bottom, bottomSafeAreaPadding + 10)
+            .background(Color.clear) // Explizit transparenter Hintergrund für den HStack
+        }
+        .allowsHitTesting(true) // ZStack selbst soll Hit-Testing erlauben, aber nur für seine Kinder
+    }
+    // --- END KORRIGIERTE VERSION ---
     
     private var bottomSafeAreaPadding: CGFloat {
         (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
@@ -257,7 +277,6 @@ struct UnlimitedFeedItemView: View {
                      .aspectRatio(contentMode: .fill)
                      .frame(maxWidth: .infinity, maxHeight: .infinity)
                      .clipped()
-                     .overlay(Color.black.opacity(0.3))
                      .overlay(ProgressView().scaleEffect(1.5).tint(.white).opacity(isActive && playerManager.playerItemID != item.id ? 1 : 0))
              }
         } else {
@@ -270,10 +289,16 @@ struct UnlimitedFeedItemView: View {
         
     @ViewBuilder
     private var tagSection: some View {
-        if isDummyItem { EmptyView() } else {
+        if isDummyItem {
+            EmptyView()
+        } else {
             switch itemData.itemInfoStatus {
             case .loading:
-                ProgressView().tint(.white).scaleEffect(0.7)
+                ProgressView()
+                    .tint(.white)
+                    .scaleEffect(0.7)
+                    .background(Color.clear)
+                    
             case .error(let msg):
                 VStack(alignment: .leading) {
                     Text("Tags nicht geladen.")
@@ -284,7 +309,10 @@ struct UnlimitedFeedItemView: View {
                     }
                     .font(.caption.bold())
                     .foregroundColor(.white)
+                    .background(Color.clear)
                 }
+                .background(Color.clear)
+                
             case .loaded:
                 if !itemData.displayedTags.isEmpty {
                     HStack(spacing: 6) {
@@ -329,10 +357,12 @@ struct UnlimitedFeedItemView: View {
                     }
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                    .background(Color.clear) // Explizit transparenter Hintergrund
                 } else if itemData.totalTagCount > 0 {
                     Text("Keine Tags (Filter?).")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.7))
+                        .background(Color.clear)
                 } else if authService.isLoggedIn {
                      Button {
                         onShowAddTagSheet()
@@ -350,6 +380,7 @@ struct UnlimitedFeedItemView: View {
                 Text("Lade Tags...")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
+                    .background(Color.clear)
             }
         }
     }
@@ -422,19 +453,16 @@ struct UnlimitedFeedItemView: View {
                     Self.logger.info("Kommentar-Button getippt für Item \(item.id)")
                     showingCommentsSheet = true
                 } label: {
-                    // --- MODIFIED: Icon geändert ---
                     Image(systemName: "message").font(.title).foregroundColor(.white)
-                    // --- END MODIFICATION ---
                 }
 
                 Button {
                     onShareTapped()
                 } label: {
-                    // --- MODIFIED: Icon geändert ---
                     Image(systemName: "arrowshape.turn.up.right").font(.title).foregroundColor(.white)
-                    // --- END MODIFICATION ---
                 }
             }
+            .background(Color.clear) // Explizit transparenter Hintergrund für die VStack
         }
     }
 }

@@ -64,9 +64,12 @@ struct UnlimitedStyleFeedView: View {
     @State private var currentRefreshFeedTask: Task<Void, Never>? = nil
     @State private var debouncedRefreshTask: Task<Void, Never>? = nil
 
-    @State private var showingShareOptionsForItemID: Int? = nil
+    // --- MODIFIED: States für Share-Funktionalität ---
+    @State private var itemIDForShareActions: Int? = nil // Speichert die ID des Items, für das der Share-Dialog angezeigt wird
+    @State private var isShareConfirmationDialogPresented: Bool = false // Steuert den ConfirmationDialog
+    // --- END MODIFICATION ---
     @State private var itemToShareWrapper: ShareableItemWrapper? = nil
-    @State private var isPreparingShareGlobal = false
+    @State private var isPreparingShareGlobal = false // Wird jetzt von der Share-Funktion direkt gesetzt
     @State private var sharePreparationErrorGlobal: String? = nil
     @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
     @State private var isProcessingFavoriteGlobal: [Int: Bool] = [:]
@@ -235,6 +238,25 @@ struct UnlimitedStyleFeedView: View {
             } message: {
                 Text(errorMessage ?? "Unbekannter Fehler")
             }
+            // --- MODIFIED: ConfirmationDialog für Share-Aktionen ---
+            .confirmationDialog(
+                "Teilen & Kopieren",
+                isPresented: $isShareConfirmationDialogPresented,
+                presenting: itemIDForShareActions // Die ID des Items, für das geteilt werden soll
+            ) { itemIDForDialogActions in // `itemIDForDialogActions` ist jetzt die übergebene `itemIDForShareActions`
+                Button("Medium teilen/speichern") {
+                    Task { await prepareAndShareMedia(for: itemIDForDialogActions) }
+                }
+                Button("Post-Link (pr0gramm.com)") {
+                    copyPostLink(for: itemIDForDialogActions)
+                }
+                Button("Direkter Medien-Link") {
+                    copyMediaLink(for: itemIDForDialogActions)
+                }
+            } message: { itemIDForDialogMessage in
+                Text("Aktionen für Post #\(itemIDForDialogMessage):")
+            }
+            // --- END MODIFICATION ---
             .onAppear {
                 playerManager.configure(settings: settings)
                 keyboardActionHandlerInstance.selectNextAction = self.selectNextItem
@@ -506,12 +528,15 @@ struct UnlimitedStyleFeedView: View {
                                         Self.logger.warning("onShowCollectionSelection: Could not determine item for collection sheet. activeItemID: \(String(describing: self.activeItemID)), cell's item.id: \(item.id)")
                                     }
                                 },
+                                // --- MODIFIED: `onShareTapped` setzt jetzt die neuen States ---
                                 onShareTapped: {
                                     if item.id != dummyStartItemID {
-                                        self.showingShareOptionsForItemID = item.id
+                                        self.itemIDForShareActions = item.id // Speichert die ID des Items für den Dialog
+                                        self.isShareConfirmationDialogPresented = true // Triggert den Dialog
                                         self.sharePreparationErrorGlobal = nil
                                     }
                                 },
+                                // --- END MODIFICATION ---
                                 isProcessingFavorite: isProcessingFavoriteGlobal[item.id] ?? false,
                                 onShowUserProfile: { username in
                                     Self.logger.info("Request to show profile for \(username) from item \(item.id)")
@@ -519,10 +544,8 @@ struct UnlimitedStyleFeedView: View {
                                 },
                                 onWillBeginFullScreenPr0Tok: handleWillBeginFullscreen,
                                 onWillEndFullScreenPr0Tok: handleWillEndFullscreen,
-                                // --- NEW: Pass vote actions ---
                                 onUpvoteItem: { Task { await handleItemVoteTap(voteType: 1) } },
                                 onDownvoteItem: { Task { await handleItemVoteTap(voteType: -1) } }
-                                // --- END NEW ---
                             )
                             .id(item.id)
                             .frame(height: geometry.size.height)
@@ -590,7 +613,7 @@ struct UnlimitedStyleFeedView: View {
                                             Self.logger.info("Explicitly started player for (newly) active video item \(currentItem.id) after delay and status check.")
                                         } else {
                                             Self.logger.warning("Player for item \(currentItem.id) not readyToPlay. Status: \(String(describing: player.status)). Play command might not be effective immediately.")
-                                            player.play()
+                                            player.play() // Trotzdem versuchen zu starten
                                         }
                                     }
                                 }
@@ -828,15 +851,15 @@ struct UnlimitedStyleFeedView: View {
 
         } catch is CancellationError {
             Self.logger.info("RefreshItems (Unlimited) Task API call explicitly cancelled.")
-            if items.count <= 1 {
-                await MainActor.run { canLoadMore = true }
+            if items.count <= 1 { // Nur wenn wirklich leer, sonst könnte es alter Zustand sein
+                await MainActor.run { canLoadMore = true } // Erlaube erneutes Laden
             }
         } catch {
             Self.logger.error("API fetch (Unlimited) failed during refresh: \(error.localizedDescription)")
             if Task.isCancelled { Self.logger.info("RefreshItems (Unlimited) Task cancelled after API error."); return }
             await MainActor.run {
                 self.errorMessage = "Fehler beim Laden: \(error.localizedDescription)"
-                self.canLoadMore = false
+                self.canLoadMore = false // Bei Fehler erstmal nicht weiterladen
             }
         }
     }
@@ -855,6 +878,8 @@ struct UnlimitedStyleFeedView: View {
         }
         guard let finalOlderThanId = olderThanId else {
             Self.logger.warning("Cannot load more (Unlimited): Could not determine 'older' value from real items.")
+            // Potenziell canLoadMore auf false setzen, wenn dies der einzige Weg ist, wie olderThanId nil sein kann
+            // und wir wissen, dass es keine weiteren Items gibt.
             return
         }
         
@@ -864,10 +889,12 @@ struct UnlimitedStyleFeedView: View {
 
         var itemsToAppend: [Item] = []
         var apiSaysNoMoreItemsAfterLoadMore = false
-        var pagesForLoadMore = 0
+        var pagesForLoadMore = 0 // Zählt wie viele API Calls für diesen "loadMore" Batch gemacht wurden
 
         do {
             var currentOlderForLoop = finalOlderThanId
+            // Die Schleife läuft, solange wir noch keine Items zum Anhängen gefunden haben
+            // UND die API nicht explizit sagt, dass es keine weiteren Items gibt.
             while itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore {
                 if Task.isCancelled { throw CancellationError() }
                 pagesForLoadMore += 1
@@ -891,18 +918,23 @@ struct UnlimitedStyleFeedView: View {
                     Self.logger.info("LoadMore: Filtered \(originalCount - pageItems.count) seen items. \(pageItems.count) unseen remaining.")
                 }
                 
+                // Filtere Duplikate basierend auf bereits vorhandenen Items
                 let currentItemIDs = Set(self.items.map { $0.id })
                 let uniqueNewPageItems = pageItems.filter { !currentItemIDs.contains($0.id) }
                 itemsToAppend.append(contentsOf: uniqueNewPageItems)
 
+                // Prüfe, ob die API das Ende signalisiert
                 if apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
                     apiSaysNoMoreItemsAfterLoadMore = true
                     Self.logger.info("API indicated end of feed during loadMore loop (Page \(pagesForLoadMore)).")
                 }
                 
+                // Setze `older` für den nächsten Loop-Durchlauf, falls nötig
                 if rawPageItemCount > 0 && !apiSaysNoMoreItemsAfterLoadMore {
+                    // Wichtig: Verwende das letzte Item der *ungefilterten* Antwort für das "older" Flag
                     currentOlderForLoop = settings.feedType == .promoted ? apiResponse.items.last!.promoted ?? apiResponse.items.last!.id : apiResponse.items.last!.id
                 } else if rawPageItemCount == 0 && !apiSaysNoMoreItemsAfterLoadMore {
+                    // Wenn API 0 Items liefert, gibt es nichts Älteres mehr
                     apiSaysNoMoreItemsAfterLoadMore = true
                     Self.logger.info("API returned 0 items during loadMore loop (Page \(pagesForLoadMore)), assuming end.")
                 }
@@ -910,14 +942,18 @@ struct UnlimitedStyleFeedView: View {
             
             if Task.isCancelled { Self.logger.info("LoadMoreItems (Unlimited) Task cancelled after API fetch loops."); return }
 
+            // UI Update nach der Schleife
             if !itemsToAppend.isEmpty {
                 self.items.append(contentsOf: itemsToAppend)
                 Self.logger.info("LoadMore: Appended \(itemsToAppend.count) new items.")
             }
             
-            self.canLoadMore = !apiSaysNoMoreItemsAfterLoadMore
+            self.canLoadMore = !apiSaysNoMoreItemsAfterLoadMore // Setze basierend auf dem API Signal
             Self.logger.info("LoadMore (Unlimited) finished. canLoadMore set to \(!apiSaysNoMoreItemsAfterLoadMore) based on API signal (\(apiSaysNoMoreItemsAfterLoadMore)).")
             
+            // Wenn `hideSeenItems` aktiv ist und wir nichts gefunden haben, aber die API nicht am Ende ist,
+            // müssen wir `canLoadMore` eventuell true lassen, damit der Nutzer weiterscrollen kann,
+            // um mehr Seiten zu laden. `apiSaysNoMoreItemsAfterLoadMore` deckt das aber schon ab.
             if itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore && settings.hideSeenItems {
                 Self.logger.info("LoadMore: No new unseen items found after \(pagesForLoadMore) pages, but API might have more. Will allow further loading attempts.")
             }
@@ -927,10 +963,11 @@ struct UnlimitedStyleFeedView: View {
         } catch {
             Self.logger.error("API fetch (Unlimited) failed during loadMore: \(error.localizedDescription)")
              if Task.isCancelled { Self.logger.info("LoadMoreItems (Unlimited) Task cancelled after API error."); return }
+            // Nur Fehler anzeigen, wenn die Liste vorher komplett leer war
             if self.items.filter({ $0.id != dummyStartItemID }).isEmpty {
                 self.errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)"
             }
-            self.canLoadMore = false
+            self.canLoadMore = false // Bei Fehler erstmal nicht weiterladen
         }
     }
 
@@ -938,6 +975,7 @@ struct UnlimitedStyleFeedView: View {
         let itemId = item.id
         if itemId == dummyStartItemID { return }
 
+        // Wenn schon geladen oder gerade am Laden (und nicht forceReload), nichts tun.
         if !forceReload && (infoLoadingStatus[itemId] == .loaded || infoLoadingStatus[itemId] == .loading) {
             return
         }
@@ -947,8 +985,19 @@ struct UnlimitedStyleFeedView: View {
 
         do {
             let fetchedInfoResponse = try await apiService.fetchItemInfo(itemId: itemId)
+            // Tags nach Confidence sortieren
             let sortedTags = fetchedInfoResponse.tags.sorted { $0.confidence > $1.confidence }
-            let infoWithSortedTagsAndComments = ItemsInfoResponse(tags: sortedTags, comments: fetchedInfoResponse.comments)
+            // Kommentare nach Standard (Datum) oder Score sortieren, bevor sie gespeichert werden
+            // Hier verwenden wir die aktuelle Sortiereinstellung der App für die initiale Speicherung
+            let sortedComments: [ItemComment]
+            switch settings.commentSortOrder {
+            case .date:
+                sortedComments = fetchedInfoResponse.comments.sorted { $0.created < $1.created }
+            case .score:
+                sortedComments = fetchedInfoResponse.comments.sorted { ($0.up - $0.down) > ($1.up - $1.down) }
+            }
+
+            let infoWithSortedTagsAndComments = ItemsInfoResponse(tags: sortedTags, comments: sortedComments)
             
             await MainActor.run {
                 cachedDetails[itemId] = infoWithSortedTagsAndComments
@@ -964,6 +1013,7 @@ struct UnlimitedStyleFeedView: View {
     private func handleTagVoteTap(tagId: Int, voteType: Int) async {
         guard authService.isLoggedIn else { return }
         await authService.performTagVote(tagId: tagId, voteType: voteType)
+        // UI wird durch @Published in AuthService aktualisiert
     }
     
     private func handleAddTagsToActiveItem(tags: String) async -> String? {
@@ -986,24 +1036,24 @@ struct UnlimitedStyleFeedView: View {
             try await apiService.addTags(itemId: currentActiveItemID, tags: sanitizedTags, nonce: nonce)
             Self.logger.info("Tags erfolgreich zu Item \(currentActiveItemID) hinzugefügt. Lade Item-Infos neu.")
             
+            // Details neu laden, um die neuen Tags anzuzeigen
             if let itemToReload = items.first(where: { $0.id == currentActiveItemID }) {
                 await loadItemDetailsIfNeeded(for: itemToReload, forceReload: true)
             }
-            return nil
+            return nil // Erfolg
         } catch let error as URLError where error.code == .userAuthenticationRequired {
             Self.logger.error("Fehler beim Hinzufügen von Tags zu Item \(currentActiveItemID): Authentifizierung erforderlich.")
-            await authService.logout()
+            await authService.logout() // Ausloggen bei Auth-Fehler
             return "Sitzung abgelaufen. Bitte erneut anmelden."
         } catch {
             Self.logger.error("Fehler beim Hinzufügen von Tags zu Item \(currentActiveItemID): \(error.localizedDescription)")
             if let nsError = error as NSError?, nsError.domain == "APIService.addTags" {
-                return nsError.localizedDescription
+                return nsError.localizedDescription // Spezifische API-Fehlermeldung
             }
             return "Ein unbekannter Fehler ist aufgetreten."
         }
     }
 
-    // --- NEW: Item Vote Handler ---
     private func handleItemVoteTap(voteType: Int) async {
         guard let activeId = activeItemID, activeId != dummyStartItemID else {
             Self.logger.warning("Item Vote: No active item.")
@@ -1016,9 +1066,10 @@ struct UnlimitedStyleFeedView: View {
 
         let previousVoteStateForRevert = authService.votedItemStates[activeId] ?? 0
         
+        // Perform vote via AuthService (handles optimistic update of votedItemStates)
         await authService.performVote(itemId: activeId, voteType: voteType)
 
-        // Stelle sicher, dass das Item noch das aktive ist und in der Liste existiert
+        // Ensure item is still active and exists in list
         guard self.activeItemID == activeId, let updatedItemIndex = items.firstIndex(where: { $0.id == activeId }) else {
              Self.logger.warning("Could not update local item score for \(activeId): activeItemID changed or item no longer in list.")
              return
@@ -1026,27 +1077,29 @@ struct UnlimitedStyleFeedView: View {
 
         let newVoteState = authService.votedItemStates[activeId] ?? 0
 
+        // Only update local item scores if the effective vote state changed
         if previousVoteStateForRevert != newVoteState {
             var deltaUp = 0
             var deltaDown = 0
             
-            if newVoteState == 1 && previousVoteStateForRevert == 0 { deltaUp = 1 }
-            else if newVoteState == 1 && previousVoteStateForRevert == -1 { deltaUp = 1; deltaDown = -1 }
-            else if newVoteState == 0 && previousVoteStateForRevert == 1 { deltaUp = -1 }
-            else if newVoteState == 0 && previousVoteStateForRevert == -1 { deltaDown = -1 }
-            else if newVoteState == -1 && previousVoteStateForRevert == 0 { deltaDown = 1 }
-            else if newVoteState == -1 && previousVoteStateForRevert == 1 { deltaUp = -1; deltaDown = 1 }
+            // Logic to determine change in up/down votes based on previous and new state
+            if newVoteState == 1 && previousVoteStateForRevert == 0 { deltaUp = 1 } // New upvote
+            else if newVoteState == 1 && previousVoteStateForRevert == -1 { deltaUp = 1; deltaDown = -1 } // Changed from downvote to upvote
+            else if newVoteState == 0 && previousVoteStateForRevert == 1 { deltaUp = -1 } // Removed upvote
+            else if newVoteState == 0 && previousVoteStateForRevert == -1 { deltaDown = -1 } // Removed downvote
+            else if newVoteState == -1 && previousVoteStateForRevert == 0 { deltaDown = 1 } // New downvote
+            else if newVoteState == -1 && previousVoteStateForRevert == 1 { deltaUp = -1; deltaDown = 1 } // Changed from upvote to downvote
 
+            // Apply changes to the local item copy
             var mutableItem = items[updatedItemIndex]
             mutableItem.up += deltaUp
             mutableItem.down += deltaDown
-            items[updatedItemIndex] = mutableItem // Aktualisiere das Item in der @State-Liste
+            items[updatedItemIndex] = mutableItem // Update the item in the @State list
             Self.logger.info("Updated local item \(activeId) score based on final vote state: deltaUp=\(deltaUp), deltaDown=\(deltaDown). New counts: up=\(items[updatedItemIndex].up), down=\(items[updatedItemIndex].down)")
         } else {
             Self.logger.info("Vote state for item \(activeId) did not effectively change. No local score update.")
         }
     }
-    // --- END NEW ---
 
     @ViewBuilder
     private func addTagSheetContent() -> some View {
@@ -1097,7 +1150,7 @@ struct UnlimitedStyleFeedView: View {
                                 addTagErrorForSheet = errorMsg
                                 Self.logger.error("Fehler beim Hinzufügen von Tags (Sheet): \(errorMsg)")
                             } else {
-                                showingAddTagSheet = false
+                                showingAddTagSheet = false // Schließe bei Erfolg
                             }
                             isAddingTagsInSheet = false
                         }
@@ -1128,7 +1181,7 @@ struct UnlimitedStyleFeedView: View {
         let currentIsFavorited = authService.favoritedItemIDs.contains(item.id)
         let targetFavoriteState = !currentIsFavorited
 
-        isProcessingFavoriteGlobal[item.id] = true
+        isProcessingFavoriteGlobal[item.id] = true // Mark as processing
 
         do {
             if targetFavoriteState {
@@ -1137,21 +1190,24 @@ struct UnlimitedStyleFeedView: View {
                 try await apiService.removeFromCollection(itemId: item.id, collectionId: collectionId, nonce: nonce)
             }
 
+            // Update global state in AuthService
             if targetFavoriteState { authService.favoritedItemIDs.insert(item.id) }
             else { authService.favoritedItemIDs.remove(item.id) }
             
+            // Clear local cache for favorites
             await settings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collectionId)
             Self.logger.info("Favorite toggled successfully for item \(item.id) in collection \(collectionId). Cache cleared.")
         } catch {
             Self.logger.error("Failed to toggle favorite for item \(item.id): \(error.localizedDescription)")
+            // Revert optimistic UI update
             if targetFavoriteState { authService.favoritedItemIDs.remove(item.id) }
             else { authService.favoritedItemIDs.insert(item.id) }
 
             if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
-                 await authService.logout()
+                 await authService.logout() // Logout on auth error
             }
         }
-        isProcessingFavoriteGlobal[item.id] = false
+        isProcessingFavoriteGlobal[item.id] = false // Unmark as processing
     }
 
     private func addActiveItemToSelectedCollection(collection: ApiCollection) async {
@@ -1172,9 +1228,11 @@ struct UnlimitedStyleFeedView: View {
 
         do {
             try await apiService.addToCollection(itemId: item.id, collectionId: collection.id, nonce: nonce)
+            // If this collection is the "default" favorite one, update the global state
             if collection.id == settings.selectedCollectionIdForFavorites {
                 authService.favoritedItemIDs.insert(item.id)
             }
+            // Clear cache for the *specific collection* it was added to
             await settings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collection.id)
             Self.logger.info("Successfully added item \(item.id) to collection '\(collection.name)'. Cache cleared.")
         } catch {
@@ -1186,23 +1244,28 @@ struct UnlimitedStyleFeedView: View {
         isProcessingFavoriteGlobal[item.id] = false
     }
 
-    private func prepareAndShareMediaForActiveItem() async {
-        guard let activeId = activeItemID, activeId != dummyStartItemID, let item = items.first(where: { $0.id == activeId }) else {
-            Self.logger.error("Cannot share media: No active item or item not found.")
-            sharePreparationErrorGlobal = "Kein aktives Item zum Teilen."
+    // --- MODIFIED: Share-Funktionen mit itemID Parameter ---
+    private func prepareAndShareMedia(for itemID: Int) async {
+        guard let item = items.first(where: { $0.id == itemID }) else {
+            Self.logger.error("Cannot share media: Item with ID \(itemID) not found.")
+            sharePreparationErrorGlobal = "Item nicht gefunden."
             return
         }
         guard let mediaUrl = item.imageUrl else {
-            Self.logger.error("Cannot share media: URL is nil for item \(item.id)")
+            Self.logger.error("Cannot share media: URL is nil for item \(itemID)")
             sharePreparationErrorGlobal = "Medien-URL nicht verfügbar."
             return
         }
 
-        isPreparingShareGlobal = true
-        sharePreparationErrorGlobal = nil
+        await MainActor.run {
+            self.isPreparingShareGlobal = true
+            self.sharePreparationErrorGlobal = nil
+        }
         var temporaryFileToDelete: URL? = nil
 
-        defer { isPreparingShareGlobal = false }
+        defer {
+            Task { @MainActor in self.isPreparingShareGlobal = false }
+        }
 
         if item.isVideo {
             do {
@@ -1213,17 +1276,18 @@ struct UnlimitedStyleFeedView: View {
 
                 let (downloadedUrl, response) = try await URLSession.shared.download(from: mediaUrl)
                 guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
-                    sharePreparationErrorGlobal = "Video-Download fehlgeschlagen (Code: \((response as? HTTPURLResponse)?.statusCode ?? -1))."
+                    await MainActor.run { sharePreparationErrorGlobal = "Video-Download fehlgeschlagen (Code: \((response as? HTTPURLResponse)?.statusCode ?? -1))." }
                     return
                 }
                 if FileManager.default.fileExists(atPath: localUrl.path) { try FileManager.default.removeItem(at: localUrl) }
                 try FileManager.default.moveItem(at: downloadedUrl, to: localUrl)
-                itemToShareWrapper = ShareableItemWrapper(itemsToShare: [localUrl], temporaryFileUrlToDelete: localUrl)
+                await MainActor.run { itemToShareWrapper = ShareableItemWrapper(itemsToShare: [localUrl], temporaryFileUrlToDelete: localUrl) }
             } catch {
-                sharePreparationErrorGlobal = "Video-Download fehlgeschlagen."
-                itemToShareWrapper = ShareableItemWrapper(itemsToShare: [mediaUrl])
+                await MainActor.run { sharePreparationErrorGlobal = "Video-Download fehlgeschlagen." }
+                // Fallback: URL teilen
+                await MainActor.run { itemToShareWrapper = ShareableItemWrapper(itemsToShare: [mediaUrl]) }
             }
-        } else {
+        } else { // Für Bilder
             let result: Result<ImageLoadingResult, KingfisherError> = await withCheckedContinuation { continuation in
                 KingfisherManager.shared.downloader.downloadImage(with: mediaUrl, options: nil) { result in
                     continuation.resume(returning: result)
@@ -1231,31 +1295,35 @@ struct UnlimitedStyleFeedView: View {
             }
             switch result {
             case .success(let imageLoadingResult):
-                itemToShareWrapper = ShareableItemWrapper(itemsToShare: [imageLoadingResult.image])
+                await MainActor.run { itemToShareWrapper = ShareableItemWrapper(itemsToShare: [imageLoadingResult.image]) }
             case .failure(let error):
                 if !error.isTaskCancelled && !error.isNotCurrentTask {
-                    sharePreparationErrorGlobal = "Bild-Download fehlgeschlagen."
+                    await MainActor.run { sharePreparationErrorGlobal = "Bild-Download fehlgeschlagen." }
                 }
             }
         }
     }
 
-    private func copyPostLinkForActiveItem() {
-        guard let activeId = activeItemID, activeId != dummyStartItemID else { return }
-        let urlString = "https://pr0gramm.com/new/\(activeId)"
+    private func copyPostLink(for itemID: Int) {
+        let urlString = "https://pr0gramm.com/new/\(itemID)"
         UIPasteboard.general.string = urlString
         Self.logger.info("Copied Post-Link to clipboard: \(urlString)")
     }
 
-    private func copyMediaLinkForActiveItem() {
-        guard let activeId = activeItemID, activeId != dummyStartItemID, let item = items.first(where: { $0.id == activeId }) else { return }
+    private func copyMediaLink(for itemID: Int) {
+        guard let item = items.first(where: { $0.id == itemID }) else {
+            Self.logger.warning("Failed to copy Media-Link: Item with ID \(itemID) not found.")
+            return
+        }
         if let urlString = item.imageUrl?.absoluteString {
             UIPasteboard.general.string = urlString
             Self.logger.info("Copied Media-Link to clipboard: \(urlString)")
         } else {
-            Self.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)")
+            Self.logger.warning("Failed to copy Media-Link: URL was nil for item \(itemID)")
         }
     }
+    // --- END MODIFICATION ---
+
 
     private func deleteTemporaryFile(at url: URL) {
         Task(priority: .background) {
@@ -1274,7 +1342,7 @@ struct UnlimitedStyleFeedView: View {
     let settings = AppSettings()
     let authService = AuthService(appSettings: settings)
     let navService = NavigationService()
-    settings.enableUnlimitedStyleFeed = true
+    settings.enableUnlimitedStyleFeed = true // Wichtig für die Anzeige dieser View
     
     return UnlimitedStyleFeedView()
         .environmentObject(settings)
