@@ -134,19 +134,20 @@ class AppSettings: ObservableObject {
     private static let showPOLKey = "showPOLPreference_v1"
     private static let maxImageCacheSizeMBKey = "maxImageCacheSizeMB_v1"
     private static let commentSortOrderKey = "commentSortOrder_v1"
-    // --- MODIFIED: enableExperimentalHideSeenKey entfernt ---
-    // private static let enableExperimentalHideSeenKey = "enableExperimentalHideSeen_v1"
-    // --- END MODIFICATION ---
-    private static let hideSeenItemsKey = "hideSeenItems_v1" // Bleibt, da der UserDefault-Key derselbe sein kann
+    private static let hideSeenItemsKey = "hideSeenItems_v1"
     private static let subtitleActivationModeKey = "subtitleActivationMode_v1"
     private static let selectedCollectionIdForFavoritesKey = "selectedCollectionIdForFavorites_v1"
     private static let colorSchemeSettingKey = "colorSchemeSetting_v1"
     private static let gridSizeSettingKey = "gridSizeSetting_v1"
-    private static let resetFiltersOnAppOpenKey = "resetFiltersOnAppOpen_v1"
+    private static let enableStartupFiltersKey = "enableStartupFilters_v1"
+    private static let startupFilterSFWKey = "startupFilterSFW_v1"
+    private static let startupFilterNSFWKey = "startupFilterNSFW_v1"
+    private static let startupFilterNSFLKey = "startupFilterNSFL_v1"
+    private static let startupFilterPOLKey = "startupFilterPOL_v1"
     private static let accentColorChoiceKey = "accentColorChoice_v1"
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
-    private static let enableUnlimitedStyleFeedKey = "enableUnlimitedStyleFeed_v1" // Bleibt experimentell
+    private static let enableUnlimitedStyleFeedKey = "enableUnlimitedStyleFeed_v1"
     private var keyValueStoreChangeObserver: NSObjectProtocol?
 
     @Published var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
@@ -154,15 +155,26 @@ class AppSettings: ObservableObject {
         didSet {
             UserDefaults.standard.set(feedType.rawValue, forKey: Self.feedTypeKey)
             Self.logger.info("Feed type changed to: \(self.feedType.displayName)")
+            if isUserLoggedInForApiFlags && feedType != .junk {
+                self.showNSFP = self.showSFW
+            }
         }
     }
-    @Published var showSFW: Bool { didSet { UserDefaults.standard.set(showSFW, forKey: Self.showSFWKey) } }
+    @Published var showSFW: Bool {
+        didSet {
+            UserDefaults.standard.set(showSFW, forKey: Self.showSFWKey)
+            if isUserLoggedInForApiFlags && feedType != .junk {
+                self.showNSFP = showSFW
+                AppSettings.logger.debug("showSFW changed to \(self.showSFW). Automatically set showNSFP to \(self.showNSFP) (logged in, not junk).")
+            }
+        }
+    }
     @Published var showNSFW: Bool { didSet { UserDefaults.standard.set(showNSFW, forKey: Self.showNSFWKey) } }
     @Published var showNSFL: Bool { didSet { UserDefaults.standard.set(showNSFL, forKey: Self.showNSFLKey) } }
     @Published var showNSFP: Bool {
         didSet {
             UserDefaults.standard.set(showNSFP, forKey: Self.showNSFPKey)
-            AppSettings.logger.debug("showNSFP changed to \(self.showNSFP). Note: For logged-in users (non-Junk), this is often coupled with showSFW.")
+            AppSettings.logger.debug("showNSFP (internal state) changed to \(self.showNSFP).")
         }
     }
     @Published var showPOL: Bool { didSet { UserDefaults.standard.set(showPOL, forKey: Self.showPOLKey) } }
@@ -180,16 +192,10 @@ class AppSettings: ObservableObject {
         }
     }
     
-    // --- MODIFIED: enableExperimentalHideSeen Property entfernt ---
-    // @Published var enableExperimentalHideSeen: Bool { ... }
-    // --- END MODIFICATION ---
-
     @Published var hideSeenItems: Bool {
         didSet {
-            // --- MODIFIED: Bedingung entfernt, speichert immer ---
             UserDefaults.standard.set(hideSeenItems, forKey: Self.hideSeenItemsKey)
             Self.logger.info("Hide seen items setting changed to: \(self.hideSeenItems)")
-            // --- END MODIFICATION ---
         }
     }
 
@@ -224,14 +230,28 @@ class AppSettings: ObservableObject {
             }
         }
     }
-    @Published var resetFiltersOnAppOpen: Bool {
+    
+    @Published var enableStartupFilters: Bool {
         didSet {
-            if oldValue != resetFiltersOnAppOpen {
-                UserDefaults.standard.set(resetFiltersOnAppOpen, forKey: Self.resetFiltersOnAppOpenKey)
-                Self.logger.info("Reset filters on app open setting changed to: \(self.resetFiltersOnAppOpen)")
+            UserDefaults.standard.set(enableStartupFilters, forKey: Self.enableStartupFiltersKey)
+            Self.logger.info("Enable startup filters setting changed to: \(self.enableStartupFilters)")
+            if enableStartupFilters {
+                if UserDefaults.standard.object(forKey: Self.startupFilterSFWKey) == nil { self.startupFilterSFW = true }
+                if UserDefaults.standard.object(forKey: Self.startupFilterNSFWKey) == nil { self.startupFilterNSFW = false }
+                if UserDefaults.standard.object(forKey: Self.startupFilterNSFLKey) == nil { self.startupFilterNSFL = false }
+                if UserDefaults.standard.object(forKey: Self.startupFilterPOLKey) == nil { self.startupFilterPOL = false }
             }
         }
     }
+    @Published var startupFilterSFW: Bool {
+        didSet {
+            UserDefaults.standard.set(startupFilterSFW, forKey: Self.startupFilterSFWKey)
+        }
+    }
+    @Published var startupFilterNSFW: Bool { didSet { UserDefaults.standard.set(startupFilterNSFW, forKey: Self.startupFilterNSFWKey) } }
+    @Published var startupFilterNSFL: Bool { didSet { UserDefaults.standard.set(startupFilterNSFL, forKey: Self.startupFilterNSFLKey) } }
+    @Published var startupFilterPOL: Bool { didSet { UserDefaults.standard.set(startupFilterPOL, forKey: Self.startupFilterPOLKey) } }
+
     @Published var accentColorChoice: AccentColorChoice {
         didSet {
             if oldValue != accentColorChoice {
@@ -241,7 +261,7 @@ class AppSettings: ObservableObject {
         }
     }
     
-    @Published var enableUnlimitedStyleFeed: Bool { // Bleibt als experimentelles Feature
+    @Published var enableUnlimitedStyleFeed: Bool {
         didSet {
             if oldValue != enableUnlimitedStyleFeed {
                 UserDefaults.standard.set(enableUnlimitedStyleFeed, forKey: Self.enableUnlimitedStyleFeedKey)
@@ -284,10 +304,19 @@ class AppSettings: ObservableObject {
     private let flagAccessQueue = DispatchQueue(label: "com.aetherium.Pr0gramm.flagAccessQueue")
 
     public func updateUserLoginStatusForApiFlags(isLoggedIn: Bool) {
+        let oldLoginStatus = self._isUserLoggedInForApiFlags
         flagAccessQueue.sync {
             self._isUserLoggedInForApiFlags = isLoggedIn
         }
         AppSettings.logger.info("User login status for API flags calculation updated to: \(isLoggedIn)")
+        
+        if oldLoginStatus != isLoggedIn {
+            if isLoggedIn && self.feedType != .junk {
+                self.showNSFP = self.showSFW
+            } else if !isLoggedIn {
+                self.showNSFP = self.showSFW
+            }
+        }
     }
 
     private var isUserLoggedInForApiFlags: Bool {
@@ -305,7 +334,10 @@ class AppSettings: ObservableObject {
             }
 
             if feedType == .junk {
-                return 9
+                var flags = 0
+                if showSFW { flags |= 1 }
+                if showNSFP { flags |= 8 }
+                return flags == 0 ? 1 : flags
             } else {
                 var flags = 0
                 if showSFW {
@@ -321,10 +353,7 @@ class AppSettings: ObservableObject {
                 if showPOL {
                     flags |= 16
                 }
-                if flags == 0 {
-                    return 1
-                }
-                return flags
+                return flags == 0 ? 1 : flags
             }
         }
     }
@@ -345,92 +374,95 @@ class AppSettings: ObservableObject {
     }
 
     var hasActiveContentFilter: Bool {
-        if feedType == .junk { return true }
         if isUserLoggedInForApiFlags {
-            return showSFW || showNSFW || showNSFL || showPOL
+            if feedType == .junk {
+                return showSFW || showNSFP
+            } else {
+                return showSFW || showNSFW || showNSFL || showPOL
+            }
         } else {
-            return true
+            return showSFW
         }
     }
 
     init() {
-        let initialIsVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) as? Bool ?? true
-        let initialRawFeedType = UserDefaults.standard.integer(forKey: Self.feedTypeKey)
-        let initialFeedType = FeedType(rawValue: initialRawFeedType) ?? .promoted
-        let initialShowSFW = UserDefaults.standard.object(forKey: Self.showSFWKey) as? Bool ?? true
-        let initialShowNSFW = UserDefaults.standard.bool(forKey: Self.showNSFWKey)
-        let initialShowNSFL = UserDefaults.standard.bool(forKey: Self.showNSFLKey)
-        let initialShowNSFP = UserDefaults.standard.bool(forKey: Self.showNSFPKey)
-        let initialShowPOL = UserDefaults.standard.bool(forKey: Self.showPOLKey)
-        let initialMaxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) as? Int ?? 100
-        let initialRawCommentSortOrder = UserDefaults.standard.integer(forKey: Self.commentSortOrderKey)
-        let initialCommentSortOrder = CommentSortOrder(rawValue: initialRawCommentSortOrder) ?? .date
+        self.isVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) as? Bool ?? true
         
-        // --- MODIFIED: Initialisierung von hideSeenItems ---
-        // Liest direkt aus UserDefaults, Default ist false, wenn nicht vorhanden.
-        let initialHideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
-        // --- END MODIFICATION ---
+        let initialRawFeedType = UserDefaults.standard.integer(forKey: Self.feedTypeKey)
+        // Wichtig: feedType als erstes initialisieren, da andere davon abhängen könnten
+        self._feedType = Published(initialValue: FeedType(rawValue: initialRawFeedType) ?? .promoted)
+        
+        // showNSFP zuerst initialisieren, da showSFW.didSet darauf zugreifen könnte (obwohl die Logik jetzt robuster sein sollte)
+        let initialNSFPFromDefaults = UserDefaults.standard.object(forKey: Self.showNSFPKey) as? Bool
+        self._showNSFP = Published(initialValue: initialNSFPFromDefaults ?? (UserDefaults.standard.object(forKey: Self.showSFWKey) as? Bool ?? true))
+        
+        // Dann showSFW
+        self._showSFW = Published(initialValue: UserDefaults.standard.object(forKey: Self.showSFWKey) as? Bool ?? true)
+        
+        self.showNSFW = UserDefaults.standard.bool(forKey: Self.showNSFWKey)
+        self.showNSFL = UserDefaults.standard.bool(forKey: Self.showNSFLKey)
+        self.showPOL = UserDefaults.standard.bool(forKey: Self.showPOLKey)
+        
+        self.maxImageCacheSizeMB = UserDefaults.standard.object(forKey: Self.maxImageCacheSizeMBKey) as? Int ?? 100
+        let initialRawCommentSortOrder = UserDefaults.standard.integer(forKey: Self.commentSortOrderKey)
+        self.commentSortOrder = CommentSortOrder(rawValue: initialRawCommentSortOrder) ?? .date
+        
+        self.hideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
 
         let initialRawSubtitleActivationMode = UserDefaults.standard.integer(forKey: Self.subtitleActivationModeKey)
-        let initialSubtitleActivationMode = SubtitleActivationMode(rawValue: initialRawSubtitleActivationMode) ?? .automatic
-        let initialSelectedCollectionId = UserDefaults.standard.object(forKey: Self.selectedCollectionIdForFavoritesKey) as? Int
+        self.subtitleActivationMode = SubtitleActivationMode(rawValue: initialRawSubtitleActivationMode) ?? .automatic
+        self.selectedCollectionIdForFavorites = UserDefaults.standard.object(forKey: Self.selectedCollectionIdForFavoritesKey) as? Int
         let initialRawColorScheme = UserDefaults.standard.integer(forKey: Self.colorSchemeSettingKey)
-        let initialColorScheme = ColorSchemeSetting(rawValue: initialRawColorScheme) ?? .system
+        self.colorSchemeSetting = ColorSchemeSetting(rawValue: initialRawColorScheme) ?? .system
         let initialRawGridSize = UserDefaults.standard.integer(forKey: Self.gridSizeSettingKey)
-        var initialGridSize = GridSizeSetting(rawValue: initialRawGridSize) ?? .small
-        if initialGridSize.rawValue > 5 {
-            initialGridSize = .large
-        }
-        let initialResetFiltersOnAppOpen = UserDefaults.standard.bool(forKey: Self.resetFiltersOnAppOpenKey)
-        let initialRawAccentColor = UserDefaults.standard.string(forKey: Self.accentColorChoiceKey)
-        let initialAccentColor = AccentColorChoice(rawValue: initialRawAccentColor ?? AccentColorChoice.blue.rawValue) ?? .blue
-        let initialEnableUnlimitedStyleFeed = UserDefaults.standard.bool(forKey: Self.enableUnlimitedStyleFeedKey) // Bleibt experimentell
-
-        self.isVideoMuted = initialIsVideoMuted
-        self.feedType = initialFeedType
-        self.showSFW = initialShowSFW
-        self.showNSFW = initialShowNSFW
-        self.showNSFL = initialShowNSFL
-        self.showNSFP = initialShowNSFP
-        self.showPOL = initialShowPOL
-        self.maxImageCacheSizeMB = initialMaxImageCacheSizeMB
-        self.commentSortOrder = initialCommentSortOrder
-        // enableExperimentalHideSeen wurde entfernt
-        self.hideSeenItems = initialHideSeenItems
-        self.subtitleActivationMode = initialSubtitleActivationMode
-        self.selectedCollectionIdForFavorites = initialSelectedCollectionId
-        self.colorSchemeSetting = initialColorScheme
-        self.gridSize = initialGridSize
-        self.resetFiltersOnAppOpen = initialResetFiltersOnAppOpen
-        self.accentColorChoice = initialAccentColor
-        self.enableUnlimitedStyleFeed = initialEnableUnlimitedStyleFeed
+        var tempGridSize = GridSizeSetting(rawValue: initialRawGridSize) ?? .small
+        if tempGridSize.rawValue > 5 { tempGridSize = .large }
+        self.gridSize = tempGridSize
         
-        Self.logger.info("AppSettings initialized:")
+        self.enableStartupFilters = UserDefaults.standard.bool(forKey: Self.enableStartupFiltersKey)
+        self.startupFilterSFW = UserDefaults.standard.object(forKey: Self.startupFilterSFWKey) as? Bool ?? true
+        self.startupFilterNSFW = UserDefaults.standard.bool(forKey: Self.startupFilterNSFWKey)
+        self.startupFilterNSFL = UserDefaults.standard.bool(forKey: Self.startupFilterNSFLKey)
+        self.startupFilterPOL = UserDefaults.standard.bool(forKey: Self.startupFilterPOLKey)
+
+        let initialRawAccentColor = UserDefaults.standard.string(forKey: Self.accentColorChoiceKey)
+        self.accentColorChoice = AccentColorChoice(rawValue: initialRawAccentColor ?? AccentColorChoice.blue.rawValue) ?? .blue
+        self.enableUnlimitedStyleFeed = UserDefaults.standard.bool(forKey: Self.enableUnlimitedStyleFeedKey)
+        
+        // Jetzt, da alle Properties initialisiert sind, können wir die Logik ausführen, die `self` verwendet.
+        // Die Logik im didSet von showSFW und feedType, sowie in updateUserLoginStatusForApiFlags
+        // wird nun sicher auf bereits initialisierte Properties zugreifen.
+        // Ein expliziter Aufruf zur Anpassung von showNSFP ist hier nicht mehr nötig, da die didSets dies übernehmen.
+        
+        Self.logger.info("AppSettings initialized (Stage 2 Log):")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
         Self.logger.info("- feedType: \(self.feedType.displayName)")
         Self.logger.info("- showSFW: \(self.showSFW), showNSFW: \(self.showNSFW), showNSFL: \(self.showNSFL), showNSFP: \(self.showNSFP), showPOL: \(self.showPOL)")
-        Self.logger.info("- apiFlags computed (assuming logged out for init): \(self.apiFlags), apiPromoted computed: \(String(describing: self.apiPromoted)), apiShowJunk computed: \(self.apiShowJunk)")
-        // enableExperimentalHideSeen Log entfernt
+        Self.logger.info("- apiFlags computed: \(self.apiFlags), apiPromoted computed: \(String(describing: self.apiPromoted)), apiShowJunk computed: \(self.apiShowJunk)")
         Self.logger.info("- hideSeenItems (actual): \(self.hideSeenItems)")
         Self.logger.info("- subtitleActivationMode: \(self.subtitleActivationMode.displayName)")
         Self.logger.info("- selectedCollectionIdForFavorites: \(self.selectedCollectionIdForFavorites != nil ? String(self.selectedCollectionIdForFavorites!) : "nil")")
         Self.logger.info("- colorSchemeSetting: \(self.colorSchemeSetting.displayName)")
         Self.logger.info("- gridSize: \(self.gridSize.displayName)")
-        Self.logger.info("- resetFiltersOnAppOpen: \(self.resetFiltersOnAppOpen)")
+        Self.logger.info("- enableStartupFilters: \(self.enableStartupFilters)")
+        Self.logger.info("- startupFilters (SFW:\(self.startupFilterSFW), NSFW:\(self.startupFilterNSFW), NSFL:\(self.startupFilterNSFL), POL:\(self.startupFilterPOL))")
         Self.logger.info("- accentColorChoice: \(self.accentColorChoice.displayName)")
-        Self.logger.info("- enableUnlimitedStyleFeed: \(self.enableUnlimitedStyleFeed)") // Bleibt
+        Self.logger.info("- enableUnlimitedStyleFeed: \(self.enableUnlimitedStyleFeed)")
 
 
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
-        // --- MODIFIED: Default für hideSeenItemsKey setzen ---
+        if UserDefaults.standard.object(forKey: Self.showSFWKey) == nil { UserDefaults.standard.set(self.showSFW, forKey: Self.showSFWKey) }
+        if UserDefaults.standard.object(forKey: Self.showNSFPKey) == nil { UserDefaults.standard.set(self.showNSFP, forKey: Self.showNSFPKey) }
         if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
-        // enableExperimentalHideSeenKey wird nicht mehr benötigt
-        // --- END MODIFICATION ---
         if UserDefaults.standard.object(forKey: Self.subtitleActivationModeKey) == nil { UserDefaults.standard.set(self.subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey) }
         if UserDefaults.standard.object(forKey: Self.colorSchemeSettingKey) == nil { UserDefaults.standard.set(self.colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey) }
         if UserDefaults.standard.object(forKey: Self.gridSizeSettingKey) == nil { UserDefaults.standard.set(self.gridSize.rawValue, forKey: Self.gridSizeSettingKey) }
-        if UserDefaults.standard.object(forKey: Self.resetFiltersOnAppOpenKey) == nil { UserDefaults.standard.set(self.resetFiltersOnAppOpen, forKey: Self.resetFiltersOnAppOpenKey) }
+        if UserDefaults.standard.object(forKey: Self.enableStartupFiltersKey) == nil { UserDefaults.standard.set(self.enableStartupFilters, forKey: Self.enableStartupFiltersKey) }
+        if UserDefaults.standard.object(forKey: Self.startupFilterSFWKey) == nil { UserDefaults.standard.set(self.startupFilterSFW, forKey: Self.startupFilterSFWKey) }
+        if UserDefaults.standard.object(forKey: Self.startupFilterNSFWKey) == nil { UserDefaults.standard.set(self.startupFilterNSFW, forKey: Self.startupFilterNSFWKey) }
+        if UserDefaults.standard.object(forKey: Self.startupFilterNSFLKey) == nil { UserDefaults.standard.set(self.startupFilterNSFL, forKey: Self.startupFilterNSFLKey) }
+        if UserDefaults.standard.object(forKey: Self.startupFilterPOLKey) == nil { UserDefaults.standard.set(self.startupFilterPOL, forKey: Self.startupFilterPOLKey) }
         if UserDefaults.standard.object(forKey: Self.accentColorChoiceKey) == nil { UserDefaults.standard.set(self.accentColorChoice.rawValue, forKey: Self.accentColorChoiceKey) }
         if UserDefaults.standard.object(forKey: Self.enableUnlimitedStyleFeedKey) == nil { UserDefaults.standard.set(self.enableUnlimitedStyleFeed, forKey: Self.enableUnlimitedStyleFeedKey) }
 
@@ -443,18 +475,38 @@ class AppSettings: ObservableObject {
         }
     }
 
-    public func applyFilterResetOnAppOpenIfNeeded() {
-        if self.resetFiltersOnAppOpen {
-            AppSettings.logger.info("Applying filter reset as per settings.")
-            self.showSFW = true
-            self.showNSFW = false
-            self.showNSFL = false
-            self.showPOL = false
-            if self.isUserLoggedInForApiFlags {
-                self.showNSFP = true
+    public func applyStartupFiltersIfNeeded() {
+        if self.enableStartupFilters {
+            Self.logger.info("Applying custom startup filters as per settings.")
+            // Wichtig: Zuerst showSFW setzen, damit dessen didSet showNSFP korrekt anpassen kann
+            self.showSFW = self.startupFilterSFW
+            self.showNSFW = self.startupFilterNSFW
+            self.showNSFL = self.startupFilterNSFL
+            self.showPOL = self.startupFilterPOL
+            
+            // Für den Junk-Feed muss showNSFP separat von showSFW betrachtet werden,
+            // aber da wir keinen startupFilterNSFP mehr haben, wird es hier implizit durch
+            // die Logik im didSet von feedType bzw. showSFW (oder den Defaultwert) beeinflusst.
+            // Wenn die Startfilter angewendet werden und der FeedType Junk ist, wird
+            // die Logik in showSFW.didSet und feedType.didSet showNSFP korrekt setzen.
+            // Für den Fall, dass der User Junk als Start-Feed hat und SFW aus, NSFP aber an sein soll,
+            // müsste man die Logik hier oder in FilterView anpassen oder startupFilterNSFP wieder einführen.
+            // Aktuell wird NSFP im Junk-Feed über die generelle `showNSFP` gesteuert, die in `FilterView`
+            // angepasst werden kann.
+            if self.feedType == .junk {
+                // Falls SFW im Startup aus ist, könnte NSFP dennoch aktiv sein, wenn es vorher so eingestellt war.
+                // Da wir keinen separaten Startup-Toggle für NSFP mehr haben, belassen wir den aktuellen
+                // Wert von showNSFP für den Junk-Feed, es sei denn, startupFilterSFW ist an (dann wird showNSFP durch showSFW.didSet ohnehin gesetzt)
+                // Dies ist eine Vereinfachung, da der User NSFP für Junk nicht mehr direkt im Startup-Filter setzen kann.
+                if !self.startupFilterSFW {
+                    // Lasse showNSFP unberührt, es sei denn, es gibt eine spezifischere Anforderung.
+                    // Der User würde dies in der FilterView für Junk anpassen.
+                }
             }
+
+            Self.logger.info("Startup filters applied: SFW:\(self.showSFW), NSFW:\(self.showNSFW), NSFL:\(self.showNSFL), NSFP(actual):\(self.showNSFP), POL:\(self.showPOL)")
         } else {
-            AppSettings.logger.info("Filter reset on app open is disabled.")
+            Self.logger.info("Custom startup filters are disabled.")
         }
     }
 

@@ -60,16 +60,33 @@ struct SettingsView: View {
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
-                Section {
-                    Toggle("SFW bei App-Öffnung", isOn: $settings.resetFiltersOnAppOpen)
-                        .font(UIConstants.bodyFont)
-                } header: {
-                    Text("Feed-Filter")
-                } footer: {
-                    Text("Setzt Inhaltsfilter (NSFW etc.) beim Start/Öffnen der App automatisch auf SFW.")
-                        .font(UIConstants.footnoteFont)
+                // --- MODIFIED: Section "Filter beim App-Start" nur für eingeloggte User ---
+                if authService.isLoggedIn {
+                    Section {
+                        Toggle("Eigene Filter beim App-Start", isOn: $settings.enableStartupFilters)
+                            .font(UIConstants.bodyFont)
+                        
+                        if settings.enableStartupFilters {
+                            Group {
+                                // --- MODIFIED: NSFP Toggle entfernt, Logik in AppSettings ---
+                                Toggle("SFW anzeigen", isOn: $settings.startupFilterSFW)
+                                Toggle("NSFW anzeigen", isOn: $settings.startupFilterNSFW)
+                                Toggle("NSFL anzeigen", isOn: $settings.startupFilterNSFL)
+                                Toggle("POL anzeigen", isOn: $settings.startupFilterPOL)
+                            }
+                            .font(UIConstants.bodyFont)
+                            .padding(.leading)
+                        }
+                    } header: {
+                        Text("Filter beim App-Start")
+                    } footer: {
+                        Text("Legt fest, welche Inhaltsfilter beim Öffnen der App automatisch aktiv sein sollen. SFW beinhaltet bei eingeloggten Nutzern automatisch auch NSFP (Not Safe For Public).")
+                            .font(UIConstants.footnoteFont)
+                    }
+                    .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
                 }
-                .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+                // --- END MODIFICATION ---
+
 
                 Section {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
@@ -135,9 +152,7 @@ struct SettingsView: View {
                 } header: {
                      Text("Anzeige-Verlauf")
                 } footer: {
-                     // --- MODIFIED: Footer-Text angepasst ---
                      Text("Entfernt die Markierungen für bereits angesehene Bilder und Videos. Die Posts erscheinen wieder als 'neu', wenn 'Nur Frisches anzeigen' deaktiviert ist, oder werden wieder im Feed berücksichtigt, wenn es aktiv ist.")
-                     // --- END MODIFICATION ---
                         .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
@@ -243,6 +258,9 @@ struct SettingsView: View {
             if let firstCollectionId = sampleCollections.first?.id {
                 appSettings.selectedCollectionIdForFavorites = firstCollectionId
             }
+            
+            appSettings.enableStartupFilters = true
+
 
             _settings = StateObject(wrappedValue: appSettings)
             _authService = StateObject(wrappedValue: authSvc)
@@ -255,6 +273,16 @@ struct SettingsView: View {
         }
     }
     return SettingsPreviewWrapper()
+}
+
+#Preview("Logged Out") {
+    let appSettings = AppSettings()
+    let authSvc = AuthService(appSettings: appSettings)
+    authSvc.isLoggedIn = false
+
+    return SettingsView()
+        .environmentObject(appSettings)
+        .environmentObject(authSvc)
 }
 
 struct LicenseAndDependenciesView: View {
