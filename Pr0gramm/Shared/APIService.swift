@@ -518,18 +518,19 @@ class APIService {
         }
     }
 
-
-    func fetchFavorites(username: String, collectionKeyword: String, flags: Int, olderThanId: Int? = nil) async throws -> ApiResponse {
-        APIService.logger.debug("Fetching favorites for user \(username), collectionKeyword '\(collectionKeyword)', flags \(flags), olderThan: \(olderThanId ?? -1)")
+    func fetchFavorites(username: String, collectionKeyword: String, flags: Int, olderThanId: Int? = nil, tags: String? = nil) async throws -> ApiResponse {
+        APIService.logger.debug("Fetching favorites for user \(username), collectionKeyword '\(collectionKeyword)', flags \(flags), olderThan: \(olderThanId ?? -1), tags: \(tags ?? "nil")")
         return try await fetchItems(
             flags: flags,
             user: username,
+            tags: tags,
             olderThanId: olderThanId,
             collectionNameForUser: collectionKeyword,
             isOwnCollection: true,
             showJunkParameter: false
         )
     }
+
 
     @available(*, deprecated, message: "Use fetchItems(tags:flags:promoted:olderThanId:showJunkParameter:) instead")
     func searchItems(tags: String, flags: Int) async throws -> ApiResponse {

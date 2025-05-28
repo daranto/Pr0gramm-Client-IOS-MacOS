@@ -29,6 +29,14 @@ struct FavoritesView: View {
     
     @State private var needsDataRefresh = true
 
+    // --- NEW: State für Suche ---
+    @State private var searchText = ""
+    @State private var currentSearchTagForAPI: String? = nil // Für API-Calls und Cache-Key
+    @State private var searchDebounceTimer: Timer? = nil
+    private let searchDebounceInterval: TimeInterval = 0.75 // Sekunden
+    @State private var hasAttemptedSearchSinceAppear = false // Trackt, ob eine Suche (auch erfolglos) gemacht wurde
+    // --- END NEW ---
+
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "FavoritesView")
@@ -46,29 +54,36 @@ struct FavoritesView: View {
     private var favoritesCacheKey: String? {
         guard let username = authService.currentUser?.name.lowercased(),
               let collectionId = settings.selectedCollectionIdForFavorites else { return nil }
-        let selectedCollection = authService.userCollections.first { $0.id == collectionId }
-        guard let keyword = selectedCollection?.keyword else {
+        let selectedCollectionCache = authService.userCollections.first { $0.id == collectionId } // Umbenannt, um Konflikt zu vermeiden
+        
+        var baseKeyPart: String
+        if let keyword = selectedCollectionCache?.keyword {
+            baseKeyPart = "favorites_\(username)_collection_\(keyword.replacingOccurrences(of: " ", with: "_"))"
+        } else {
             FavoritesView.logger.warning("Could not find keyword for selected favorite collection ID \(collectionId). Using ID in cache key.")
-            return "favorites_\(username)_collectionID_\(collectionId)_flags_\(apiFlagsForFavorites)" // Include flags
+            baseKeyPart = "favorites_\(username)_collectionID_\(collectionId)"
         }
-        return "favorites_\(username)_collection_\(keyword.replacingOccurrences(of: " ", with: "_"))_flags_\(apiFlagsForFavorites)" // Include flags
+        
+        var key = "\(baseKeyPart)_flags_\(apiFlagsForFavorites)"
+        
+        if let searchTerm = currentSearchTagForAPI, !searchTerm.isEmpty {
+            let safeSearchTerm = searchTerm.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? searchTerm
+            key += "_search_\(safeSearchTerm)"
+        }
+        return key
     }
 
-    // --- NEW: Computed property for API flags specific to FavoritesView ---
     private var apiFlagsForFavorites: Int {
         let loggedIn = authService.isLoggedIn
-        if !loggedIn { return 1 } // SFW only if not logged in (should not happen for favorites)
+        if !loggedIn { return 1 }
 
-        // Favorites should not be affected by the global feedType being .junk
         var flags = 0
-        if settings.showSFW { flags |= 1; flags |= 8 } // SFW includes NSFP for logged-in users
+        if settings.showSFW { flags |= 1; flags |= 8 }
         if settings.showNSFW { flags |= 2 }
         if settings.showNSFL { flags |= 4 }
         if settings.showPOL { flags |= 16 }
-        // If no filters selected, default to SFW. Otherwise, use the exact combination.
         return flags == 0 ? 1 : flags
     }
-    // --- END NEW ---
 
     private func tabDisplayName(for tab: Tab) -> String {
         switch tab {
@@ -108,20 +123,53 @@ struct FavoritesView: View {
                  #if os(iOS)
                  .navigationBarTitleDisplayMode(.inline)
                  #endif
+                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Favoriten nach Tags filtern")
+                .onSubmit(of: .search) {
+                    FavoritesView.logger.info("Search submitted with: \(searchText)")
+                    searchDebounceTimer?.invalidate()
+                    Task {
+                        await performSearchLogic(isInitialSearch: true)
+                    }
+                }
+                .onChange(of: searchText) { oldValue, newValue in
+                    FavoritesView.logger.info("Search text changed from '\(oldValue)' to '\(newValue)'")
+                    searchDebounceTimer?.invalidate()
+
+                    let trimmedNewValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let previousAPITag = currentSearchTagForAPI?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                    if trimmedNewValue.isEmpty && !previousAPITag.isEmpty {
+                        FavoritesView.logger.info("Search text cleared, loading unfiltered favorites.")
+                        Task {
+                            await performSearchLogic(isInitialSearch: true)
+                        }
+                    } else if !trimmedNewValue.isEmpty && trimmedNewValue.count >= 2 {
+                        FavoritesView.logger.info("Starting debounce timer for search: '\(trimmedNewValue)'")
+                        searchDebounceTimer = Timer.scheduledTimer(withTimeInterval: searchDebounceInterval, repeats: false) { _ in
+                            FavoritesView.logger.info("Debounce timer fired for search: '\(trimmedNewValue)'")
+                            Task {
+                                await performSearchLogic(isInitialSearch: true)
+                            }
+                        }
+                    } else if trimmedNewValue.isEmpty && previousAPITag.isEmpty && !items.isEmpty && hasAttemptedSearchSinceAppear {
+                         FavoritesView.logger.info("Search text empty, no previous API tag, items exist. No API call needed.")
+                    } else if trimmedNewValue.isEmpty && items.isEmpty && hasAttemptedSearchSinceAppear {
+                        FavoritesView.logger.info("Search text empty, items empty, but a search was attempted. Showing appropriate message.")
+                    }
+                }
         }
         .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
             Button("OK") { errorMessage = nil }
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
         .sheet(isPresented: $showingFilterSheet) {
-            // --- MODIFIED: Pass relevantFeedTypeForFilterBehavior as nil ---
             FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
-            // --- END MODIFICATION ---
                 .environmentObject(settings)
                 .environmentObject(authService)
         }
         .onAppear {
             playerManager.configure(settings: settings)
             FavoritesView.logger.info("FavoritesView onAppear. Current tab: \(tabDisplayName(for: navigationService.selectedTab)). needsDataRefresh: \(needsDataRefresh)")
+            hasAttemptedSearchSinceAppear = false
             if navigationService.selectedTab == .favorites && needsDataRefresh {
                 Task {
                     FavoritesView.logger.info("FavoritesView onAppear: Triggering initial data load because tab is active and needs refresh.")
@@ -139,14 +187,43 @@ struct FavoritesView: View {
         .task(id: settings.selectedCollectionIdForFavorites) {
             await handleCollectionChange()
         }
-        // --- MODIFIED: React to global filter changes using apiFlagsForFavorites ---
         .onChange(of: settings.showSFW) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showNSFW) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showNSFL) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showPOL) { _, _ in handleApiFlagsChange() }
-        // --- END MODIFICATION ---
     }
     
+    @MainActor
+    private func performSearchLogic(isInitialSearch: Bool) async {
+        let trimmedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedSearchText.isEmpty && (currentSearchTagForAPI == nil || currentSearchTagForAPI!.isEmpty) {
+            if !hasAttemptedSearchSinceAppear { hasAttemptedSearchSinceAppear = true }
+            if showNoCollectionSelectedMessage || showNoFilterMessage {
+                FavoritesView.logger.info("performSearchLogic: Search text empty, no previous tag, but a message is already shown. Skipping API call.")
+                return
+            }
+            if items.isEmpty {
+                if currentSearchTagForAPI != nil {
+                    currentSearchTagForAPI = nil
+                    needsDataRefresh = true
+                    await performActualDataRefresh()
+                    needsDataRefresh = false
+                }
+            }
+            FavoritesView.logger.info("performSearchLogic: Search text empty and no previous API tag. No API call needed.")
+            return
+        }
+        
+        currentSearchTagForAPI = trimmedSearchText.isEmpty ? nil : trimmedSearchText
+        
+        FavoritesView.logger.info("performSearchLogic: isInitial=\(isInitialSearch). API Tag: '\(currentSearchTagForAPI ?? "nil")'")
+        needsDataRefresh = true
+        await performActualDataRefresh()
+        needsDataRefresh = false
+        hasAttemptedSearchSinceAppear = true
+    }
+
     private func handleTabChange(newTab: Tab) async {
         FavoritesView.logger.info("FavoritesView: selectedTab changed to \(tabDisplayName(for: newTab)).")
         if newTab == .favorites {
@@ -176,6 +253,10 @@ struct FavoritesView: View {
     private func handleCollectionChange() async {
         FavoritesView.logger.info("FavoritesView: selectedCollectionIdForFavorites changed. Setting needsDataRefresh to true.")
         needsDataRefresh = true
+        // --- MODIFIED: Suche zurücksetzen, wenn Sammlung wechselt ---
+        currentSearchTagForAPI = nil
+        searchText = ""
+        // --- END MODIFICATION ---
         if navigationService.selectedTab == .favorites {
             FavoritesView.logger.info("Collection ID changed while Favorites tab is active. Calling performActualDataRefresh.")
             await performActualDataRefresh()
@@ -188,7 +269,7 @@ struct FavoritesView: View {
         needsDataRefresh = true
         if navigationService.selectedTab == .favorites {
             FavoritesView.logger.info("A global filter flag changed while Favorites tab is active. Calling performActualDataRefresh.")
-            Task { // Fire and forget, no need to await here as it's a reaction
+            Task {
                 await performActualDataRefresh()
                 needsDataRefresh = false
             }
@@ -204,6 +285,16 @@ struct FavoritesView: View {
                     noCollectionSelectedContentView
                 } else if showNoFilterMessage {
                     noFilterContentView
+                } else if items.isEmpty && hasAttemptedSearchSinceAppear && !(currentSearchTagForAPI?.isEmpty ?? true) && !isLoading {
+                    ContentUnavailableView {
+                        Label("Keine Ergebnisse", systemImage: "magnifyingglass")
+                    } description: {
+                        // --- MODIFIED: Verwende currentSearchTagForAPI für die Meldung ---
+                        Text("Keine Favoriten für den Tag '\(currentSearchTagForAPI!)' gefunden (oder sie passen nicht zu deinen globalen Filtern).")
+                        // --- END MODIFICATION ---
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if isLoading && items.isEmpty && needsDataRefresh {
                     ProgressView("Lade Favoriten...").frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if items.isEmpty && !isLoading && errorMessage == nil && !showNoFilterMessage && !showNoCollectionSelectedMessage {
@@ -344,8 +435,10 @@ struct FavoritesView: View {
                 isLoadingMore = false
                 showNoFilterMessage = false
                 showNoCollectionSelectedMessage = false
+                currentSearchTagForAPI = nil
+                searchText = ""
             }
-            FavoritesView.logger.info("User logged out, cleared favorites list.")
+            FavoritesView.logger.info("User logged out, cleared favorites list and search.")
         }
     }
 
@@ -358,21 +451,19 @@ struct FavoritesView: View {
             return
         }
         guard let selectedCollectionID = settings.selectedCollectionIdForFavorites,
-              let selectedCollection = authService.userCollections.first(where: { $0.id == selectedCollectionID }),
-              let collectionKeyword = selectedCollection.keyword else {
+              let selectedCollectionInstance = authService.userCollections.first(where: { $0.id == selectedCollectionID }), // Umbenannt um Namenskonflikt zu vermeiden
+              let collectionKeyword = selectedCollectionInstance.keyword else {
             FavoritesView.logger.warning("Cannot refresh favorites: No collection selected in AppSettings or keyword missing for ID \(settings.selectedCollectionIdForFavorites ?? -1).")
             self.items = []; self.errorMessage = nil; self.isLoading = false; self.canLoadMore = false; self.isLoadingMore = false; self.showNoFilterMessage = false; self.showNoCollectionSelectedMessage = true
             return
         }
         self.showNoCollectionSelectedMessage = false
 
-        // --- MODIFIED: Use apiFlagsForFavorites ---
         let currentApiFlags = apiFlagsForFavorites
-        // --- END MODIFICATION ---
         
-        // Check if filters allow any content
-        if currentApiFlags == 0 { // Or a more sophisticated check if 0 could be valid in some edge case
-            FavoritesView.logger.warning("Refresh favorites blocked: No active content filter selected (apiFlagsForFavorites is 0).")
+        let effectiveSearchTerm = currentSearchTagForAPI?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if currentApiFlags == 0 && (effectiveSearchTerm == nil || effectiveSearchTerm!.isEmpty) {
+            FavoritesView.logger.warning("Refresh favorites blocked: No active content filter selected and no search term provided.")
             self.items = []; self.showNoFilterMessage = true; self.canLoadMore = false; self.isLoadingMore = false; self.errorMessage = nil
             return
         }
@@ -394,27 +485,41 @@ struct FavoritesView: View {
         if items.isEmpty {
              if let cached = await settings.loadItemsFromCache(forKey: cacheKey), !cached.isEmpty {
                  self.items = cached.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
-                 FavoritesView.logger.info("Found \(self.items.count) favorite items in cache initially for collection '\(collectionKeyword)'.")
+                 FavoritesView.logger.info("Found \(self.items.count) favorite items in cache initially for collection '\(collectionKeyword)', search: '\(currentSearchTagForAPI ?? "nil")'.")
              }
-             else { FavoritesView.logger.info("No usable cache for favorites in collection '\(collectionKeyword)'.") }
+             else { FavoritesView.logger.info("No usable cache for favorites in collection '\(collectionKeyword)', search: '\(currentSearchTagForAPI ?? "nil")'.") }
         }
         
-        // --- MODIFIED: Pass apiFlagsForFavorites ---
-        FavoritesView.logger.info("Performing API fetch for favorites refresh (Collection Keyword: '\(collectionKeyword)', User: \(username), Flags: \(currentApiFlags))...");
-        // --- END MODIFICATION ---
+        let oldFirstItemId = items.first?.id
+        FavoritesView.logger.info("Performing API fetch for favorites refresh (Collection: '\(collectionKeyword)', User: \(username), Flags: \(currentApiFlags), Tags: '\(currentSearchTagForAPI ?? "nil")')...");
+        
         do {
             let apiResponse = try await apiService.fetchFavorites(
                 username: username,
                 collectionKeyword: collectionKeyword,
-                flags: currentApiFlags // Use calculated flags
+                flags: currentApiFlags,
+                tags: currentSearchTagForAPI
             )
             let fetchedItemsFromAPI = apiResponse.items
-            FavoritesView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) fresh favorites for collection '\(collectionKeyword)'.");
+            // --- MODIFIED: Korrekter Variablenname für Log ---
+            FavoritesView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) fresh favorites for collection '\(collectionKeyword)', search: '\(currentSearchTagForAPI ?? "nil")'.");
+            // --- END MODIFICATION ---
             guard !Task.isCancelled else { FavoritesView.logger.info("Refresh task cancelled."); return }
 
             let contentChanged = items.map { $0.id }.elementsEqual(fetchedItemsFromAPI.map { $0.id }) == false
 
             self.items = fetchedItemsFromAPI.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
+            
+            // --- MODIFIED: Korrekter Variablenname für Log ---
+            if fetchedItemsFromAPI.isEmpty && currentApiFlags != 0 && (currentSearchTagForAPI == nil || currentSearchTagForAPI!.isEmpty) {
+                 self.showNoFilterMessage = true
+                 FavoritesView.logger.info("API returned no items for collection '\(collectionKeyword)' with active global filters (no search term). Setting showNoFilterMessage.")
+            } else if fetchedItemsFromAPI.isEmpty && !(currentSearchTagForAPI?.isEmpty ?? true) {
+                 FavoritesView.logger.info("API returned no items for collection '\(collectionKeyword)' with search term '\(currentSearchTagForAPI!)'.")
+            } else {
+                 self.showNoFilterMessage = false
+            }
+            // --- END MODIFICATION ---
             
             if fetchedItemsFromAPI.isEmpty {
                 self.canLoadMore = false
@@ -424,16 +529,16 @@ struct FavoritesView: View {
                 let hasOlder = apiResponse.hasOlder ?? true
                 if atEnd || !hasOlder {
                     self.canLoadMore = false
-                    FavoritesView.logger.info("API indicates end of feed (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to false.")
+                    FavoritesView.logger.info("API indicates end of feed. Setting canLoadMore to false.")
                 } else {
                     self.canLoadMore = true
-                    FavoritesView.logger.info("API indicates more items might be available for refresh (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+                    FavoritesView.logger.info("API indicates more items might be available. Setting canLoadMore to true.")
                 }
             }
             FavoritesView.logger.info("FavoritesView updated. Total: \(self.items.count). Can load more: \(self.canLoadMore)");
 
             authService.favoritedItemIDs = Set(self.items.map { $0.id })
-            FavoritesView.logger.info("Updated global favorite ID set in AuthService (\(authService.favoritedItemIDs.count) IDs) based on collection '\(collectionKeyword)'.")
+            FavoritesView.logger.info("Updated global favorite ID set in AuthService (\(authService.favoritedItemIDs.count) IDs).")
 
             if !navigationPath.isEmpty && contentChanged {
                 navigationPath = NavigationPath()
@@ -453,18 +558,17 @@ struct FavoritesView: View {
 
     @MainActor
     func loadMoreFavorites() async {
-        // --- MODIFIED: Use apiFlagsForFavorites for content filter check ---
         let currentApiFlags = apiFlagsForFavorites
-        if currentApiFlags == 0 { // Or a more sophisticated check if 0 could be valid
-            FavoritesView.logger.warning("Skipping loadMore: No active filter (apiFlagsForFavorites is 0).")
+        let effectiveSearchTerm = currentSearchTagForAPI?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if currentApiFlags == 0 && (effectiveSearchTerm == nil || effectiveSearchTerm!.isEmpty) {
+            FavoritesView.logger.warning("Skipping loadMore: No active filter and no search term.")
             self.canLoadMore = false; return
         }
-        // --- END MODIFICATION ---
         
         guard authService.isLoggedIn, let username = authService.currentUser?.name else { return }
         guard let selectedCollectionID = settings.selectedCollectionIdForFavorites,
-              let selectedCollection = authService.userCollections.first(where: { $0.id == selectedCollectionID }),
-              let collectionKeyword = selectedCollection.keyword else {
+              let selectedCollectionInstance = authService.userCollections.first(where: { $0.id == selectedCollectionID }), // Umbenannt
+              let collectionKeyword = selectedCollectionInstance.keyword else {
             FavoritesView.logger.warning("Cannot load more favorites: No collection selected or keyword missing.")
             self.canLoadMore = false
             return
@@ -472,30 +576,31 @@ struct FavoritesView: View {
         guard !isLoadingMore && canLoadMore && !isLoading else { return }
         guard let lastItemId = items.last?.id else { return }
         guard let cacheKey = favoritesCacheKey else { return }
-        FavoritesView.logger.info("--- Starting loadMoreFavorites for collection '\(collectionKeyword)' older than \(lastItemId) ---");
+        FavoritesView.logger.info("--- Starting loadMoreFavorites for collection '\(collectionKeyword)', search '\(currentSearchTagForAPI ?? "nil")' older than \(lastItemId) ---");
         self.isLoadingMore = true;
         defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; FavoritesView.logger.info("--- Finished loadMoreFavorites for collection '\(collectionKeyword)' ---") } } }
         do {
             let apiResponse = try await apiService.fetchFavorites(
                 username: username,
                 collectionKeyword: collectionKeyword,
-                flags: currentApiFlags, // Use calculated flags
-                olderThanId: lastItemId
+                flags: currentApiFlags,
+                olderThanId: lastItemId,
+                tags: currentSearchTagForAPI
             )
             let newItems = apiResponse.items
-            FavoritesView.logger.info("Loaded \(newItems.count) more favorite items from API for collection '\(collectionKeyword)'.");
+            FavoritesView.logger.info("Loaded \(newItems.count) more favorite items from API.");
             var appendedItemCount = 0;
             guard !Task.isCancelled else { FavoritesView.logger.info("Load more cancelled."); return }
             guard self.isLoadingMore else { FavoritesView.logger.info("Load more cancelled before UI update."); return };
 
             if newItems.isEmpty {
-                FavoritesView.logger.info("Reached end of favorites feed for collection '\(collectionKeyword)' because API returned 0 items for loadMore.")
+                FavoritesView.logger.info("Reached end of favorites feed.")
                 self.canLoadMore = false
             } else {
                 let currentIDs = Set(self.items.map { $0.id });
                 let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) };
                 if uniqueNewItems.isEmpty {
-                    FavoritesView.logger.warning("All loaded items were duplicates. Assuming end of actual new content for collection '\(collectionKeyword)'.")
+                    FavoritesView.logger.warning("All loaded items were duplicates. Assuming end of actual new content.")
                     self.canLoadMore = false
                 } else {
                     let markedNewItems = uniqueNewItems.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
@@ -507,13 +612,13 @@ struct FavoritesView: View {
                     let hasOlder = apiResponse.hasOlder ?? true
                     if atEnd || !hasOlder {
                         self.canLoadMore = false
-                        FavoritesView.logger.info("API indicates end of feed after loadMore for collection '\(collectionKeyword)' (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
+                        FavoritesView.logger.info("API indicates end of feed after loadMore.")
                     } else {
                         self.canLoadMore = true
-                        FavoritesView.logger.info("API indicates more items might be available after loadMore for collection '\(collectionKeyword)' (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
+                        FavoritesView.logger.info("API indicates more items might be available after loadMore.")
                     }
                     authService.favoritedItemIDs.formUnion(uniqueNewItems.map { $0.id })
-                    FavoritesView.logger.info("Added \(uniqueNewItems.count) IDs to global favorite set (\(authService.favoritedItemIDs.count) total) from collection '\(collectionKeyword)'.")
+                    FavoritesView.logger.info("Added \(uniqueNewItems.count) IDs to global favorite set.")
                 }
             }
 
