@@ -11,15 +11,22 @@ struct UserUploadsView: View {
     let username: String // Username whose uploads to display
 
     @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService // Needed for settings/playerManager config
-    @State var items: [Item] = [] // Keep non-private for binding
+    @EnvironmentObject var authService: AuthService
+    @State var items: [Item] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
+    // --- NEW: NavigationPath für interne Item-Navigation ---
     @State private var navigationPath = NavigationPath()
     @StateObject private var playerManager = VideoPlayerManager()
+
+    @State private var searchText = ""
+    @State private var currentSearchTagForAPI: String? = nil
+    @State private var searchDebounceTimer: Timer? = nil
+    private let searchDebounceInterval: TimeInterval = 0.75
+    @State private var hasAttemptedSearchSinceAppear = false
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserUploadsView")
@@ -34,25 +41,86 @@ struct UserUploadsView: View {
             return Array(repeating: GridItem(.adaptive(minimum: minItemWidth), spacing: 3), count: numberOfColumns)
         }
 
-    private var userUploadsCacheKey: String { return "uploads_\(username.lowercased())_flags_\(settings.apiFlags)" } // Include flags in cache key
+    private var userUploadsCacheKey: String {
+        var key = "uploads_\(username.lowercased())_flags_\(settings.apiFlags)"
+        if let searchTerm = currentSearchTagForAPI, !searchTerm.isEmpty {
+            let safeSearchTerm = searchTerm.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? searchTerm
+            key += "_search_\(safeSearchTerm)"
+        }
+        return key
+    }
 
     var body: some View {
-        Group { uploadsContentView }
-        .navigationTitle("Uploads von \(username)")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) { Button("OK") { errorMessage = nil } } message: { Text(errorMessage ?? "Unbekannter Fehler") }
-        .navigationDestination(for: Item.self) { destinationItem in
-            detailView(for: destinationItem)
+        // --- MODIFIED: Eigener NavigationStack für .searchable und .navigationDestination ---
+        NavigationStack(path: $navigationPath) {
+            uploadsContentView
+                .navigationTitle("Uploads von \(username)")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Uploads nach Tags filtern")
+                .onSubmit(of: .search) {
+                    UserUploadsView.logger.info("Search submitted for user '\(username)' with: \(searchText)")
+                    searchDebounceTimer?.invalidate()
+                    Task {
+                        await performSearchLogic(isInitialSearch: true)
+                    }
+                }
+                // --- NEW: .navigationDestination für Item.self HIER ---
+                .navigationDestination(for: Item.self) { item in
+                    detailView(for: item) // Ruft die lokale detailView Funktion auf
+                }
+                // --- END NEW ---
         }
-        .task { playerManager.configure(settings: settings); await refreshUploads() }
-        .onChange(of: settings.apiFlags) { _, _ in Task { await refreshUploads() } }
+        // --- END MODIFICATION ---
+        .onChange(of: searchText) { oldValue, newValue in
+            UserUploadsView.logger.info("Search text for user '\(username)' changed from '\(oldValue)' to '\(newValue)'")
+            searchDebounceTimer?.invalidate()
+
+            let trimmedNewValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let previousAPITag = currentSearchTagForAPI?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            if trimmedNewValue.isEmpty && !previousAPITag.isEmpty {
+                UserUploadsView.logger.info("Search text cleared for user '\(username)', loading unfiltered uploads.")
+                Task {
+                    await performSearchLogic(isInitialSearch: true)
+                }
+            } else if !trimmedNewValue.isEmpty && trimmedNewValue.count >= 2 {
+                UserUploadsView.logger.info("Starting debounce timer for search (user '\(username)'): '\(trimmedNewValue)'")
+                searchDebounceTimer = Timer.scheduledTimer(withTimeInterval: searchDebounceInterval, repeats: false) { _ in
+                    UserUploadsView.logger.info("Debounce timer fired for search (user '\(username)'): '\(trimmedNewValue)'")
+                    Task {
+                        await performSearchLogic(isInitialSearch: true)
+                    }
+                }
+            } else if trimmedNewValue.isEmpty && previousAPITag.isEmpty && !items.isEmpty && hasAttemptedSearchSinceAppear {
+                 UserUploadsView.logger.info("Search text empty for user '\(username)', no previous API tag, items exist. No API call needed.")
+            } else if trimmedNewValue.isEmpty && items.isEmpty && hasAttemptedSearchSinceAppear {
+                UserUploadsView.logger.info("Search text empty for user '\(username)', items empty, but a search was attempted. Showing appropriate message.")
+            }
+        }
+        .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) { Button("OK") { errorMessage = nil } } message: { Text(errorMessage ?? "Unbekannter Fehler") }
+        .task {
+            playerManager.configure(settings: settings)
+            hasAttemptedSearchSinceAppear = false
+            if items.isEmpty && currentSearchTagForAPI == nil {
+                await refreshUploads()
+            } else if currentSearchTagForAPI != nil {
+                await performSearchLogic(isInitialSearch: true)
+            }
+        }
+        .onChange(of: settings.apiFlags) { _, _ in
+            UserUploadsView.logger.info("API flags changed, resetting search and refreshing uploads for \(username).")
+            currentSearchTagForAPI = nil
+            searchText = ""
+            Task { await refreshUploads() }
+        }
         .onChange(of: settings.seenItemIDs) { _, _ in UserUploadsView.logger.trace("UserUploadsView detected change in seenItemIDs, body will update.") }
     }
 
     @ViewBuilder
     private func detailView(for destinationItem: Item) -> some View {
+        // Diese Funktion wird jetzt vom lokalen .navigationDestination aufgerufen
         if let index = items.firstIndex(where: { $0.id == destinationItem.id }) {
             PagedDetailView(
                 items: $items,
@@ -60,10 +128,12 @@ struct UserUploadsView: View {
                 playerManager: playerManager,
                 loadMoreAction: { Task { await loadMoreUploads() } }
             )
+            .environmentObject(settings) // Weitergeben, da PagedDetailView es braucht
+            .environmentObject(authService)
         } else {
             Text("Fehler: Item \(destinationItem.id) nicht mehr in der Uploads-Liste gefunden.")
                 .onAppear {
-                    UserUploadsView.logger.warning("Navigation destination item \(destinationItem.id) not found in current items list.")
+                    UserUploadsView.logger.warning("Navigation destination item \(destinationItem.id) not found in current items list for user \(username).")
                 }
         }
     }
@@ -86,6 +156,14 @@ struct UserUploadsView: View {
                         .font(UIConstants.bodyFont)
                  }
                  .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if items.isEmpty && hasAttemptedSearchSinceAppear && !(currentSearchTagForAPI?.isEmpty ?? true) && !isLoading {
+                ContentUnavailableView {
+                    Label("Keine Ergebnisse", systemImage: "magnifyingglass")
+                } description: {
+                    Text("\(username) hat keine Uploads für den Tag '\(currentSearchTagForAPI!)' (oder sie passen nicht zu deinen Filtern).")
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if items.isEmpty && !isLoading && errorMessage == nil {
                 Text("\(username) hat noch nichts hochgeladen (oder nichts passt zu deinen Filtern).")
                     .font(UIConstants.bodyFont)
@@ -102,10 +180,12 @@ struct UserUploadsView: View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 3) {
                  ForEach(items) { item in
-                     NavigationLink(value: item) { FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id)) }.buttonStyle(.plain)
+                     NavigationLink(value: item) { // NavigationLink value ist jetzt direkt das Item
+                         FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id))
+                     }.buttonStyle(.plain)
                  }
                  if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
-                     Color.clear.frame(height: 1).onAppear { UserUploadsView.logger.info("Uploads: End trigger appeared."); Task { await loadMoreUploads() } }
+                     Color.clear.frame(height: 1).onAppear { UserUploadsView.logger.info("Uploads for \(username): End trigger appeared."); Task { await loadMoreUploads() } }
                  }
                  if isLoadingMore {
                      ProgressView("Lade mehr...")
@@ -119,10 +199,32 @@ struct UserUploadsView: View {
         .refreshable { await refreshUploads() }
     }
 
+    @MainActor
+    private func performSearchLogic(isInitialSearch: Bool) async {
+        let trimmedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedSearchText.isEmpty && (currentSearchTagForAPI == nil || currentSearchTagForAPI!.isEmpty) {
+            if !hasAttemptedSearchSinceAppear { hasAttemptedSearchSinceAppear = true }
+            if items.isEmpty {
+                if currentSearchTagForAPI != nil {
+                    currentSearchTagForAPI = nil
+                    await refreshUploads()
+                }
+            }
+            UserUploadsView.logger.info("performSearchLogic for user '\(username)': Search text empty, no previous API tag. No API call needed unless list is empty.")
+            return
+        }
+        
+        currentSearchTagForAPI = trimmedSearchText.isEmpty ? nil : trimmedSearchText
+        
+        UserUploadsView.logger.info("performSearchLogic for user '\(username)': isInitial=\(isInitialSearch). API Tag: '\(currentSearchTagForAPI ?? "nil")'")
+        await refreshUploads()
+        hasAttemptedSearchSinceAppear = true
+    }
 
     @MainActor
     func refreshUploads() async {
-        UserUploadsView.logger.info("Refreshing uploads for user: \(username)")
+        UserUploadsView.logger.info("Refreshing uploads for user: \(username), search: '\(currentSearchTagForAPI ?? "nil")'")
         let cacheKey = userUploadsCacheKey
         self.isLoading = true; self.errorMessage = nil
         defer { Task { @MainActor in self.isLoading = false; UserUploadsView.logger.info("Finished uploads refresh process for \(username).") } }
@@ -132,45 +234,48 @@ struct UserUploadsView: View {
         if items.isEmpty {
             initialItemsFromCache = await settings.loadItemsFromCache(forKey: cacheKey)
             if let cached = initialItemsFromCache, !cached.isEmpty {
-                 UserUploadsView.logger.info("Found \(cached.count) uploaded items in cache initially for \(username) with flags \(settings.apiFlags).");
+                 UserUploadsView.logger.info("Found \(cached.count) uploaded items in cache initially for \(username) (search: '\(currentSearchTagForAPI ?? "nil")').");
                  self.items = cached
             } else {
-                 UserUploadsView.logger.info("No usable data cache found for uploads for \(username) with flags \(settings.apiFlags).")
+                 UserUploadsView.logger.info("No usable data cache found for uploads for \(username) (search: '\(currentSearchTagForAPI ?? "nil")').")
             }
         }
-        let oldFirstItemId = items.first?.id
-        UserUploadsView.logger.info("Performing API fetch for uploads refresh (User: \(username), Flags: \(settings.apiFlags))...");
+        
+        let apiTagsParameter = currentSearchTagForAPI
+        UserUploadsView.logger.info("Performing API fetch for uploads refresh (User: \(username), Flags: \(settings.apiFlags), API Tags: '\(apiTagsParameter ?? "nil")')...");
         
         do {
-            let apiResponse = try await apiService.fetchItems(flags: settings.apiFlags, user: username)
+            let apiResponse = try await apiService.fetchItems(flags: settings.apiFlags, user: username, tags: apiTagsParameter)
             let fetchedItemsFromAPI = apiResponse.items
-            UserUploadsView.logger.info("API fetch for uploads completed: \(fetchedItemsFromAPI.count) items for user \(username).")
+            UserUploadsView.logger.info("API fetch for uploads completed: \(fetchedItemsFromAPI.count) items for user \(username).");
             
             await MainActor.run {
+                let oldIDs = Set(self.items.map { $0.id })
+                let newIDs = Set(fetchedItemsFromAPI.map { $0.id })
+                let contentActuallyChanged = oldIDs != newIDs
+
                 self.items = fetchedItemsFromAPI
                 if fetchedItemsFromAPI.isEmpty {
                     self.canLoadMore = false
-                    UserUploadsView.logger.info("Refresh returned 0 items. Setting canLoadMore to false.")
+                    UserUploadsView.logger.info("Refresh returned 0 items for \(username). Setting canLoadMore to false.")
                 } else {
                     let atEnd = apiResponse.atEnd ?? false
-                    let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
-                    if atEnd {
+                    let hasOlder = apiResponse.hasOlder ?? true
+                    if atEnd || !hasOlder {
                         self.canLoadMore = false
-                        UserUploadsView.logger.info("API indicates atEnd=true. Setting canLoadMore to false.")
-                    } else if hasOlder == false { // Nur false, nicht nil
-                        self.canLoadMore = false
-                        UserUploadsView.logger.info("API indicates hasOlder=false. Setting canLoadMore to false.")
+                        UserUploadsView.logger.info("API indicates end of feed for \(username). Setting canLoadMore to false.")
                     } else {
                         self.canLoadMore = true
-                        UserUploadsView.logger.info("API indicates more items might be available for refresh (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+                        UserUploadsView.logger.info("API indicates more items might be available for \(username) (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
                     }
                 }
-                UserUploadsView.logger.info("UserUploadsView updated with \(fetchedItemsFromAPI.count) items directly from API for \(username). Can load more: \(self.canLoadMore)")
+                UserUploadsView.logger.info("UserUploadsView updated with \(fetchedItemsFromAPI.count) items from API for \(username). Can load more: \(self.canLoadMore)")
                 
-                let newFirstItemId = fetchedItemsFromAPI.first?.id
-                if !navigationPath.isEmpty && (initialItemsFromCache == nil || initialItemsFromCache?.count != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId) {
+                // NavigationPath nur zurücksetzen, wenn sich der Inhalt tatsächlich geändert hat
+                // und ein Detail View offen war.
+                if !navigationPath.isEmpty && contentActuallyChanged {
                     navigationPath = NavigationPath()
-                    UserUploadsView.logger.info("Popped navigation due to uploads refresh resulting in different list content.")
+                    UserUploadsView.logger.info("Popped local navigation in UserUploadsView due to content change for \(username).")
                 }
             }
             await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
@@ -201,45 +306,44 @@ struct UserUploadsView: View {
 
     @MainActor
     func loadMoreUploads() async {
-        guard !isLoadingMore && canLoadMore && !isLoading else { UserUploadsView.logger.debug("Skipping loadMoreUploads: State prevents loading."); return }
-        guard let lastItemId = items.last?.id else { UserUploadsView.logger.warning("Skipping loadMoreUploads: No last item found."); return }
-        let cacheKey = userUploadsCacheKey; UserUploadsView.logger.info("--- Starting loadMoreUploads for user \(username) older than \(lastItemId) ---");
+        guard !isLoadingMore && canLoadMore && !isLoading else { UserUploadsView.logger.debug("Skipping loadMoreUploads for \(username): State prevents loading."); return }
+        guard let lastItemId = items.last?.id else { UserUploadsView.logger.warning("Skipping loadMoreUploads for \(username): No last item found."); return }
+        let cacheKey = userUploadsCacheKey; UserUploadsView.logger.info("--- Starting loadMoreUploads for user \(username), search '\(currentSearchTagForAPI ?? "nil")' older than \(lastItemId) ---");
         self.isLoadingMore = true;
         defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; UserUploadsView.logger.info("--- Finished loadMoreUploads for user \(username) ---") } } }
         
+        let apiTagsParameter = currentSearchTagForAPI
+
         do {
-            let apiResponse = try await apiService.fetchItems(flags: settings.apiFlags, user: username, olderThanId: lastItemId)
+            let apiResponse = try await apiService.fetchItems(flags: settings.apiFlags, user: username, tags: apiTagsParameter, olderThanId: lastItemId)
             let newItems = apiResponse.items
-            UserUploadsView.logger.info("Loaded \(newItems.count) more uploaded items from API (requesting older than \(lastItemId)).");
+            UserUploadsView.logger.info("Loaded \(newItems.count) more uploaded items from API for \(username) (requesting older than \(lastItemId)).");
             var appendedItemCount = 0
             
             await MainActor.run {
-                guard self.isLoadingMore else { UserUploadsView.logger.info("Load more cancelled before UI update."); return }
+                guard self.isLoadingMore else { UserUploadsView.logger.info("Load more for \(username) cancelled before UI update."); return }
                 if newItems.isEmpty {
                     UserUploadsView.logger.info("Reached end of uploads feed for \(username) because API returned 0 items for loadMore.")
-                    self.canLoadMore = false // Wenn 0 Items geladen werden, gibt es nichts mehr.
+                    self.canLoadMore = false
                 } else {
                     let currentIDs = Set(self.items.map { $0.id })
                     let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) };
                     if uniqueNewItems.isEmpty {
                         UserUploadsView.logger.warning("All loaded uploaded items (older than \(lastItemId)) were duplicates for \(username). Assuming end of actual new content.")
-                        self.canLoadMore = false // Wenn nur Duplikate kommen, gibt es auch nichts Neues mehr.
+                        self.canLoadMore = false
                     } else {
                         self.items.append(contentsOf: uniqueNewItems)
                         appendedItemCount = uniqueNewItems.count
                         UserUploadsView.logger.info("Appended \(uniqueNewItems.count) unique uploaded items for \(username). Total items: \(self.items.count)")
 
                         let atEnd = apiResponse.atEnd ?? false
-                        let hasOlder = apiResponse.hasOlder ?? true // Default to true if nil
-                        if atEnd {
+                        let hasOlder = apiResponse.hasOlder ?? true
+                        if atEnd || !hasOlder {
                             self.canLoadMore = false
-                            UserUploadsView.logger.info("API indicates atEnd=true after loadMore.")
-                        } else if hasOlder == false { // Nur false, nicht nil
-                            self.canLoadMore = false
-                            UserUploadsView.logger.info("API indicates hasOlder=false after loadMore.")
+                            UserUploadsView.logger.info("API indicates end of feed after loadMore for \(username).")
                         } else {
                             self.canLoadMore = true
-                            UserUploadsView.logger.info("API indicates more items might be available after loadMore (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
+                            UserUploadsView.logger.info("API indicates more items might be available after loadMore for \(username) (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
                         }
                     }
                 }
@@ -258,7 +362,7 @@ struct UserUploadsView: View {
             }
             await authService.logout()
         }
-        catch is CancellationError { UserUploadsView.logger.info("Load more uploads API call cancelled.") }
+        catch is CancellationError { UserUploadsView.logger.info("Load more uploads API call cancelled for \(username).") }
         catch {
             UserUploadsView.logger.error("API fetch failed during loadMoreUploads for \(username): \(error.localizedDescription)");
             await MainActor.run {

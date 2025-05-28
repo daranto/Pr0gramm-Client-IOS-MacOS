@@ -13,16 +13,21 @@ struct CollectionItemsView: View {
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
-    @State var items: [Item] // State, da es von PagedDetailView modifiziert werden kann (z.B. up/down votes)
+    @State var items: [Item]
     @State private var errorMessage: String?
     @State private var isLoading = false
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
     @State private var showNoFilterMessage = false
 
-    @State private var navigationPath = NavigationPath()
     @StateObject private var playerManager = VideoPlayerManager()
     @State private var showingFilterSheet = false
+
+    @State private var searchText = ""
+    @State private var currentSearchTagForAPI: String? = nil
+    @State private var searchDebounceTimer: Timer? = nil
+    private let searchDebounceInterval: TimeInterval = 0.75
+    @State private var hasAttemptedSearchSinceAppear = false
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CollectionItemsView")
@@ -45,15 +50,54 @@ struct CollectionItemsView: View {
 
     private var collectionItemsCacheKey: String {
         let safeKeyword = collection.keyword?.replacingOccurrences(of: " ", with: "_") ?? "id_\(collection.id)"
-        return "collection_\(username.lowercased())_\(safeKeyword)_flags_\(settings.apiFlags)_items"
+        var key = "collection_\(username.lowercased())_\(safeKeyword)_flags_\(settings.apiFlags)_items"
+        if let searchTerm = currentSearchTagForAPI, !searchTerm.isEmpty {
+            let safeSearchTerm = searchTerm.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? searchTerm
+            key += "_search_\(safeSearchTerm)"
+        }
+        return key
     }
 
     var body: some View {
-        content // Verwendet die neue computed property
+        content
         .navigationTitle(collection.name)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Sammlung nach Tags filtern")
+        .onSubmit(of: .search) {
+            CollectionItemsView.logger.info("Search submitted for collection '\(collection.name)' with: \(searchText)")
+            searchDebounceTimer?.invalidate()
+            Task {
+                await performSearchLogic(isInitialSearch: true)
+            }
+        }
+        .onChange(of: searchText) { oldValue, newValue in
+            CollectionItemsView.logger.info("Search text for collection '\(collection.name)' changed from '\(oldValue)' to '\(newValue)'")
+            searchDebounceTimer?.invalidate()
+
+            let trimmedNewValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let previousAPITag = currentSearchTagForAPI?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            if trimmedNewValue.isEmpty && !previousAPITag.isEmpty {
+                CollectionItemsView.logger.info("Search text cleared for collection '\(collection.name)', loading unfiltered items.")
+                Task {
+                    await performSearchLogic(isInitialSearch: true)
+                }
+            } else if !trimmedNewValue.isEmpty && trimmedNewValue.count >= 2 {
+                 CollectionItemsView.logger.info("Starting debounce timer for search (collection '\(collection.name)'): '\(trimmedNewValue)'")
+                searchDebounceTimer = Timer.scheduledTimer(withTimeInterval: searchDebounceInterval, repeats: false) { _ in
+                     CollectionItemsView.logger.info("Debounce timer fired for search (collection '\(collection.name)'): '\(trimmedNewValue)'")
+                    Task {
+                        await performSearchLogic(isInitialSearch: true)
+                    }
+                }
+            } else if trimmedNewValue.isEmpty && previousAPITag.isEmpty && !items.isEmpty && hasAttemptedSearchSinceAppear {
+                 CollectionItemsView.logger.info("Search text empty for collection '\(collection.name)', no previous API tag, items exist. No API call needed.")
+            } else if trimmedNewValue.isEmpty && items.isEmpty && hasAttemptedSearchSinceAppear {
+                 CollectionItemsView.logger.info("Search text empty for collection '\(collection.name)', items empty, but a search was attempted. Showing appropriate message.")
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -64,56 +108,51 @@ struct CollectionItemsView: View {
             }
         }
         .sheet(isPresented: $showingFilterSheet) {
-            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false) // Collections sind nicht Feed-Typ abhängig
+            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
                 .environmentObject(settings)
                 .environmentObject(authService)
         }
         .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
             Button("OK") { errorMessage = nil }
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
-        .navigationDestination(for: Item.self) { destinationItem in
-            detailView(for: destinationItem)
-        }
         .task {
             playerManager.configure(settings: settings)
-            if items.isEmpty { // Nur laden, wenn die Liste leer ist (z.B. bei erstem Erscheinen)
+            hasAttemptedSearchSinceAppear = false
+            if items.isEmpty && currentSearchTagForAPI == nil {
                 await refreshItems()
+            } else if currentSearchTagForAPI != nil {
+                await performSearchLogic(isInitialSearch: true)
             }
         }
-        .onChange(of: settings.apiFlags) { _, _ in Task { await refreshItems() } }
-        .onChange(of: settings.seenItemIDs) { _, _ in CollectionItemsView.logger.trace("CollectionItemsView detected change in seenItemIDs.") }
+        .onChange(of: settings.apiFlags) { _, _ in
+            CollectionItemsView.logger.info("API flags changed, resetting search and refreshing collection '\(collection.name)'.")
+            currentSearchTagForAPI = nil
+            searchText = ""
+            Task { await refreshItems() }
+        }
+        .onChange(of: settings.seenItemIDs) { _, _ in CollectionItemsView.logger.trace("CollectionItemsView detected change in seenItemIDs for collection '\(collection.name)'.") }
     }
 
     @ViewBuilder
-    private var content: some View { // Ausgelagerte Haupt-Logik
+    private var content: some View {
         if isLoading && items.isEmpty {
             loadingView
         } else if let error = errorMessage, items.isEmpty {
             errorView(error: error)
         } else if showNoFilterMessage {
             noFilterContentView
+        } else if items.isEmpty && hasAttemptedSearchSinceAppear && !(currentSearchTagForAPI?.isEmpty ?? true) && !isLoading {
+            ContentUnavailableView {
+                Label("Keine Ergebnisse", systemImage: "magnifyingglass")
+            } description: {
+                Text("Die Sammlung '\(collection.name)' enthält keine Items für den Tag '\(currentSearchTagForAPI!)' (oder sie passen nicht zu deinen Filtern).")
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if items.isEmpty && !isLoading && errorMessage == nil {
             emptyContentView
         } else {
             scrollViewContent
-        }
-    }
-
-
-    @ViewBuilder
-    private func detailView(for destinationItem: Item) -> some View {
-        if let index = items.firstIndex(where: { $0.id == destinationItem.id }) {
-            PagedDetailView(
-                items: $items,
-                selectedIndex: index,
-                playerManager: playerManager,
-                loadMoreAction: { Task { await loadMoreItems() } }
-            )
-        } else {
-            Text("Fehler: Item \(destinationItem.id) nicht mehr in der Sammlung gefunden.")
-                .onAppear {
-                    CollectionItemsView.logger.warning("Navigation destination item \(destinationItem.id) not found in current collection items list.")
-                }
         }
     }
     
@@ -154,7 +193,7 @@ struct CollectionItemsView: View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 3) {
                  ForEach(items) { item in
-                     NavigationLink(value: item) {
+                     NavigationLink(value: item) { // value ist Item, wird von ProfileView gehandhabt
                          FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id))
                      }
                      .buttonStyle(.plain)
@@ -199,10 +238,37 @@ struct CollectionItemsView: View {
         .refreshable { await refreshItems() }
     }
 
+    @MainActor
+    private func performSearchLogic(isInitialSearch: Bool) async {
+        let trimmedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedSearchText.isEmpty && (currentSearchTagForAPI == nil || currentSearchTagForAPI!.isEmpty) {
+            if !hasAttemptedSearchSinceAppear { hasAttemptedSearchSinceAppear = true }
+            if showNoFilterMessage {
+                CollectionItemsView.logger.info("performSearchLogic for collection '\(collection.name)': Search text empty, no previous tag, but 'no filter' message is shown. Skipping API call.")
+                return
+            }
+            if items.isEmpty {
+                if currentSearchTagForAPI != nil {
+                    currentSearchTagForAPI = nil
+                    await refreshItems()
+                }
+            }
+            CollectionItemsView.logger.info("performSearchLogic for collection '\(collection.name)': Search text empty, no previous API tag. No API call needed unless list is empty.")
+            return
+        }
+        
+        currentSearchTagForAPI = trimmedSearchText.isEmpty ? nil : trimmedSearchText
+        
+        CollectionItemsView.logger.info("performSearchLogic for collection '\(collection.name)': isInitial=\(isInitialSearch). API Tag: '\(currentSearchTagForAPI ?? "nil")'")
+        await refreshItems()
+        hasAttemptedSearchSinceAppear = true
+    }
+
     // MARK: - Data Loading Methods
     @MainActor
     func refreshItems() async {
-        CollectionItemsView.logger.info("Refreshing items for collection: '\(collection.name)' (Keyword: \(collection.keyword ?? "N/A")) by user: \(username)")
+        CollectionItemsView.logger.info("Refreshing items for collection: '\(collection.name)' (Keyword: \(collection.keyword ?? "N/A")) by user: \(username), search: '\(currentSearchTagForAPI ?? "nil")'")
         let cacheKey = collectionItemsCacheKey
 
         self.isLoading = true
@@ -210,13 +276,10 @@ struct CollectionItemsView: View {
         self.showNoFilterMessage = false
         defer { Task { @MainActor in self.isLoading = false; CollectionItemsView.logger.info("Finished item refresh process for collection '\(collection.name)'.") } }
 
-        // --- MODIFIED: Use calculated apiFlagsForFavorites from FavoritesView as a reference, or just use global settings.apiFlags ---
-        // Da Collections Items aus allen Bereichen enthalten können, sind die globalen Filter hier meist passender.
         let currentApiFlags = settings.apiFlags
-        // --- END MODIFICATION ---
         
-        if currentApiFlags == 0 { // Prüfen, ob überhaupt etwas angezeigt werden KANN
-            CollectionItemsView.logger.warning("Refresh items for collection '\(collection.name)' blocked: No active content filter selected (apiFlags is 0).")
+        if currentApiFlags == 0 && (currentSearchTagForAPI == nil || currentSearchTagForAPI!.isEmpty) {
+            CollectionItemsView.logger.warning("Refresh items for collection '\(collection.name)' blocked: No active content filter selected (apiFlags is 0) and no search term.")
             self.items = []
             self.showNoFilterMessage = true
             self.canLoadMore = false
@@ -235,86 +298,87 @@ struct CollectionItemsView: View {
         if self.items.isEmpty {
             initialItemsFromCache = await settings.loadItemsFromCache(forKey: cacheKey)
             if let cached = initialItemsFromCache, !cached.isEmpty {
-                 CollectionItemsView.logger.info("Found \(cached.count) items in cache for collection '\(collection.name)' with current filters.");
+                 CollectionItemsView.logger.info("Found \(cached.count) items in cache for collection '\(collection.name)' (search: '\(currentSearchTagForAPI ?? "nil")').");
                  self.items = cached
             } else {
-                 CollectionItemsView.logger.info("No usable data cache found for collection '\(collection.name)' with current filters.")
+                 CollectionItemsView.logger.info("No usable data cache found for collection '\(collection.name)' (search: '\(currentSearchTagForAPI ?? "nil")').")
             }
         }
-        let oldFirstItemId = items.first?.id
-
-        CollectionItemsView.logger.info("Performing API fetch for collection items refresh (Collection Keyword: '\(collectionNameForAPI)', User: \(username), Flags: \(currentApiFlags))...");
+        
+        let apiTagsParameter = currentSearchTagForAPI
+        CollectionItemsView.logger.info("Performing API fetch for collection items refresh (Collection Keyword: '\(collectionNameForAPI)', User: \(username), Flags: \(currentApiFlags), API Tags: '\(apiTagsParameter ?? "nil")')...");
         do {
             let isOwn = authService.currentUser?.name.lowercased() == username.lowercased() && authService.isLoggedIn
             let apiResponse = try await apiService.fetchItems(
                 flags: currentApiFlags,
                 user: username,
+                tags: apiTagsParameter,
                 collectionNameForUser: collectionNameForAPI,
                 isOwnCollection: isOwn
             )
             let fetchedItemsFromAPI = apiResponse.items
-            CollectionItemsView.logger.info("API fetch for collection '\(collection.name)' completed: \(fetchedItemsFromAPI.count) items.")
+            CollectionItemsView.logger.info("API fetch for collection '\(collection.name)' completed: \(fetchedItemsFromAPI.count) items.");
             guard !Task.isCancelled else { return }
 
-            self.items = fetchedItemsFromAPI
-            if fetchedItemsFromAPI.isEmpty && currentApiFlags != 0 { // Zusätzliche Prüfung, ob Filter aktiv sind
-                self.showNoFilterMessage = true // Zeige nur dann die "keine Filter" Nachricht
-                CollectionItemsView.logger.info("API returned no items for collection '\(collection.name)' with active filters. Setting showNoFilterMessage.")
-            } else {
-                self.showNoFilterMessage = false
-            }
-            
-            if fetchedItemsFromAPI.isEmpty {
-                self.canLoadMore = false
-                CollectionItemsView.logger.info("Refresh returned 0 items for collection '\(collection.name)'. Setting canLoadMore to false.")
-            } else {
-                let atEnd = apiResponse.atEnd ?? false
-                let hasOlder = apiResponse.hasOlder ?? true
-                if atEnd {
-                    self.canLoadMore = false
-                    CollectionItemsView.logger.info("API indicates atEnd=true for collection '\(collection.name)'. Setting canLoadMore to false.")
-                } else if hasOlder == false {
-                    self.canLoadMore = false
-                    CollectionItemsView.logger.info("API indicates hasOlder=false for collection '\(collection.name)'. Setting canLoadMore to false.")
+            await MainActor.run {
+                self.items = fetchedItemsFromAPI
+                if fetchedItemsFromAPI.isEmpty && currentApiFlags != 0 && (currentSearchTagForAPI == nil || currentSearchTagForAPI!.isEmpty) {
+                    self.showNoFilterMessage = true
+                    CollectionItemsView.logger.info("API returned no items for collection '\(collection.name)' with active global filters (no search term). Setting showNoFilterMessage.")
+                } else if fetchedItemsFromAPI.isEmpty && !(currentSearchTagForAPI?.isEmpty ?? true) {
+                     CollectionItemsView.logger.info("API returned no items for collection '\(collection.name)' with search term '\(currentSearchTagForAPI!)'. 'showNoFilterMessage' remains false.")
+                     self.showNoFilterMessage = false
                 } else {
-                    self.canLoadMore = true
-                    CollectionItemsView.logger.info("API indicates more items might be available for collection '\(collection.name)' (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+                    self.showNoFilterMessage = false
                 }
-            }
-            CollectionItemsView.logger.info("CollectionItemsView updated with \(fetchedItemsFromAPI.count) items from API for collection '\(collection.name)'. Can load more: \(self.canLoadMore)")
-
-            let newFirstItemId = fetchedItemsFromAPI.first?.id
-            if !navigationPath.isEmpty && (initialItemsFromCache == nil || initialItemsFromCache?.count != fetchedItemsFromAPI.count || oldFirstItemId != newFirstItemId) {
-                navigationPath = NavigationPath()
-                CollectionItemsView.logger.info("Popped navigation due to collection items refresh resulting in different list content.")
+                
+                if fetchedItemsFromAPI.isEmpty {
+                    self.canLoadMore = false
+                    CollectionItemsView.logger.info("Refresh returned 0 items for collection '\(collection.name)'. Setting canLoadMore to false.")
+                } else {
+                    let atEnd = apiResponse.atEnd ?? false
+                    let hasOlder = apiResponse.hasOlder ?? true
+                    if atEnd || !hasOlder {
+                        self.canLoadMore = false
+                        CollectionItemsView.logger.info("API indicates end of feed for collection '\(collection.name)'. Setting canLoadMore to false.")
+                    } else {
+                        self.canLoadMore = true
+                        CollectionItemsView.logger.info("API indicates more items might be available for collection '\(collection.name)' (atEnd=\(atEnd), hasOlder=\(hasOlder)). Setting canLoadMore to true.")
+                    }
+                }
+                CollectionItemsView.logger.info("CollectionItemsView updated with \(fetchedItemsFromAPI.count) items from API for collection '\(collection.name)'. Can load more: \(self.canLoadMore)")
             }
             await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
             await settings.updateCacheSizes()
         }
         catch let error as URLError where error.code == .userAuthenticationRequired {
             CollectionItemsView.logger.error("API fetch for collection items failed: Authentication required (Collection: '\(collection.name)').");
-            self.items = []; self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."; self.canLoadMore = false
+            await MainActor.run {
+                self.items = []; self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."; self.canLoadMore = false
+            }
             await settings.saveItemsToCache([], forKey: cacheKey)
             await authService.logout()
         }
-        catch is CancellationError { CollectionItemsView.logger.info("Collection items API call cancelled.") }
+        catch is CancellationError { CollectionItemsView.logger.info("Collection items API call cancelled for '\(collection.name)'.") }
         catch {
             CollectionItemsView.logger.error("API fetch for collection items failed (Collection: '\(collection.name)'): \(error.localizedDescription)");
-            if self.items.isEmpty { self.errorMessage = "Fehler beim Laden der Sammlung: \(error.localizedDescription)" }
-            else { CollectionItemsView.logger.warning("Showing potentially stale cached collection items data for '\(collection.name)'.") }
-            self.canLoadMore = false
+            await MainActor.run {
+                if self.items.isEmpty { self.errorMessage = "Fehler beim Laden der Sammlung: \(error.localizedDescription)" }
+                else { CollectionItemsView.logger.warning("Showing potentially stale cached collection items data for '\(collection.name)'.") }
+                self.canLoadMore = false
+            }
         }
     }
 
     @MainActor
     func loadMoreItems() async {
-        // --- MODIFIED: Use calculated apiFlagsForFavorites from FavoritesView as a reference, or just use global settings.apiFlags ---
         let currentApiFlags = settings.apiFlags
-        if currentApiFlags == 0 { // Prüfen, ob überhaupt etwas angezeigt werden KANN
-            CollectionItemsView.logger.warning("Skipping loadMoreItems for collection '\(collection.name)': No active content filter selected (apiFlags is 0).")
+        let apiTagsParameter = currentSearchTagForAPI
+
+        if currentApiFlags == 0 && (apiTagsParameter == nil || apiTagsParameter!.isEmpty) {
+            CollectionItemsView.logger.warning("Skipping loadMoreItems for collection '\(collection.name)': No active content filter selected and no search.")
             self.canLoadMore = false; return
         }
-        // --- END MODIFICATION ---
         
         guard !isLoadingMore && canLoadMore && !isLoading else {
             CollectionItemsView.logger.debug("Skipping loadMoreItems for collection '\(collection.name)': State prevents loading.")
@@ -330,15 +394,16 @@ struct CollectionItemsView: View {
         }
 
         let cacheKey = collectionItemsCacheKey
-        CollectionItemsView.logger.info("--- Starting loadMoreItems for collection '\(collection.name)' by \(username) older than \(lastItemId) ---");
+        CollectionItemsView.logger.info("--- Starting loadMoreItems for collection '\(collection.name)' by \(username), search '\(apiTagsParameter ?? "nil")' older than \(lastItemId) ---");
         self.isLoadingMore = true;
         defer { Task { @MainActor in if self.isLoadingMore { self.isLoadingMore = false; CollectionItemsView.logger.info("--- Finished loadMoreItems for collection '\(collection.name)' ---") } } }
 
         do {
             let isOwn = authService.currentUser?.name.lowercased() == username.lowercased() && authService.isLoggedIn
             let apiResponse = try await apiService.fetchItems(
-                flags: currentApiFlags, // Use flags from global settings
+                flags: currentApiFlags,
                 user: username,
+                tags: apiTagsParameter,
                 olderThanId: lastItemId,
                 collectionNameForUser: collectionNameForAPI,
                 isOwnCollection: isOwn
@@ -365,12 +430,9 @@ struct CollectionItemsView: View {
                     
                     let atEnd = apiResponse.atEnd ?? false
                     let hasOlder = apiResponse.hasOlder ?? true
-                    if atEnd {
+                    if atEnd || !hasOlder {
                         self.canLoadMore = false
-                        CollectionItemsView.logger.info("API indicates atEnd=true after loadMore for collection '\(collection.name)'.")
-                    } else if hasOlder == false {
-                        self.canLoadMore = false
-                        CollectionItemsView.logger.info("API indicates hasOlder=false after loadMore for collection '\(collection.name)'.")
+                        CollectionItemsView.logger.info("API indicates end of feed after loadMore for collection '\(collection.name)'.")
                     } else {
                         self.canLoadMore = true
                         CollectionItemsView.logger.info("API indicates more items might be available after loadMore for collection '\(collection.name)' (atEnd=\(atEnd), hasOlder=\(hasOlder)).")
@@ -389,7 +451,7 @@ struct CollectionItemsView: View {
             self.errorMessage = "Sitzung abgelaufen."; self.canLoadMore = false
             await authService.logout()
         }
-        catch is CancellationError { CollectionItemsView.logger.info("Load more collection items API call cancelled.") }
+        catch is CancellationError { CollectionItemsView.logger.info("Load more collection items API call cancelled for '\(collection.name)'.") }
         catch {
             CollectionItemsView.logger.error("API fetch failed during loadMoreItems for collection '\(collection.name)': \(error.localizedDescription)");
             guard !Task.isCancelled else { return }; guard self.isLoadingMore else { return };
@@ -445,7 +507,6 @@ struct CollectionItemsView: View {
 
         init() {
             let tempSettings = AppSettings()
-            // Simulate no filters active by setting all content flags to false
             tempSettings.showSFW = false
             tempSettings.showNSFW = false
             tempSettings.showNSFL = false
@@ -455,7 +516,7 @@ struct CollectionItemsView: View {
             _settings = StateObject(wrappedValue: tempSettings)
             _authService = StateObject(wrappedValue: AuthService(appSettings: tempSettings))
             
-            self.emptyCollection = ApiCollection(id: 103, name: "Leere Sammlung", keyword: "empty", isPublic: 0, isDefault: 0, itemCount: 10) // itemCount > 0 to show the "no filter" message
+            self.emptyCollection = ApiCollection(id: 103, name: "Leere Sammlung", keyword: "empty", isPublic: 0, isDefault: 0, itemCount: 10)
             self.username = "Daranto"
 
             authService.isLoggedIn = true

@@ -123,7 +123,7 @@ struct FavoritesView: View {
                  #if os(iOS)
                  .navigationBarTitleDisplayMode(.inline)
                  #endif
-                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Favoriten nach Tags filtern")
+                 .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Favoriten nach Tags filtern")
                 .onSubmit(of: .search) {
                     FavoritesView.logger.info("Search submitted with: \(searchText)")
                     searchDebounceTimer?.invalidate()

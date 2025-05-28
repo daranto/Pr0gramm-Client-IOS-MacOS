@@ -22,9 +22,7 @@ struct ProfileView: View {
     @State private var showingLoginSheet = false
     @State private var navigationPath = NavigationPath()
 
-    // --- NEW: StateObject für den PlayerManager ---
     @StateObject private var playerManager = VideoPlayerManager()
-    // --- END NEW ---
 
     private let germanDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -58,38 +56,44 @@ struct ProfileView: View {
                  switch target {
                  case .uploads(let username):
                      UserUploadsView(username: username)
-                        .environmentObject(playerManager) // Weitergeben
+                        .environmentObject(playerManager)
                  case .favoritedComments(let username):
                      UserFavoritedCommentsView(username: username)
-                        .environmentObject(playerManager) // Weitergeben
+                        .environmentObject(playerManager)
                  case .allCollections(let username):
                      UserCollectionsListView(username: username)
-                        // .environmentObject(playerManager) // Falls benötigt
                  case .collectionItems(let collection, let username):
                      CollectionItemsView(collection: collection, username: username)
-                        .environmentObject(playerManager) // Weitergeben
+                        .environmentObject(playerManager)
                  case .allUserUploads(let username):
                      UserUploadsView(username: username)
-                        .environmentObject(playerManager) // Weitergeben
+                        .environmentObject(playerManager)
                  case .allUserComments(let username):
                      UserProfileCommentsView(username: username)
-                        .environmentObject(playerManager) // Weitergeben
+                        .environmentObject(playerManager)
                  case .postDetail(let item, let targetCommentID):
                      PagedDetailViewWrapperForItem(
                          item: item,
-                         playerManager: playerManager, // Direkt übergeben
+                         playerManager: playerManager,
                          targetCommentID: targetCommentID
                      )
                  case .userFollowList(let username):
                      UserFollowListView(username: username)
-                        .environmentObject(playerManager) // Weitergeben
+                        .environmentObject(playerManager)
                  }
             }
-            // --- NEW: PlayerManager konfigurieren ---
+            .navigationDestination(for: Item.self) { item in
+                PagedDetailViewWrapperForItem(
+                    item: item,
+                    playerManager: playerManager,
+                    targetCommentID: nil
+                )
+                .environmentObject(settings)
+                .environmentObject(authService)
+            }
             .task {
                 playerManager.configure(settings: settings)
             }
-            // --- END NEW ---
         }
     }
 
@@ -243,10 +247,7 @@ struct ProfileView: View {
     }
 }
 
-// UserMarkView bleibt unverändert
-
 // MARK: - Previews
-// Previews bleiben unverändert, da der PlayerManager intern von ProfileView gehandhabt wird.
 private struct LoggedInProfilePreviewWrapper: View {
     @StateObject private var settings: AppSettings
     @StateObject private var authService: AuthService
