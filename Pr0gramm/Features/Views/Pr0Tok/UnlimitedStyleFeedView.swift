@@ -22,7 +22,7 @@ struct UnlimitedStyleFeedView: View {
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var navigationService: NavigationService
 
-    @StateObject private var playerManager = VideoPlayerManager()
+    @StateObject private var playerManager: VideoPlayerManager
     @StateObject private var keyboardActionHandlerInstance = KeyboardActionHandler()
 
     @State private var items: [Item] = []
@@ -42,7 +42,7 @@ struct UnlimitedStyleFeedView: View {
     @State private var cachedDetails: [Int: ItemsInfoResponse] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
         
-    @State private var tagForSearchSheet: String? = nil // sheet(item:) übernimmt auch das Anzeigen
+    @State private var tagForSearchSheet: String? = nil
     
     @State private var showingAllTagsSheet = false
     @State private var itemForTagSheet: Item? = nil
@@ -63,12 +63,10 @@ struct UnlimitedStyleFeedView: View {
     @State private var currentRefreshFeedTask: Task<Void, Never>? = nil
     @State private var debouncedRefreshTask: Task<Void, Never>? = nil
 
-    // --- MODIFIED: States für Share-Funktionalität ---
-    @State private var itemIDForShareActions: Int? = nil // Speichert die ID des Items, für das der Share-Dialog angezeigt wird
-    @State private var isShareConfirmationDialogPresented: Bool = false // Steuert den ConfirmationDialog
-    // --- END MODIFICATION ---
+    @State private var itemIDForShareActions: Int? = nil
+    @State private var isShareConfirmationDialogPresented: Bool = false
     @State private var itemToShareWrapper: ShareableItemWrapper? = nil
-    @State private var isPreparingShareGlobal = false // Wird jetzt von der Share-Funktion direkt gesetzt
+    @State private var isPreparingShareGlobal = false
     @State private var sharePreparationErrorGlobal: String? = nil
     @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
     @State private var isProcessingFavoriteGlobal: [Int: Bool] = [:]
@@ -77,6 +75,7 @@ struct UnlimitedStyleFeedView: View {
     
     @State private var wasPlayingBeforeFullscreen: Bool = false
     @State private var isCurrentlyInSystemFullscreen: Bool = false
+    @State private var wasPlayingBeforeAppSheet: Bool = false
 
 
     private let dummyStartItemID = -1
@@ -85,307 +84,291 @@ struct UnlimitedStyleFeedView: View {
     }
     
     init() {
+        let pm = VideoPlayerManager()
+        _playerManager = StateObject(wrappedValue: pm)
         _items = State(initialValue: [createDummyStartItem()])
         _activeItemID = State(initialValue: dummyStartItemID)
         _scrolledItemID = State(initialValue: dummyStartItemID)
-        Self.logger.info("UnlimitedStyleFeedView init: Set initial items with dummy, active/scrolled to dummyID.")
+        Self.logger.info("UnlimitedStyleFeedView init: PlayerManager created. Set initial items with dummy, active/scrolled to dummyID.")
+    }
+    
+    // Helper, um das aktive Item zu bekommen
+    private var currentActiveItem: Item? {
+        guard let id = activeItemID else { return nil }
+        return items.first(where: { $0.id == id })
     }
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            VStack(spacing: 0) {
-                feedControls
-                feedContent
+            mainContentWithSheets // Ausgelagerter Inhalt
+        }
+        .onAppear {
+            playerManager.configure(settings: settings)
+            keyboardActionHandlerInstance.selectNextAction = self.selectNextItem
+            keyboardActionHandlerInstance.selectPreviousAction = self.selectPreviousItem
+            keyboardActionHandlerInstance.seekForwardAction = playerManager.seekForward
+            keyboardActionHandlerInstance.seekBackwardAction = playerManager.seekBackward
+            Self.logger.info("UnlimitedStyleFeedView.onAppear - Konfiguration abgeschlossen.")
+            
+            let isInitialOrResetState = items.isEmpty || (items.count == 1 && items.first?.id == dummyStartItemID)
+            
+            if isInitialOrResetState && flagsUsedForLastItemsLoad == nil {
+                 Self.logger.info("UnlimitedStyleFeedView.onAppear: Initial launch or full reset state. Active/Scrolled set to dummy.")
+                 activeItemID = dummyStartItemID
+                 scrolledItemID = dummyStartItemID
+            } else if scrolledItemID == nil {
+                 Self.logger.info("UnlimitedStyleFeedView.onAppear: scrolledItemID was nil, reset to activeItemID or dummyID.")
+                 scrolledItemID = activeItemID ?? dummyStartItemID
             }
-            .navigationTitle("pr0Tok")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        Task {
-                            Self.logger.info("Refresh button tapped for UnlimitedStyleFeedView.")
-                            debouncedRefreshTask?.cancel()
-                            currentRefreshFeedTask?.cancel()
-                            Self.logger.debug("Cancelled previous refresh/debounced task (if any) due to manual refresh.")
-                            
-                            playerManager.cleanupPlayer()
-                            Self.logger.info("Player cleaned up due to manual refresh.")
-                            
-                            await MainActor.run {
-                                self.items = [createDummyStartItem()]
-                                self.cachedDetails = [:]
-                                self.infoLoadingStatus = [:]
-                                self.activeItemID = dummyStartItemID
-                                self.scrolledItemID = dummyStartItemID
-                                self.errorMessage = nil
-                                self.canLoadMore = true
-                                self.isLoadingMore = false
-                                self.isProcessingFavoriteGlobal = [:]
-                                self.flagsUsedForLastItemsLoad = nil
-                                self.feedTypeUsedForLastLoad = nil
-                                self.hideSeenUsedForLastLoad = nil
-                                self.loggedInUsedForLastLoad = nil
-                            }
-                            Self.logger.info("UI and data states reset for manual refresh. Scrolled to dummy.")
-                            
-                            currentRefreshFeedTask = Task {
-                                if Task.isCancelled {
-                                    Self.logger.info("New manual refresh task was cancelled before starting.")
-                                    return
-                                }
-                                Self.logger.info("Starting new manual refresh task.")
-                                await refreshItems()
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "arrow.clockwise.circle")
+        }
+        .task(id: "\(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType.rawValue)-\(settings.hideSeenItems)") {
+            guard !isCurrentlyInSystemFullscreen else {
+                Self.logger.info("Task for parameter change skipped: Currently in system fullscreen.")
+                return
+            }
+
+            let currentApiFlags = settings.apiFlags
+            let currentFeedType = settings.feedType
+            let currentHideSeen = settings.hideSeenItems
+            let currentLoggedIn = authService.isLoggedIn
+
+            Self.logger.info("UnlimitedStyleFeedView .task triggered. Current ID: \(currentLoggedIn)-\(currentApiFlags)-\(currentFeedType.displayName)-\(currentHideSeen). Previous ID: \(loggedInUsedForLastLoad ?? false)-\(flagsUsedForLastItemsLoad ?? -1)-\(feedTypeUsedForLastLoad?.displayName ?? "nil")-\(hideSeenUsedForLastLoad ?? false)")
+
+            let parametersActuallyChanged = (flagsUsedForLastItemsLoad != currentApiFlags ||
+                                             feedTypeUsedForLastLoad != currentFeedType ||
+                                             hideSeenUsedForLastLoad != currentHideSeen ||
+                                             loggedInUsedForLastLoad != currentLoggedIn)
+            
+            let isConsideredInitialLaunch = flagsUsedForLastItemsLoad == nil
+            let performFullResetAndLoad = isConsideredInitialLaunch || parametersActuallyChanged
+
+            if !performFullResetAndLoad && !(items.isEmpty || (items.count == 1 && items.first?.id == dummyStartItemID)) {
+                 Self.logger.info("Task triggered, but no relevant parameters changed and items already loaded. Skipping feed reset and refresh.")
+                 return
+            }
+            Self.logger.info("Parameters changed or initial load. Proceeding with task logic. PerformFullResetAndLoad: \(performFullResetAndLoad)")
+
+            debouncedRefreshTask?.cancel()
+            currentRefreshFeedTask?.cancel()
+            
+            if performFullResetAndLoad {
+                playerManager.cleanupPlayer()
+                await MainActor.run {
+                    self.items = [createDummyStartItem()]
+                    self.cachedDetails = [:]
+                    self.infoLoadingStatus = [:]
+                    self.activeItemID = dummyStartItemID
+                    self.scrolledItemID = dummyStartItemID
+                    self.errorMessage = nil
+                    self.canLoadMore = true
+                    self.isLoadingMore = false
+                    self.isProcessingFavoriteGlobal = [:]
+                }
+                Self.logger.info("UI reset to dummy item before starting debounced refresh due to parameter change or initial load.")
+            }
+
+            debouncedRefreshTask = Task {
+                do {
+                    try await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled else {
+                        Self.logger.info("Debounced refresh task was cancelled during sleep.")
+                        return
                     }
-                    .disabled(isLoadingFeed)
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button { showingFilterSheet = true } label: {
-                        Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                    
+                    if self.isLoadingFeed && !performFullResetAndLoad {
+                         Self.logger.info("Debounced refresh: isLoadingFeed is true (and no full reset), skipping.")
+                         return
                     }
-                }
-            }
-            .sheet(isPresented: $showingFilterSheet) {
-                FilterView(relevantFeedTypeForFilterBehavior: settings.feedType, hideFeedOptions: false, showHideSeenItemsToggle: true)
-                    .environmentObject(settings)
-                    .environmentObject(authService)
-            }
-            .sheet(item: $tagForSearchSheet, onDismiss: { tagForSearchSheet = nil }) { tag in
-                NavigationStack {
-                    TagSearchView(currentSearchTag: .constant(tag))
-                        .environmentObject(settings)
-                        .environmentObject(authService)
-                        .navigationTitle("\(tag)")
-                        .navigationBarTitleDisplayMode(.inline)
-               
-                }
-            }
-            .sheet(item: $itemForTagSheet, onDismiss: { itemForTagSheet = nil }) { itemToShowTagsFor in
-                AllTagsSheetView(
-                    item: itemToShowTagsFor,
-                    cachedDetails: $cachedDetails,
-                    infoLoadingStatus: $infoLoadingStatus,
-                    onTagTapped: { tagString in
-                        self.itemForTagSheet = nil
-                        Task {
-                            try? await Task.sleep(for: .milliseconds(100))
-                            self.tagForSearchSheet = tagString
-                        }
-                    },
-                    onUpvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: 1) } },
-                    onDownvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: -1) } },
-                    onRetryLoadDetails: { Task { await loadItemDetailsIfNeeded(for: itemToShowTagsFor, forceReload: true)} },
-                    onShowAddTagSheet: {
-                        self.itemForTagSheet = nil
-                        Task {
-                            try? await Task.sleep(for: .milliseconds(100))
-                            self.newTagTextForSheet = ""
-                            self.addTagErrorForSheet = nil
-                            self.isAddingTagsInSheet = false
-                            self.showingAddTagSheet = true
-                        }
-                    }
-                )
-                .environmentObject(settings)
-                .environmentObject(authService)
-            }
-            .sheet(isPresented: $showingAddTagSheet) { addTagSheetContent() }
-            .sheet(item: $fullscreenImageTarget) { (target: FullscreenImageTarget) in
-                FullscreenImageView(item: target.item)
-            }
-            .sheet(item: $itemToShareWrapper, onDismiss: {
-                if let tempUrl = itemToShareWrapper?.temporaryFileUrlToDelete {
-                    deleteTemporaryFile(at: tempUrl)
-                }
-            }) { shareableItemWrapper in
-                ShareSheet(activityItems: shareableItemWrapper.itemsToShare)
-            }
-            .sheet(item: $collectionSelectionSheetTarget) { target in
-                CollectionSelectionView(
-                    item: target.item,
-                    onCollectionSelected: { selectedCollection in
-                        Task {
-                            await addActiveItemToSelectedCollection(collection: selectedCollection)
-                        }
-                    }
-                )
-                .environmentObject(authService)
-                .environmentObject(settings)
-                .presentationDetents([.medium, .large])
-            }
-            .onChange(of: collectionSelectionSheetTarget) { oldValue, newValue in
-                Self.logger.info("DEBUG: collectionSelectionSheetTarget changed from \(String(describing: oldValue?.item.id)) to \(String(describing: newValue?.item.id)). Sheet should appear: \(newValue != nil)")
-            }
-            .sheet(item: $userProfileSheetUsername) { usernameToDisplay in
-                UserProfileSheetView(username: usernameToDisplay)
-                    .environmentObject(authService)
-                    .environmentObject(settings)
-                    .environmentObject(playerManager)
-            }
-            .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoadingFeed)) {
-                 Button("OK") { errorMessage = nil }
-            } message: {
-                Text(errorMessage ?? "Unbekannter Fehler")
-            }
-            // --- MODIFIED: ConfirmationDialog für Share-Aktionen ---
-            .confirmationDialog(
-                "Teilen & Kopieren",
-                isPresented: $isShareConfirmationDialogPresented,
-                presenting: itemIDForShareActions // Die ID des Items, für das geteilt werden soll
-            ) { itemIDForDialogActions in // `itemIDForDialogActions` ist jetzt die übergebene `itemIDForShareActions`
-                Button("Medium teilen/speichern") {
-                    Task { await prepareAndShareMedia(for: itemIDForDialogActions) }
-                }
-                Button("Post-Link (pr0gramm.com)") {
-                    copyPostLink(for: itemIDForDialogActions)
-                }
-                Button("Direkter Medien-Link") {
-                    copyMediaLink(for: itemIDForDialogActions)
-                }
-            } message: { itemIDForDialogMessage in
-                Text("Aktionen für Post #\(itemIDForDialogMessage):")
-            }
-            // --- END MODIFICATION ---
-            .onAppear {
-                playerManager.configure(settings: settings)
-                keyboardActionHandlerInstance.selectNextAction = self.selectNextItem
-                keyboardActionHandlerInstance.selectPreviousAction = self.selectPreviousItem
-                keyboardActionHandlerInstance.seekForwardAction = playerManager.seekForward
-                keyboardActionHandlerInstance.seekBackwardAction = playerManager.seekBackward
-                Self.logger.info("UnlimitedStyleFeedView.onAppear - Konfiguration abgeschlossen.")
-                
-                let isInitialOrResetState = items.isEmpty || (items.count == 1 && items.first?.id == dummyStartItemID)
-                
-                if isInitialOrResetState && flagsUsedForLastItemsLoad == nil {
-                     Self.logger.info("UnlimitedStyleFeedView.onAppear: Initial launch or full reset state. Active/Scrolled set to dummy.")
-                     activeItemID = dummyStartItemID
-                     scrolledItemID = dummyStartItemID
-                } else if scrolledItemID == nil {
-                     Self.logger.info("UnlimitedStyleFeedView.onAppear: scrolledItemID was nil, reset to activeItemID or dummyID.")
-                     scrolledItemID = activeItemID ?? dummyStartItemID
-                }
-            }
-            .task(id: "\(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType.rawValue)-\(settings.hideSeenItems)") {
-                guard !isCurrentlyInSystemFullscreen else {
-                    Self.logger.info("Task for parameter change skipped: Currently in system fullscreen.")
-                    return
-                }
 
-                let currentApiFlags = settings.apiFlags
-                let currentFeedType = settings.feedType
-                let currentHideSeen = settings.hideSeenItems
-                let currentLoggedIn = authService.isLoggedIn
-
-                Self.logger.info("UnlimitedStyleFeedView .task triggered. Current ID: \(currentLoggedIn)-\(currentApiFlags)-\(currentFeedType.displayName)-\(currentHideSeen). Previous ID: \(loggedInUsedForLastLoad ?? false)-\(flagsUsedForLastItemsLoad ?? -1)-\(feedTypeUsedForLastLoad?.displayName ?? "nil")-\(hideSeenUsedForLastLoad ?? false)")
-
-                let parametersActuallyChanged = (flagsUsedForLastItemsLoad != currentApiFlags ||
-                                                 feedTypeUsedForLastLoad != currentFeedType ||
-                                                 hideSeenUsedForLastLoad != currentHideSeen ||
-                                                 loggedInUsedForLastLoad != currentLoggedIn)
-                
-                let isConsideredInitialLaunch = flagsUsedForLastItemsLoad == nil
-                let performFullResetAndLoad = isConsideredInitialLaunch || parametersActuallyChanged
-
-                if !performFullResetAndLoad && !(items.isEmpty || (items.count == 1 && items.first?.id == dummyStartItemID)) {
-                     Self.logger.info("Task triggered, but no relevant parameters changed and items already loaded. Skipping feed reset and refresh.")
-                     return
-                }
-                Self.logger.info("Parameters changed or initial load. Proceeding with task logic. PerformFullResetAndLoad: \(performFullResetAndLoad)")
-
-                debouncedRefreshTask?.cancel()
-                currentRefreshFeedTask?.cancel()
-                
-                if performFullResetAndLoad {
-                    playerManager.cleanupPlayer()
-                    await MainActor.run {
-                        self.items = [createDummyStartItem()]
-                        self.cachedDetails = [:]
-                        self.infoLoadingStatus = [:]
-                        self.activeItemID = dummyStartItemID
-                        self.scrolledItemID = dummyStartItemID
-                        self.errorMessage = nil
-                        self.canLoadMore = true
-                        self.isLoadingMore = false
-                        self.isProcessingFavoriteGlobal = [:]
-                    }
-                    Self.logger.info("UI reset to dummy item before starting debounced refresh due to parameter change or initial load.")
-                }
-
-                debouncedRefreshTask = Task {
-                    do {
-                        try await Task.sleep(for: .milliseconds(300))
-                        guard !Task.isCancelled else {
-                            Self.logger.info("Debounced refresh task was cancelled during sleep.")
+                    Self.logger.info("Starting new debounced refresh task.")
+                    currentRefreshFeedTask = Task {
+                        if Task.isCancelled {
+                            Self.logger.info("Actual refresh (from debounced) was cancelled before starting.")
                             return
                         }
-                        
-                        if self.isLoadingFeed && !performFullResetAndLoad {
-                             Self.logger.info("Debounced refresh: isLoadingFeed is true (and no full reset), skipping.")
-                             return
-                        }
-
-                        Self.logger.info("Starting new debounced refresh task.")
-                        currentRefreshFeedTask = Task {
-                            if Task.isCancelled {
-                                Self.logger.info("Actual refresh (from debounced) was cancelled before starting.")
-                                return
-                            }
-                            await refreshItems()
-                        }
-                    } catch is CancellationError {
-                        Self.logger.info("Debounced refresh task (outer) was cancelled.")
-                    } catch {
-                        Self.logger.error("Error in debounced refresh task sleep: \(error.localizedDescription)")
+                        await refreshItems()
                     }
+                } catch is CancellationError {
+                    Self.logger.info("Debounced refresh task (outer) was cancelled.")
+                } catch {
+                    Self.logger.error("Error in debounced refresh task sleep: \(error.localizedDescription)")
                 }
             }
-            .onDisappear {
-                Self.logger.info("UnlimitedStyleFeedView.onDisappear.")
-                if !isCurrentlyInSystemFullscreen {
-                    playerManager.cleanupPlayer()
-                    Self.logger.info("Player cleaned up because view disappeared and not in system fullscreen.")
-                } else {
-                    Self.logger.info("Player NOT cleaned up on disappear: Currently in system fullscreen.")
-                }
-                currentRefreshFeedTask?.cancel()
-                debouncedRefreshTask?.cancel()
+        }
+        .onDisappear {
+            Self.logger.info("UnlimitedStyleFeedView.onDisappear.")
+            if !isCurrentlyInSystemFullscreen {
+                playerManager.cleanupPlayer()
+                Self.logger.info("Player cleaned up because view disappeared and not in system fullscreen.")
+            } else {
+                Self.logger.info("Player NOT cleaned up on disappear: Currently in system fullscreen.")
             }
-            .onChange(of: activeItemID) { oldValue, newValue in
-                guard let newActiveID = newValue, newActiveID != dummyStartItemID else { return }
-                guard let currentIndex = items.firstIndex(where: { $0.id == newActiveID }) else {
-                    Self.logger.warning("activeItemID \(newActiveID) changed, but not found in items. Cannot preload.")
-                    return
+            currentRefreshFeedTask?.cancel()
+            debouncedRefreshTask?.cancel()
+        }
+        .onChange(of: activeItemID) { oldValue, newValue in
+            guard let newActiveID = newValue, newActiveID != dummyStartItemID else { return }
+            guard let currentIndex = items.firstIndex(where: { $0.id == newActiveID }) else {
+                Self.logger.warning("activeItemID \(newActiveID) changed, but not found in items. Cannot preload.")
+                return
+            }
+
+            Self.logger.info("Active item changed to ID: \(newActiveID) at index \(currentIndex). Initiating preloading for N+1 and N+2.")
+
+            let nextIndex = currentIndex + 1
+            if nextIndex < items.count && items[nextIndex].id != dummyStartItemID {
+                let itemToPreloadNext = items[nextIndex]
+                Task {
+                    Self.logger.debug("Preloading details for N+1: Item ID \(itemToPreloadNext.id)")
+                    await loadItemDetailsIfNeeded(for: itemToPreloadNext)
                 }
+            }
 
-                Self.logger.info("Active item changed to ID: \(newActiveID) at index \(currentIndex). Initiating preloading for N+1 and N+2.")
-
-                let nextIndex = currentIndex + 1
-                if nextIndex < items.count && items[nextIndex].id != dummyStartItemID {
-                    let itemToPreloadNext = items[nextIndex]
-                    Task {
-                        Self.logger.debug("Preloading details for N+1: Item ID \(itemToPreloadNext.id)")
-                        await loadItemDetailsIfNeeded(for: itemToPreloadNext)
-                    }
-                }
-
-                let overNextIndex = currentIndex + 2
-                if overNextIndex < items.count && items[overNextIndex].id != dummyStartItemID {
-                    let itemToPreloadOverNext = items[overNextIndex]
-                    Task {
-                        Self.logger.debug("Preloading details for N+2: Item ID \(itemToPreloadOverNext.id)")
-                        await loadItemDetailsIfNeeded(for: itemToPreloadOverNext)
-                    }
+            let overNextIndex = currentIndex + 2
+            if overNextIndex < items.count && items[overNextIndex].id != dummyStartItemID {
+                let itemToPreloadOverNext = items[overNextIndex]
+                Task {
+                    Self.logger.debug("Preloading details for N+2: Item ID \(itemToPreloadOverNext.id)")
+                    await loadItemDetailsIfNeeded(for: itemToPreloadOverNext)
                 }
             }
         }
     }
-    
+
+    // --- Ausgelagerter ViewBuilder für den Hauptinhalt und die Sheets ---
+    @ViewBuilder
+    private var mainContentWithSheets: some View {
+        VStack(spacing: 0) {
+            feedControls
+            feedContent
+        }
+        .navigationTitle("pr0Tok")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    Task {
+                        // ... (Refresh-Logik wie zuvor)
+                        Self.logger.info("Refresh button tapped for UnlimitedStyleFeedView.")
+                        debouncedRefreshTask?.cancel()
+                        currentRefreshFeedTask?.cancel()
+                        playerManager.cleanupPlayer()
+                        await MainActor.run {
+                            self.items = [createDummyStartItem()]
+                            self.activeItemID = dummyStartItemID
+                            self.scrolledItemID = dummyStartItemID
+                            // ... weitere Resets
+                        }
+                        currentRefreshFeedTask = Task { await refreshItems() }
+                    }
+                } label: { Image(systemName: "arrow.clockwise.circle") }
+                .disabled(isLoadingFeed)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { showingFilterSheet = true } label: { Label("Filter", systemImage: "line.3.horizontal.decrease.circle") }
+            }
+        }
+        // Sheets nacheinander, nicht verschachtelt
+        .sheet(isPresented: $showingFilterSheet, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) {
+            FilterView(relevantFeedTypeForFilterBehavior: settings.feedType, hideFeedOptions: false, showHideSeenItemsToggle: true)
+                .environmentObject(settings)
+                .environmentObject(authService)
+        }
+        .onChange(of: showingFilterSheet) { if $1 { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
+
+        .sheet(item: $tagForSearchSheet, onDismiss: { tagForSearchSheet = nil; resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) { tag in
+            NavigationStack {
+                TagSearchView(currentSearchTag: .constant(tag))
+                    .environmentObject(settings)
+                    .environmentObject(authService)
+                    .navigationTitle("\(tag)")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+        .onChange(of: tagForSearchSheet) { if $1 != nil { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
+
+        .sheet(item: $itemForTagSheet, onDismiss: { itemForTagSheet = nil; resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) { itemToShowTagsFor in
+            AllTagsSheetView( item: itemToShowTagsFor, cachedDetails: $cachedDetails, infoLoadingStatus: $infoLoadingStatus,
+                onTagTapped: { tagString in
+                    self.itemForTagSheet = nil
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(100))
+                        pausePlayerForAppSheet(activeItem: currentActiveItem)
+                        self.tagForSearchSheet = tagString
+                    }
+                },
+                onUpvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: 1) } },
+                onDownvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: -1) } },
+                onRetryLoadDetails: { Task { await loadItemDetailsIfNeeded(for: itemToShowTagsFor, forceReload: true)} },
+                onShowAddTagSheet: {
+                    self.itemForTagSheet = nil
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(100))
+                        pausePlayerForAppSheet(activeItem: currentActiveItem)
+                        self.newTagTextForSheet = ""
+                        self.addTagErrorForSheet = nil
+                        self.isAddingTagsInSheet = false
+                        self.showingAddTagSheet = true
+                    }
+                }
+            )
+            .environmentObject(settings)
+            .environmentObject(authService)
+        }
+        .onChange(of: itemForTagSheet) { if $1 != nil { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
+            
+        .sheet(isPresented: $showingAddTagSheet, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) { addTagSheetContent() }
+        .onChange(of: showingAddTagSheet) { if $1 { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
+
+        .sheet(item: $fullscreenImageTarget) { (target: FullscreenImageTarget) in
+            FullscreenImageView(item: target.item)
+        }
+            
+        .sheet(item: $itemToShareWrapper, onDismiss: {
+            if let tempUrl = itemToShareWrapper?.temporaryFileUrlToDelete { deleteTemporaryFile(at: tempUrl) }
+            resumePlayerAfterAppSheet(activeItem: currentActiveItem)
+        }) { shareableItemWrapper in
+            ShareSheet(activityItems: shareableItemWrapper.itemsToShare)
+        }
+            
+        .sheet(item: $collectionSelectionSheetTarget, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) { target in
+            CollectionSelectionView(item: target.item, onCollectionSelected: { selectedCollection in Task { await addActiveItemToSelectedCollection(collection: selectedCollection) } } )
+                .environmentObject(authService)
+                .environmentObject(settings)
+                .presentationDetents([.medium, .large])
+        }
+        .onChange(of: collectionSelectionSheetTarget) { if $1 != nil { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
+            
+        .sheet(item: $userProfileSheetUsername, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) { usernameToDisplay in
+            UserProfileSheetView(username: usernameToDisplay)
+                .environmentObject(authService)
+                .environmentObject(settings)
+                .environmentObject(playerManager)
+        }
+        .onChange(of: userProfileSheetUsername) { if $1 != nil { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
+        .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoadingFeed)) {
+             Button("OK") { errorMessage = nil }
+        } message: { Text(errorMessage ?? "Unbekannter Fehler") }
+        .confirmationDialog( "Teilen & Kopieren", isPresented: $isShareConfirmationDialogPresented, presenting: itemIDForShareActions ) { itemIDForDialogActions in
+            Button("Medium teilen/speichern") { Task { await prepareAndShareMedia(for: itemIDForDialogActions) } }
+            Button("Post-Link (pr0gramm.com)") { copyPostLink(for: itemIDForDialogActions) }
+            Button("Direkter Medien-Link") { copyMediaLink(for: itemIDForDialogActions) }
+        } message: { itemIDForDialogMessage in Text("Aktionen für Post #\(itemIDForDialogMessage):") }
+        .onChange(of: isShareConfirmationDialogPresented) { _, newValue in
+            if !newValue && itemToShareWrapper == nil {
+                resumePlayerAfterAppSheet(activeItem: currentActiveItem)
+            }
+        }
+    }
+
+    // --- Player Pause/Resume Logik mit Parameter ---
     private func handleWillBeginFullscreen() {
         Self.logger.info("handleWillBeginFullscreen called.")
-        self.wasPlayingBeforeFullscreen = playerManager.player?.timeControlStatus == .playing
+        if let activeItem = self.currentActiveItem, activeItem.isVideo { // Sicherer Zugriff
+            self.wasPlayingBeforeFullscreen = playerManager.player?.timeControlStatus == .playing
+        } else {
+            self.wasPlayingBeforeFullscreen = false
+        }
         self.isCurrentlyInSystemFullscreen = true
     }
 
@@ -393,16 +376,12 @@ struct UnlimitedStyleFeedView: View {
         Self.logger.info("handleWillEndFullscreen called.")
         self.isCurrentlyInSystemFullscreen = false
         if self.wasPlayingBeforeFullscreen {
-            if let currentActiveId = self.activeItemID,
-               let currentItem = self.items.first(where: { $0.id == currentActiveId }),
-               currentItem.isVideo {
-                
-                playerManager.setupPlayerIfNeeded(for: currentItem, isFullscreen: false)
-                
+            if let activeItem = self.currentActiveItem, activeItem.isVideo { // Sicherer Zugriff
+                playerManager.setupPlayerIfNeeded(for: activeItem, isFullscreen: false)
                 Task {
                     try? await Task.sleep(for: .milliseconds(100))
-                    if playerManager.playerItemID == currentItem.id && playerManager.player?.timeControlStatus != .playing {
-                        Self.logger.info("Attempting to resume player for item \(currentItem.id) after exiting fullscreen.")
+                    if playerManager.playerItemID == activeItem.id && playerManager.player?.timeControlStatus != .playing {
+                        Self.logger.info("Attempting to resume player for item \(activeItem.id) after exiting fullscreen.")
                         playerManager.player?.play()
                     }
                 }
@@ -411,6 +390,51 @@ struct UnlimitedStyleFeedView: View {
         self.wasPlayingBeforeFullscreen = false
     }
 
+    private func pausePlayerForAppSheet(activeItem: Item?) {
+        guard let currentItem = activeItem,
+              currentItem.isVideo,
+              playerManager.playerItemID == currentItem.id,
+              playerManager.player?.timeControlStatus == .playing,
+              !isCurrentlyInSystemFullscreen
+        else {
+            wasPlayingBeforeAppSheet = false
+            Self.logger.trace("pausePlayerForAppSheet: Conditions not met for item \(activeItem?.id ?? -1), not pausing. isCurrentlyInSystemFullscreen: \(isCurrentlyInSystemFullscreen)")
+            return
+        }
+        playerManager.player?.pause()
+        wasPlayingBeforeAppSheet = true
+        Self.logger.info("Player paused for app sheet presentation (item: \(currentItem.id)).")
+    }
+
+    private func resumePlayerAfterAppSheet(activeItem: Item?) {
+        if wasPlayingBeforeAppSheet {
+            guard let currentItem = activeItem,
+                  currentItem.isVideo,
+                  playerManager.playerItemID == currentItem.id,
+                  !isCurrentlyInSystemFullscreen
+            else {
+                wasPlayingBeforeAppSheet = false
+                Self.logger.debug("Not resuming player after app sheet: Conditions not met. ActiveItem ID: \(activeItem?.id ?? -1), isVideo: \(activeItem?.isVideo ?? false), PlayerItemID: \(playerManager.playerItemID ?? -1), SystemFS: \(isCurrentlyInSystemFullscreen)")
+                return
+            }
+            Task {
+                try? await Task.sleep(for: .milliseconds(100))
+                if self.activeItemID == currentItem.id && playerManager.playerItemID == currentItem.id && !self.isCurrentlyInSystemFullscreen {
+                    playerManager.player?.play()
+                    Self.logger.info("Player resumed after app sheet dismissal (item: \(currentItem.id)).")
+                } else {
+                    Self.logger.debug("Not resuming player after app sheet (post-delay check): Conditions changed. Active: \(self.activeItemID ?? -1), PlayerItemID: \(playerManager.playerItemID ?? -1), SystemFS: \(self.isCurrentlyInSystemFullscreen)")
+                }
+            }
+        }
+        wasPlayingBeforeAppSheet = false
+    }
+    
+    // ... (Rest der Datei bleibt gleich: feedControls, feedContent, prepareItemDataModel, selectNext/PreviousItem, refreshItems, loadMoreItems, etc.) ...
+    // Es ist wichtig, dass alle Aufrufe von pausePlayerForAppSheet und resumePlayerAfterAppSheet
+    // jetzt das `currentActiveItem` übergeben:
+    // z.B. pausePlayerForAppSheet(activeItem: currentActiveItem)
+    // in den .onChange und .onDismiss Blöcken der Sheets.
 
     @ViewBuilder
     private var feedControls: some View {
@@ -453,8 +477,10 @@ struct UnlimitedStyleFeedView: View {
                          onShowUserProfile: { _ in },
                          onWillBeginFullScreenPr0Tok: handleWillBeginFullscreen,
                          onWillEndFullScreenPr0Tok: handleWillEndFullscreen,
-                         onUpvoteItem: {}, // Dummy
-                         onDownvoteItem: {} // Dummy
+                         onUpvoteItem: {},
+                         onDownvoteItem: {},
+                         onWillPresentCommentSheet: { pausePlayerForAppSheet(activeItem: currentActiveItem) },
+                         onDidDismissCommentSheet: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }
                      )
                      .frame(height: 200)
                  }
@@ -479,18 +505,21 @@ struct UnlimitedStyleFeedView: View {
                                 isDummyItem: item.id == dummyStartItemID,
                                 onToggleShowAllTags: {
                                     if item.id != dummyStartItemID {
+                                        pausePlayerForAppSheet(activeItem: item)
                                         self.itemForTagSheet = item
                                     }
                                 },
                                 onUpvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: 1) } },
                                 onDownvoteTag: { tagId in Task { await handleTagVoteTap(tagId: tagId, voteType: -1) } },
                                 onTagTapped: { tagString in
+                                    pausePlayerForAppSheet(activeItem: item)
                                     self.tagForSearchSheet = tagString
                                 },
                                 onRetryLoadDetails: {
                                     Task { await loadItemDetailsIfNeeded(for: item, forceReload: true) }
                                 },
                                 onShowAddTagSheet: {
+                                    pausePlayerForAppSheet(activeItem: item)
                                     newTagTextForSheet = ""
                                     addTagErrorForSheet = nil
                                     isAddingTagsInSheet = false
@@ -508,35 +537,44 @@ struct UnlimitedStyleFeedView: View {
                                 },
                                 onShowCollectionSelection: {
                                     Self.logger.debug("onShowCollectionSelection callback TRIGGERED in UnlimitedStyleFeedView for item.id \(item.id). Current activeItemID: \(String(describing: self.activeItemID))")
+                                    let itemForSheetAction: Item?
                                     if let activeId = self.activeItemID, activeId != dummyStartItemID,
-                                       let currentItem = self.items.first(where: { $0.id == activeId }) {
-                                        Self.logger.info("Long press on favorite for item \(currentItem.id) (active). Setting collectionSelectionSheetTarget.")
-                                        self.collectionSelectionSheetTarget = CollectionSelectionSheetTarget(item: currentItem)
+                                       let currentItemFromState = self.items.first(where: { $0.id == activeId }) {
+                                        itemForSheetAction = currentItemFromState
                                     } else if item.id != dummyStartItemID {
-                                        Self.logger.warning("Long press on favorite for item \(item.id) (cell's item, activeItemID was \(String(describing: self.activeItemID))). Setting collectionSelectionSheetTarget via cell's item.")
-                                        self.collectionSelectionSheetTarget = CollectionSelectionSheetTarget(item: item)
+                                        itemForSheetAction = item
+                                    } else {
+                                        itemForSheetAction = nil
+                                    }
+                                    
+                                    if let finalItemForSheet = itemForSheetAction {
+                                        Self.logger.info("Setting collectionSelectionSheetTarget for item \(finalItemForSheet.id).")
+                                        pausePlayerForAppSheet(activeItem: finalItemForSheet)
+                                        self.collectionSelectionSheetTarget = CollectionSelectionSheetTarget(item: finalItemForSheet)
                                     } else {
                                         Self.logger.warning("onShowCollectionSelection: Could not determine item for collection sheet. activeItemID: \(String(describing: self.activeItemID)), cell's item.id: \(item.id)")
                                     }
                                 },
-                                // --- MODIFIED: `onShareTapped` setzt jetzt die neuen States ---
                                 onShareTapped: {
                                     if item.id != dummyStartItemID {
-                                        self.itemIDForShareActions = item.id // Speichert die ID des Items für den Dialog
-                                        self.isShareConfirmationDialogPresented = true // Triggert den Dialog
+                                        pausePlayerForAppSheet(activeItem: item)
+                                        self.itemIDForShareActions = item.id
+                                        self.isShareConfirmationDialogPresented = true
                                         self.sharePreparationErrorGlobal = nil
                                     }
                                 },
-                                // --- END MODIFICATION ---
                                 isProcessingFavorite: isProcessingFavoriteGlobal[item.id] ?? false,
                                 onShowUserProfile: { username in
                                     Self.logger.info("Request to show profile for \(username) from item \(item.id)")
+                                    pausePlayerForAppSheet(activeItem: item)
                                     self.userProfileSheetUsername = username
                                 },
                                 onWillBeginFullScreenPr0Tok: handleWillBeginFullscreen,
                                 onWillEndFullScreenPr0Tok: handleWillEndFullscreen,
                                 onUpvoteItem: { Task { await handleItemVoteTap(voteType: 1) } },
-                                onDownvoteItem: { Task { await handleItemVoteTap(voteType: -1) } }
+                                onDownvoteItem: { Task { await handleItemVoteTap(voteType: -1) } },
+                                onWillPresentCommentSheet: { pausePlayerForAppSheet(activeItem: item) },
+                                onDidDismissCommentSheet: { resumePlayerAfterAppSheet(activeItem: item) }
                             )
                             .id(item.id)
                             .frame(height: geometry.size.height)
@@ -578,40 +616,40 @@ struct UnlimitedStyleFeedView: View {
                     }
                     
                     if let index = items.firstIndex(where: { $0.id == newId }) {
-                        let currentItem = items[index]
+                        let currentItemFromScroll = items[index]
                         let previousActiveItemID = activeItemID
-                        activeItemID = currentItem.id
+                        activeItemID = currentItemFromScroll.id
 
                         if oldValue != newId || (oldValue == nil && newId != items.first(where: {$0.id != dummyStartItemID})?.id && previousActiveItemID == nil) {
-                            if currentItem.id != dummyStartItemID {
-                                settings.markItemAsSeen(id: currentItem.id)
+                            if currentItemFromScroll.id != dummyStartItemID {
+                                settings.markItemAsSeen(id: currentItemFromScroll.id)
                             }
                         }
                         
-                        if currentItem.id != dummyStartItemID && !isCurrentlyInSystemFullscreen {
-                            playerManager.setupPlayerIfNeeded(for: currentItem, isFullscreen: false)
+                        if currentItemFromScroll.id != dummyStartItemID && !isCurrentlyInSystemFullscreen {
+                            playerManager.setupPlayerIfNeeded(for: currentItemFromScroll, isFullscreen: false)
                             
-                            if currentItem.isVideo && activeItemID == currentItem.id {
-                                if previousActiveItemID != currentItem.id || playerManager.player?.timeControlStatus != .playing {
+                            if currentItemFromScroll.isVideo && activeItemID == currentItemFromScroll.id {
+                                if previousActiveItemID != currentItemFromScroll.id || playerManager.player?.timeControlStatus != .playing {
                                     Task {
                                         try? await Task.sleep(for: .milliseconds(250))
-                                        guard self.activeItemID == currentItem.id, let player = playerManager.player, !self.isCurrentlyInSystemFullscreen else {
-                                            Self.logger.debug("Player start skipped for item \(currentItem.id): activeItemID changed, player nil, or in fullscreen during delay.")
+                                        guard self.activeItemID == currentItemFromScroll.id, let player = playerManager.player, !self.isCurrentlyInSystemFullscreen else {
+                                            Self.logger.debug("Player start skipped for item \(currentItemFromScroll.id): activeItemID changed, player nil, or in fullscreen during delay.")
                                             return
                                         }
                                         if player.status == .readyToPlay {
                                             player.play()
-                                            Self.logger.info("Explicitly started player for (newly) active video item \(currentItem.id) after delay and status check.")
+                                            Self.logger.info("Explicitly started player for (newly) active video item \(currentItemFromScroll.id) after delay and status check.")
                                         } else {
-                                            Self.logger.warning("Player for item \(currentItem.id) not readyToPlay. Status: \(String(describing: player.status)). Play command might not be effective immediately.")
-                                            player.play() // Trotzdem versuchen zu starten
+                                            Self.logger.warning("Player for item \(currentItemFromScroll.id) not readyToPlay. Status: \(String(describing: player.status)). Play command might not be effective immediately.")
+                                            player.play()
                                         }
                                     }
                                 }
                             }
-                            Self.logger.info("Scrolled to item \(currentItem.id), setting active. Details loading will be initiated by activeItemID change.")
+                            Self.logger.info("Scrolled to item \(currentItemFromScroll.id), setting active. Details loading will be initiated by activeItemID change.")
                         } else if isCurrentlyInSystemFullscreen {
-                            Self.logger.info("Scrolled to item \(currentItem.id) but currently in system fullscreen. Player setup deferred.")
+                            Self.logger.info("Scrolled to item \(currentItemFromScroll.id) but currently in system fullscreen. Player setup deferred.")
                         }
                     }
                 }
@@ -842,15 +880,15 @@ struct UnlimitedStyleFeedView: View {
 
         } catch is CancellationError {
             Self.logger.info("RefreshItems (Unlimited) Task API call explicitly cancelled.")
-            if items.count <= 1 { // Nur wenn wirklich leer, sonst könnte es alter Zustand sein
-                await MainActor.run { canLoadMore = true } // Erlaube erneutes Laden
+            if items.count <= 1 {
+                await MainActor.run { canLoadMore = true }
             }
         } catch {
             Self.logger.error("API fetch (Unlimited) failed during refresh: \(error.localizedDescription)")
             if Task.isCancelled { Self.logger.info("RefreshItems (Unlimited) Task cancelled after API error."); return }
             await MainActor.run {
                 self.errorMessage = "Fehler beim Laden: \(error.localizedDescription)"
-                self.canLoadMore = false // Bei Fehler erstmal nicht weiterladen
+                self.canLoadMore = false
             }
         }
     }
@@ -869,8 +907,6 @@ struct UnlimitedStyleFeedView: View {
         }
         guard let finalOlderThanId = olderThanId else {
             Self.logger.warning("Cannot load more (Unlimited): Could not determine 'older' value from real items.")
-            // Potenziell canLoadMore auf false setzen, wenn dies der einzige Weg ist, wie olderThanId nil sein kann
-            // und wir wissen, dass es keine weiteren Items gibt.
             return
         }
         
@@ -880,12 +916,10 @@ struct UnlimitedStyleFeedView: View {
 
         var itemsToAppend: [Item] = []
         var apiSaysNoMoreItemsAfterLoadMore = false
-        var pagesForLoadMore = 0 // Zählt wie viele API Calls für diesen "loadMore" Batch gemacht wurden
+        var pagesForLoadMore = 0
 
         do {
             var currentOlderForLoop = finalOlderThanId
-            // Die Schleife läuft, solange wir noch keine Items zum Anhängen gefunden haben
-            // UND die API nicht explizit sagt, dass es keine weiteren Items gibt.
             while itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore {
                 if Task.isCancelled { throw CancellationError() }
                 pagesForLoadMore += 1
@@ -909,23 +943,23 @@ struct UnlimitedStyleFeedView: View {
                     Self.logger.info("LoadMore: Filtered \(originalCount - pageItems.count) seen items. \(pageItems.count) unseen remaining.")
                 }
                 
-                // Filtere Duplikate basierend auf bereits vorhandenen Items
                 let currentItemIDs = Set(self.items.map { $0.id })
                 let uniqueNewPageItems = pageItems.filter { !currentItemIDs.contains($0.id) }
                 itemsToAppend.append(contentsOf: uniqueNewPageItems)
 
-                // Prüfe, ob die API das Ende signalisiert
                 if apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) {
                     apiSaysNoMoreItemsAfterLoadMore = true
                     Self.logger.info("API indicated end of feed during loadMore loop (Page \(pagesForLoadMore)).")
                 }
                 
-                // Setze `older` für den nächsten Loop-Durchlauf, falls nötig
                 if rawPageItemCount > 0 && !apiSaysNoMoreItemsAfterLoadMore {
-                    // Wichtig: Verwende das letzte Item der *ungefilterten* Antwort für das "older" Flag
-                    currentOlderForLoop = settings.feedType == .promoted ? apiResponse.items.last!.promoted ?? apiResponse.items.last!.id : apiResponse.items.last!.id
+                    if let lastItemInRawPage = apiResponse.items.last {
+                        currentOlderForLoop = settings.feedType == .promoted ? lastItemInRawPage.promoted ?? lastItemInRawPage.id : lastItemInRawPage.id
+                    } else {
+                        apiSaysNoMoreItemsAfterLoadMore = true
+                        Self.logger.warning("rawPageItemCount > 0 but apiResponse.items was empty. Assuming end.")
+                    }
                 } else if rawPageItemCount == 0 && !apiSaysNoMoreItemsAfterLoadMore {
-                    // Wenn API 0 Items liefert, gibt es nichts Älteres mehr
                     apiSaysNoMoreItemsAfterLoadMore = true
                     Self.logger.info("API returned 0 items during loadMore loop (Page \(pagesForLoadMore)), assuming end.")
                 }
@@ -933,18 +967,14 @@ struct UnlimitedStyleFeedView: View {
             
             if Task.isCancelled { Self.logger.info("LoadMoreItems (Unlimited) Task cancelled after API fetch loops."); return }
 
-            // UI Update nach der Schleife
             if !itemsToAppend.isEmpty {
                 self.items.append(contentsOf: itemsToAppend)
                 Self.logger.info("LoadMore: Appended \(itemsToAppend.count) new items.")
             }
             
-            self.canLoadMore = !apiSaysNoMoreItemsAfterLoadMore // Setze basierend auf dem API Signal
+            self.canLoadMore = !apiSaysNoMoreItemsAfterLoadMore
             Self.logger.info("LoadMore (Unlimited) finished. canLoadMore set to \(!apiSaysNoMoreItemsAfterLoadMore) based on API signal (\(apiSaysNoMoreItemsAfterLoadMore)).")
             
-            // Wenn `hideSeenItems` aktiv ist und wir nichts gefunden haben, aber die API nicht am Ende ist,
-            // müssen wir `canLoadMore` eventuell true lassen, damit der Nutzer weiterscrollen kann,
-            // um mehr Seiten zu laden. `apiSaysNoMoreItemsAfterLoadMore` deckt das aber schon ab.
             if itemsToAppend.isEmpty && !apiSaysNoMoreItemsAfterLoadMore && settings.hideSeenItems {
                 Self.logger.info("LoadMore: No new unseen items found after \(pagesForLoadMore) pages, but API might have more. Will allow further loading attempts.")
             }
@@ -954,11 +984,10 @@ struct UnlimitedStyleFeedView: View {
         } catch {
             Self.logger.error("API fetch (Unlimited) failed during loadMore: \(error.localizedDescription)")
              if Task.isCancelled { Self.logger.info("LoadMoreItems (Unlimited) Task cancelled after API error."); return }
-            // Nur Fehler anzeigen, wenn die Liste vorher komplett leer war
             if self.items.filter({ $0.id != dummyStartItemID }).isEmpty {
                 self.errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)"
             }
-            self.canLoadMore = false // Bei Fehler erstmal nicht weiterladen
+            self.canLoadMore = false
         }
     }
 
@@ -966,7 +995,6 @@ struct UnlimitedStyleFeedView: View {
         let itemId = item.id
         if itemId == dummyStartItemID { return }
 
-        // Wenn schon geladen oder gerade am Laden (und nicht forceReload), nichts tun.
         if !forceReload && (infoLoadingStatus[itemId] == .loaded || infoLoadingStatus[itemId] == .loading) {
             return
         }
@@ -976,10 +1004,7 @@ struct UnlimitedStyleFeedView: View {
 
         do {
             let fetchedInfoResponse = try await apiService.fetchItemInfo(itemId: itemId)
-            // Tags nach Confidence sortieren
             let sortedTags = fetchedInfoResponse.tags.sorted { $0.confidence > $1.confidence }
-            // Kommentare nach Standard (Datum) oder Score sortieren, bevor sie gespeichert werden
-            // Hier verwenden wir die aktuelle Sortiereinstellung der App für die initiale Speicherung
             let sortedComments: [ItemComment]
             switch settings.commentSortOrder {
             case .date:
@@ -1004,7 +1029,6 @@ struct UnlimitedStyleFeedView: View {
     private func handleTagVoteTap(tagId: Int, voteType: Int) async {
         guard authService.isLoggedIn else { return }
         await authService.performTagVote(tagId: tagId, voteType: voteType)
-        // UI wird durch @Published in AuthService aktualisiert
     }
     
     private func handleAddTagsToActiveItem(tags: String) async -> String? {
@@ -1027,19 +1051,18 @@ struct UnlimitedStyleFeedView: View {
             try await apiService.addTags(itemId: currentActiveItemID, tags: sanitizedTags, nonce: nonce)
             Self.logger.info("Tags erfolgreich zu Item \(currentActiveItemID) hinzugefügt. Lade Item-Infos neu.")
             
-            // Details neu laden, um die neuen Tags anzuzeigen
             if let itemToReload = items.first(where: { $0.id == currentActiveItemID }) {
                 await loadItemDetailsIfNeeded(for: itemToReload, forceReload: true)
             }
-            return nil // Erfolg
+            return nil
         } catch let error as URLError where error.code == .userAuthenticationRequired {
             Self.logger.error("Fehler beim Hinzufügen von Tags zu Item \(currentActiveItemID): Authentifizierung erforderlich.")
-            await authService.logout() // Ausloggen bei Auth-Fehler
+            await authService.logout()
             return "Sitzung abgelaufen. Bitte erneut anmelden."
         } catch {
             Self.logger.error("Fehler beim Hinzufügen von Tags zu Item \(currentActiveItemID): \(error.localizedDescription)")
             if let nsError = error as NSError?, nsError.domain == "APIService.addTags" {
-                return nsError.localizedDescription // Spezifische API-Fehlermeldung
+                return nsError.localizedDescription
             }
             return "Ein unbekannter Fehler ist aufgetreten."
         }
@@ -1057,10 +1080,8 @@ struct UnlimitedStyleFeedView: View {
 
         let previousVoteStateForRevert = authService.votedItemStates[activeId] ?? 0
         
-        // Perform vote via AuthService (handles optimistic update of votedItemStates)
         await authService.performVote(itemId: activeId, voteType: voteType)
 
-        // Ensure item is still active and exists in list
         guard self.activeItemID == activeId, let updatedItemIndex = items.firstIndex(where: { $0.id == activeId }) else {
              Self.logger.warning("Could not update local item score for \(activeId): activeItemID changed or item no longer in list.")
              return
@@ -1068,24 +1089,21 @@ struct UnlimitedStyleFeedView: View {
 
         let newVoteState = authService.votedItemStates[activeId] ?? 0
 
-        // Only update local item scores if the effective vote state changed
         if previousVoteStateForRevert != newVoteState {
             var deltaUp = 0
             var deltaDown = 0
             
-            // Logic to determine change in up/down votes based on previous and new state
-            if newVoteState == 1 && previousVoteStateForRevert == 0 { deltaUp = 1 } // New upvote
-            else if newVoteState == 1 && previousVoteStateForRevert == -1 { deltaUp = 1; deltaDown = -1 } // Changed from downvote to upvote
-            else if newVoteState == 0 && previousVoteStateForRevert == 1 { deltaUp = -1 } // Removed upvote
-            else if newVoteState == 0 && previousVoteStateForRevert == -1 { deltaDown = -1 } // Removed downvote
-            else if newVoteState == -1 && previousVoteStateForRevert == 0 { deltaDown = 1 } // New downvote
-            else if newVoteState == -1 && previousVoteStateForRevert == 1 { deltaUp = -1; deltaDown = 1 } // Changed from upvote to downvote
+            if newVoteState == 1 && previousVoteStateForRevert == 0 { deltaUp = 1 }
+            else if newVoteState == 1 && previousVoteStateForRevert == -1 { deltaUp = 1; deltaDown = -1 }
+            else if newVoteState == 0 && previousVoteStateForRevert == 1 { deltaUp = -1 }
+            else if newVoteState == 0 && previousVoteStateForRevert == -1 { deltaDown = -1 }
+            else if newVoteState == -1 && previousVoteStateForRevert == 0 { deltaDown = 1 }
+            else if newVoteState == -1 && previousVoteStateForRevert == 1 { deltaUp = -1; deltaDown = 1 }
 
-            // Apply changes to the local item copy
             var mutableItem = items[updatedItemIndex]
             mutableItem.up += deltaUp
             mutableItem.down += deltaDown
-            items[updatedItemIndex] = mutableItem // Update the item in the @State list
+            items[updatedItemIndex] = mutableItem
             Self.logger.info("Updated local item \(activeId) score based on final vote state: deltaUp=\(deltaUp), deltaDown=\(deltaDown). New counts: up=\(items[updatedItemIndex].up), down=\(items[updatedItemIndex].down)")
         } else {
             Self.logger.info("Vote state for item \(activeId) did not effectively change. No local score update.")
@@ -1141,7 +1159,7 @@ struct UnlimitedStyleFeedView: View {
                                 addTagErrorForSheet = errorMsg
                                 Self.logger.error("Fehler beim Hinzufügen von Tags (Sheet): \(errorMsg)")
                             } else {
-                                showingAddTagSheet = false // Schließe bei Erfolg
+                                showingAddTagSheet = false
                             }
                             isAddingTagsInSheet = false
                         }
@@ -1172,7 +1190,7 @@ struct UnlimitedStyleFeedView: View {
         let currentIsFavorited = authService.favoritedItemIDs.contains(item.id)
         let targetFavoriteState = !currentIsFavorited
 
-        isProcessingFavoriteGlobal[item.id] = true // Mark as processing
+        isProcessingFavoriteGlobal[item.id] = true
 
         do {
             if targetFavoriteState {
@@ -1181,24 +1199,21 @@ struct UnlimitedStyleFeedView: View {
                 try await apiService.removeFromCollection(itemId: item.id, collectionId: collectionId, nonce: nonce)
             }
 
-            // Update global state in AuthService
             if targetFavoriteState { authService.favoritedItemIDs.insert(item.id) }
             else { authService.favoritedItemIDs.remove(item.id) }
             
-            // Clear local cache for favorites
             await settings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collectionId)
             Self.logger.info("Favorite toggled successfully for item \(item.id) in collection \(collectionId). Cache cleared.")
         } catch {
             Self.logger.error("Failed to toggle favorite for item \(item.id): \(error.localizedDescription)")
-            // Revert optimistic UI update
             if targetFavoriteState { authService.favoritedItemIDs.remove(item.id) }
             else { authService.favoritedItemIDs.insert(item.id) }
 
             if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
-                 await authService.logout() // Logout on auth error
+                 await authService.logout()
             }
         }
-        isProcessingFavoriteGlobal[item.id] = false // Unmark as processing
+        isProcessingFavoriteGlobal[item.id] = false
     }
 
     private func addActiveItemToSelectedCollection(collection: ApiCollection) async {
@@ -1219,11 +1234,9 @@ struct UnlimitedStyleFeedView: View {
 
         do {
             try await apiService.addToCollection(itemId: item.id, collectionId: collection.id, nonce: nonce)
-            // If this collection is the "default" favorite one, update the global state
             if collection.id == settings.selectedCollectionIdForFavorites {
                 authService.favoritedItemIDs.insert(item.id)
             }
-            // Clear cache for the *specific collection* it was added to
             await settings.clearFavoritesCache(username: authService.currentUser?.name, collectionId: collection.id)
             Self.logger.info("Successfully added item \(item.id) to collection '\(collection.name)'. Cache cleared.")
         } catch {
@@ -1235,7 +1248,6 @@ struct UnlimitedStyleFeedView: View {
         isProcessingFavoriteGlobal[item.id] = false
     }
 
-    // --- MODIFIED: Share-Funktionen mit itemID Parameter ---
     private func prepareAndShareMedia(for itemID: Int) async {
         guard let item = items.first(where: { $0.id == itemID }) else {
             Self.logger.error("Cannot share media: Item with ID \(itemID) not found.")
@@ -1275,10 +1287,9 @@ struct UnlimitedStyleFeedView: View {
                 await MainActor.run { itemToShareWrapper = ShareableItemWrapper(itemsToShare: [localUrl], temporaryFileUrlToDelete: localUrl) }
             } catch {
                 await MainActor.run { sharePreparationErrorGlobal = "Video-Download fehlgeschlagen." }
-                // Fallback: URL teilen
                 await MainActor.run { itemToShareWrapper = ShareableItemWrapper(itemsToShare: [mediaUrl]) }
             }
-        } else { // Für Bilder
+        } else {
             let result: Result<ImageLoadingResult, KingfisherError> = await withCheckedContinuation { continuation in
                 KingfisherManager.shared.downloader.downloadImage(with: mediaUrl, options: nil) { result in
                     continuation.resume(returning: result)
@@ -1313,7 +1324,6 @@ struct UnlimitedStyleFeedView: View {
             Self.logger.warning("Failed to copy Media-Link: URL was nil for item \(itemID)")
         }
     }
-    // --- END MODIFICATION ---
 
 
     private func deleteTemporaryFile(at url: URL) {
@@ -1329,11 +1339,12 @@ struct UnlimitedStyleFeedView: View {
     }
 }
 
+
 #Preview {
     let settings = AppSettings()
     let authService = AuthService(appSettings: settings)
     let navService = NavigationService()
-    settings.enableUnlimitedStyleFeed = true // Wichtig für die Anzeige dieser View
+    settings.enableUnlimitedStyleFeed = true
     
     return UnlimitedStyleFeedView()
         .environmentObject(settings)

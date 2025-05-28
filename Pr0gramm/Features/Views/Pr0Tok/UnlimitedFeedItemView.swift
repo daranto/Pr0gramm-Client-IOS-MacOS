@@ -91,6 +91,10 @@ struct UnlimitedFeedItemView: View {
     let onWillEndFullScreenPr0Tok: () -> Void
     let onUpvoteItem: () -> Void
     let onDownvoteItem: () -> Void
+    // --- NEW: Callbacks für Sheet-Präsentation ---
+    let onWillPresentCommentSheet: () -> Void
+    let onDidDismissCommentSheet: () -> Void
+    // --- END NEW ---
 
 
     var item: Item { itemData.item }
@@ -103,9 +107,8 @@ struct UnlimitedFeedItemView: View {
 
 
     var body: some View {
-        // --- MODIFIED: Hauptstruktur mit Overlay für UI-Elemente ---
         mediaContentLayer
-            .contentShape(Rectangle()) // Video/Bild soll Taps für Controls/Fullscreen empfangen
+            .contentShape(Rectangle())
             .onTapGesture {
                 if item.isVideo {
                     Self.logger.trace("Media content (video) tapped, AVPlayerViewController should handle controls visibility.")
@@ -114,13 +117,13 @@ struct UnlimitedFeedItemView: View {
                     onShowFullscreenImage(item)
                 }
             }
-            .allowsHitTesting(!isDummyItem) // Dummy Item soll nicht tappbar sein
-            .overlay(alignment: .bottom) { // UI-Elemente als Overlay
+            .allowsHitTesting(!isDummyItem)
+            .overlay(alignment: .bottom) {
                 if !isDummyItem {
                     bottomControlsOverlay
                 }
             }
-            .overlay(alignment: .top) { // Subtitle Error als Overlay oben
+            .overlay(alignment: .top) {
                  if isActive && item.isVideo && playerManager.playerItemID == item.id {
                     if let subtitleError = playerManager.subtitleError, !subtitleError.isEmpty {
                         VStack {
@@ -138,7 +141,7 @@ struct UnlimitedFeedItemView: View {
                     }
                  }
             }
-            .overlay(alignment: .bottom) { // Subtitles als Overlay unten, aber über der Control Bar
+            .overlay(alignment: .bottom) {
                  if isActive && item.isVideo && playerManager.playerItemID == item.id {
                     if let subtitle = playerManager.currentSubtitleText, !subtitle.isEmpty {
                         Text(subtitle)
@@ -150,15 +153,13 @@ struct UnlimitedFeedItemView: View {
                              .cornerRadius(6)
                              .multilineTextAlignment(.center)
                              .padding(.horizontal)
-                             // Positioniere es relativ zur geschätzten Höhe der Control Bar und Safe Area
                              .padding(.bottom, bottomUIBarHeightEstimate + (bottomSafeAreaPadding > 0 ? bottomSafeAreaPadding : 10) + 10)
                              .transition(.opacity.animation(.easeInOut(duration: 0.2)))
                              .id("pr0tok_subtitle_\(item.id)_\(subtitle)")
-                             .allowsHitTesting(false) // Subtitles sollen keine Taps abfangen
+                             .allowsHitTesting(false)
                     }
                 }
             }
-            // --- END MODIFICATION ---
             .background(Color.black)
             .clipped()
             .onChange(of: isActive) { oldValue, newValue in
@@ -185,7 +186,9 @@ struct UnlimitedFeedItemView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showingCommentsSheet) {
+            // --- MODIFIED: onDismiss Callback hinzugefügt ---
+            .sheet(isPresented: $showingCommentsSheet, onDismiss: onDidDismissCommentSheet) {
+            // --- END MODIFICATION ---
                 ItemCommentsSheetView(
                     itemId: itemData.item.id,
                     uploaderName: itemData.item.user,
@@ -198,27 +201,22 @@ struct UnlimitedFeedItemView: View {
             }
     }
 
-    // --- KORRIGIERTE VERSION: Ausgelagerte View für die unteren Controls ---
     @ViewBuilder
     private var bottomControlsOverlay: some View {
-        // Verwende ZStack mit expliziter Ausrichtung für bessere Touch-Kontrolle
         ZStack(alignment: .bottom) {
-            // Gradient-Hintergrund - nur für visuellen Effekt, blockiert keine Touches
             LinearGradient(
                 gradient: Gradient(colors: [Color.black.opacity(0.0), Color.black.opacity(0.0)]),
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .allowsHitTesting(false) // Wichtig: Gradient soll keine Touches abfangen
+            .allowsHitTesting(false)
             
-            // Content mit präziser Positionierung am unteren Rand
             HStack(alignment: .bottom) {
-                // Linke Seite: Username und Tags
                 VStack(alignment: .leading, spacing: 8) {
                     Text("@\(item.user)")
                         .font(.headline).bold()
                         .foregroundColor(.white)
-                        .background(Color.clear) // Explizit transparenter Hintergrund
+                        .background(Color.clear)
                         .onTapGesture {
                             if !item.user.isEmpty {
                                 Self.logger.info("Username '\(item.user)' tapped. Calling onShowUserProfile.")
@@ -227,25 +225,23 @@ struct UnlimitedFeedItemView: View {
                         }
                     
                     tagSection
-                        .background(Color.clear) // Explizit transparenter Hintergrund
+                        .background(Color.clear)
                 }
                 .padding(.leading)
-                .background(Color.clear) // Explizit transparenter Hintergrund
+                .background(Color.clear)
                 
                 Spacer(minLength: 0)
-                    .allowsHitTesting(false) // Spacer soll definitiv keine Touches abfangen
+                    .allowsHitTesting(false)
                 
-                // Rechte Seite: Interaction Buttons
                 interactionButtons
                     .padding(.trailing)
-                    .background(Color.clear) // Explizit transparenter Hintergrund
+                    .background(Color.clear)
             }
             .padding(.bottom, bottomSafeAreaPadding + 10)
-            .background(Color.clear) // Explizit transparenter Hintergrund für den HStack
+            .background(Color.clear)
         }
-        .allowsHitTesting(true) // ZStack selbst soll Hit-Testing erlauben, aber nur für seine Kinder
+        .allowsHitTesting(true)
     }
-    // --- END KORRIGIERTE VERSION ---
     
     private var bottomSafeAreaPadding: CGFloat {
         (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
@@ -357,7 +353,7 @@ struct UnlimitedFeedItemView: View {
                     }
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                    .background(Color.clear) // Explizit transparenter Hintergrund
+                    .background(Color.clear)
                 } else if itemData.totalTagCount > 0 {
                     Text("Keine Tags (Filter?).")
                         .font(.caption)
@@ -451,6 +447,9 @@ struct UnlimitedFeedItemView: View {
                 
                 Button {
                     Self.logger.info("Kommentar-Button getippt für Item \(item.id)")
+                    // --- MODIFIED: Callback aufrufen, bevor Sheet gezeigt wird ---
+                    onWillPresentCommentSheet()
+                    // --- END MODIFICATION ---
                     showingCommentsSheet = true
                 } label: {
                     Image(systemName: "message").font(.title).foregroundColor(.white)
@@ -462,7 +461,7 @@ struct UnlimitedFeedItemView: View {
                     Image(systemName: "arrowshape.turn.up.right").font(.title).foregroundColor(.white)
                 }
             }
-            .background(Color.clear) // Explizit transparenter Hintergrund für die VStack
+            .background(Color.clear)
         }
     }
 }
@@ -509,7 +508,11 @@ struct UnlimitedFeedItemView: View {
         onWillBeginFullScreenPr0Tok: { print("Preview: Will begin fullscreen") },
         onWillEndFullScreenPr0Tok: { print("Preview: Will end fullscreen") },
         onUpvoteItem: { print("Preview: Upvote Item") },
-        onDownvoteItem: { print("Preview: Downvote Item") }
+        onDownvoteItem: { print("Preview: Downvote Item") },
+        // --- NEW: Dummy Callbacks für Preview ---
+        onWillPresentCommentSheet: { print("Preview: Will present comment sheet") },
+        onDidDismissCommentSheet: { print("Preview: Did dismiss comment sheet") }
+        // --- END NEW ---
     )
     .environmentObject(settings)
     .environmentObject(authService)
