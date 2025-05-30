@@ -24,7 +24,7 @@ struct ProfileNavigationValue: Hashable, Identifiable {
 
 enum InboxViewMessageType: Int, CaseIterable, Identifiable {
     case comments = 1
-    case stelzes = 4 // Intern "follow" oder "follows"
+    case stelzes = 4
     case notifications = 2
     case privateMessages = 3
 
@@ -49,10 +49,10 @@ enum InboxViewMessageType: Int, CaseIterable, Identifiable {
         return baseDisplayName
     }
     
-    var apiTypeStringForFilter: String? { // Wird für direkten API-Call nicht verwendet, aber für Konsistenz
+    var apiTypeStringForFilter: String? {
         switch self {
         case .comments: return "comment"
-        case .stelzes: return "follow" // API liefert vielleicht "follow" oder "follows"
+        case .stelzes: return "follow"
         case .notifications: return "notification"
         case .privateMessages: return nil
         }
@@ -77,6 +77,8 @@ enum InboxViewMessageType: Int, CaseIterable, Identifiable {
 struct InboxView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
+    @EnvironmentObject var navigationService: NavigationService
+    
     @State var messages: [InboxMessage] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
@@ -147,7 +149,8 @@ struct InboxView: View {
             .task {
                 playerManager.configure(settings: settings)
             }
-            .onChange(of: selectedMessageType) { _, newType in
+            .onChange(of: selectedMessageType) { oldType, newType in
+                InboxView.logger.info("Selected message type changed to: \(newType.baseDisplayName)")
                 currentRefreshTask?.cancel()
                 currentLoadMoreTask?.cancel()
                 Task {
@@ -155,15 +158,40 @@ struct InboxView: View {
                     conversationNavigationValue = nil
                     profileNavigationValue = nil
                     
-                    messages = []
-                    conversations = []
+                    messages = [] // Clear previous messages
+                    conversations = [] // Clear previous conversations
                     await refreshCurrentTabData()
+                    // --- MODIFIED: Zähler nach Typ-Wechsel aktualisieren ---
+                    await updateCountsAfterViewingType(newType)
+                    // --- END MODIFICATION ---
                 }
             }
-            .task(id: authService.isLoggedIn) {
+            .task(id: authService.isLoggedIn) { // Wird bei Login-Status-Änderung und beim Erscheinen getriggert
+                 InboxView.logger.info("InboxView .task(id: authService.isLoggedIn) triggered. isLoggedIn: \(authService.isLoggedIn)")
                  currentRefreshTask?.cancel()
                  currentLoadMoreTask?.cancel()
                  await refreshCurrentTabData()
+                 
+                 if authService.isLoggedIn && navigationService.selectedTab == .inbox {
+                     // --- MODIFIED: Zähler nach initialem Laden des aktuellen Typs aktualisieren ---
+                     await updateCountsAfterViewingType(selectedMessageType)
+                     // --- END MODIFICATION ---
+                 } else if !authService.isLoggedIn {
+                     await BackgroundNotificationManager.shared.appDidBecomeActiveOrInboxViewed(currentTotalUnread: 0)
+                 }
+            }
+            .onChange(of: navigationService.selectedTab) { oldTab, newTab in
+                if newTab == .inbox {
+                    InboxView.logger.info("InboxView became active tab.")
+                    // --- MODIFIED: Zähler beim Aktivwerden des Tabs aktualisieren ---
+                    Task {
+                        // Kurze Verzögerung, um sicherzustellen, dass die Daten für den aktuellen Typ geladen sind,
+                        // bevor die Zähler aktualisiert werden.
+                        try? await Task.sleep(for: .milliseconds(300))
+                        await updateCountsAfterViewingType(selectedMessageType)
+                    }
+                    // --- END MODIFICATION ---
+                }
             }
             .navigationDestination(item: $itemNavigationValue) { navValue in
                  PagedDetailViewWrapperForItem(
@@ -220,16 +248,42 @@ struct InboxView: View {
         return message?.lowercased().contains("cancelled") == true
     }
     
+    // --- NEW: Helper zum Aktualisieren der Zähler nach dem Anzeigen eines Typs ---
+    private func updateCountsAfterViewingType(_ viewedType: InboxViewMessageType) async {
+        InboxView.logger.info("Updating counts after viewing type: \(viewedType.baseDisplayName)")
+        // Der Server markiert beim Abrufen als gelesen. Ein erneuter fetchUnreadCounts holt den neuesten Stand.
+        await authService.fetchUnreadCounts()
+        // Den BackgroundManager informieren, damit der Badge und der interne Zähler korrekt sind.
+        await BackgroundNotificationManager.shared.appDidBecomeActiveOrInboxViewed(currentTotalUnread: authService.unreadInboxTotal)
+        InboxView.logger.info("Finished updating counts. Total unread: \(authService.unreadInboxTotal)")
+    }
+    // --- END NEW ---
+
     private func refreshCurrentTabData() async {
         currentRefreshTask?.cancel()
         currentLoadMoreTask?.cancel()
 
         if authService.isLoggedIn {
-            await authService.fetchUnreadCounts()
+            // `fetchUnreadCounts` wird jetzt in `updateCountsAfterViewingType` aufgerufen,
+            // nachdem die spezifischen Daten geladen wurden.
+            // await authService.fetchUnreadCounts() // Entfernt von hier
+
             if selectedMessageType == .privateMessages {
-                currentRefreshTask = Task { await refreshConversations() }
+                currentRefreshTask = Task {
+                    await refreshConversations()
+                    // --- NEW: Zähler nach Laden der Konversationen aktualisieren ---
+                    if Task.isCancelled { return } // Frühzeitiger Abbruch prüfen
+                    await updateCountsAfterViewingType(.privateMessages) // Oder allgemein den aktuellen Typ
+                    // --- END NEW ---
+                }
             } else {
-                currentRefreshTask = Task { await refreshMessages(forType: selectedMessageType) }
+                currentRefreshTask = Task {
+                    await refreshMessages(forType: selectedMessageType)
+                    // --- NEW: Zähler nach Laden der Nachrichten aktualisieren ---
+                    if Task.isCancelled { return } // Frühzeitiger Abbruch prüfen
+                    await updateCountsAfterViewingType(selectedMessageType)
+                    // --- END NEW ---
+                }
             }
         } else {
             messages = []
@@ -265,7 +319,11 @@ struct InboxView: View {
                 onRefresh: {
                     currentRefreshTask?.cancel()
                     currentLoadMoreTask?.cancel()
-                    currentRefreshTask = Task { await refreshConversations() }
+                    currentRefreshTask = Task {
+                        await refreshConversations()
+                        if Task.isCancelled { return }
+                        await updateCountsAfterViewingType(.privateMessages)
+                    }
                 },
                 onSelectConversation: { username in
                     self.conversationNavigationValue = ConversationNavigationValue(conversationPartnerName: username)
@@ -289,7 +347,11 @@ struct InboxView: View {
                  Button("Erneut versuchen") {
                      currentRefreshTask?.cancel()
                      currentLoadMoreTask?.cancel()
-                     currentRefreshTask = Task { await refreshMessages(forType: selectedMessageType) }
+                     currentRefreshTask = Task {
+                         await refreshMessages(forType: selectedMessageType)
+                         if Task.isCancelled { return }
+                         await updateCountsAfterViewingType(selectedMessageType)
+                     }
                 }
              }
              .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -337,10 +399,14 @@ struct InboxView: View {
                 }
             }
             .listStyle(.plain)
-            .refreshable {
+            .refreshable { // Pull-to-Refresh
                 currentRefreshTask?.cancel()
                 currentLoadMoreTask?.cancel()
-                currentRefreshTask = Task { await refreshMessages(forType: selectedMessageType) }
+                currentRefreshTask = Task {
+                    await refreshMessages(forType: selectedMessageType)
+                    if Task.isCancelled { return }
+                    await updateCountsAfterViewingType(selectedMessageType)
+                }
             }
             .environment(\.openURL, OpenURLAction { url in
                 if let (itemID, commentID) = parsePr0grammLink(url: url) {
@@ -741,22 +807,18 @@ struct InboxMessageRow: View {
         return Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date())
     }
 
-    // Enthält jetzt keine Präfixe mehr
     private var titleText: String {
         let messageType = message.type?.lowercased()
         switch messageType {
         case "comment": return message.name ?? "Kommentar"
         case "notification": return "Systemnachricht"
-        case "message": return message.name ?? "Nachricht" // Name des Absenders bei PMs
-        case "follow", "follows": return message.name ?? "Unbekannter User" // Username des Posters
+        case "message": return message.name ?? "Nachricht"
+        case "follow", "follows": return message.name ?? "Unbekannter User"
         default: return "Unbekannt (\(message.type ?? "N/A"))"
         }
     }
     
     private var senderNameText: String? {
-        // Für die neue Struktur ist diese Property nicht mehr direkt nötig,
-        // da der Username jetzt Teil von titleText ist oder direkt im Layout platziert wird.
-        // Wir behalten sie aber, falls wir sie später für eine andere Logik brauchen.
         let messageType = message.type?.lowercased()
         if messageType == "follow" || messageType == "follows" || messageType == "comment" || messageType == "message" {
             return message.name
@@ -800,7 +862,6 @@ struct InboxMessageRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             let messageType = message.type?.lowercased()
-            // Thumbnail
             if (messageType == "comment" || messageType == "follow" || messageType == "follows"), let thumbUrl = message.itemThumbnailUrl {
                 KFImage(thumbUrl)
                     .resizable().placeholder { Color.gray.opacity(0.1) }
@@ -812,26 +873,21 @@ struct InboxMessageRow: View {
                     .foregroundColor(.secondary)
             }
 
-            // Inhalt
             VStack(alignment: .leading, spacing: 4) {
-                // Erste Zeile: Titel/Name und Zeitstempel
                 HStack {
-                    // Mark-Farbe, falls relevant
                     if messageType == "comment" || messageType == "follow" || messageType == "follows" || messageType == "message" {
                          Circle().fill(titleOrMarkColor)
                              .frame(width: 8, height: 8)
                              .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
                      }
-                     Text(titleText).font(.headline).lineLimit(1) // Zeigt jetzt den Namen oder "Systemnachricht"
+                     Text(titleText).font(.headline).lineLimit(1)
                      Spacer()
                      Text(relativeTime).font(.caption).foregroundColor(.secondary)
-                     // Ungelesen-Indikator (nicht für Stelzes)
                      if message.read == 0 && messageType != "follow" && messageType != "follows" {
                          Circle().fill(Color.accentColor).frame(width: 8, height: 8).padding(.leading, 4)
                      }
                 }
                 
-                // Zweite Zeile (optional): Nachrichtentext
                 if messageType != "follow" && messageType != "follows", let msg = message.message, !msg.isEmpty {
                     Text(attributedMessageContent)
                         .font(.subheadline)
@@ -839,11 +895,7 @@ struct InboxMessageRow: View {
                         .lineLimit(messageType == "notification" ? 3 : nil)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if messageType == "follow" || messageType == "follows" {
-                     // Für Stelzes: "hat einen neuen Post" oder ähnliches könnte hier stehen,
-                     // aber da es im Titel schon impliziert ist, lassen wir es leer für mehr Platz.
-                     // Alternativ: Titel des Posts, falls verfügbar und gewünscht.
-                     // Aktuell wird die Zeile einfach leer sein, was den Fokus auf den Usernamen legt.
-                    Text("hat einen neuen Post") // Als Beispiel, kann auch weggelassen werden.
+                    Text("hat einen neuen Post")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -861,6 +913,8 @@ struct InboxMessageRow: View {
 private struct InboxPreviewWrapper: View {
     @StateObject private var settings = AppSettings()
     @StateObject private var authService: AuthService
+    @StateObject private var navigationService = NavigationService()
+
 
     init() {
         let settings = AppSettings()
@@ -869,6 +923,7 @@ private struct InboxPreviewWrapper: View {
         authService.currentUser = UserInfo(id: 1, name: "PreviewUser", registered: 1, score: 1, mark: 1, badges: [])
         _authService = StateObject(wrappedValue: authService)
         _settings = StateObject(wrappedValue: settings)
+        _navigationService = StateObject(wrappedValue: NavigationService())
     }
 
     var body: some View {
@@ -888,6 +943,7 @@ private struct InboxPreviewWrapper: View {
         )
             .environmentObject(settings)
             .environmentObject(authService)
+            .environmentObject(navigationService)
     }
 }
 // --- END OF COMPLETE FILE ---

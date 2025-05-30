@@ -37,6 +37,8 @@
 
 /* Begin PBXFileReference section */
 		005113402DB5899600C48DF1 /* Pr0gramm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pr0gramm.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		00D0B9EB2DE74ACA007E8D23 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		00D0B9ED2DE74ACA007E8D23 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		00F25C4B2DDA2E2600635841 /* Pr0grammRedirector.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = Pr0grammRedirector.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -104,6 +106,7 @@
 			children = (
 				005113422DB5899600C48DF1 /* Pr0gramm */,
 				00F25C4C2DDA2E2600635841 /* Pr0grammRedirector */,
+				00D0B9EA2DE74ACA007E8D23 /* Frameworks */,
 				005113412DB5899600C48DF1 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -115,6 +118,15 @@
 				00F25C4B2DDA2E2600635841 /* Pr0grammRedirector.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		00D0B9EA2DE74ACA007E8D23 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				00D0B9EB2DE74ACA007E8D23 /* WidgetKit.framework */,
+				00D0B9ED2DE74ACA007E8D23 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */

@@ -3,8 +3,11 @@
 import SwiftUI
 import AVFoundation
 import os
+import BackgroundTasks
+// --- NEW: Import UserNotifications ---
+import UserNotifications
+// --- END NEW ---
 
-// Identifiable Struct für Deep-Link-Daten
 struct DeepLinkData: Identifiable {
     let id: Int
     let itemIDValue: Int
@@ -19,15 +22,14 @@ struct DeepLinkData: Identifiable {
 
 @main
 struct Pr0grammApp: App {
-    // --- NEW: Add UIApplicationDelegateAdaptor ---
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    // --- END NEW ---
+    @Environment(\.scenePhase) var scenePhase
 
     @StateObject private var appSettings: AppSettings
     @StateObject private var authService: AuthService
     @StateObject private var navigationService = NavigationService()
     @StateObject private var scenePhaseObserver: ScenePhaseObserver
-    @StateObject private var appOrientationManager = AppOrientationManager() // Kann entfernt werden, wenn nicht mehr benötigt
+    @StateObject private var appOrientationManager = AppOrientationManager()
 
 
     @State private var activeDeepLinkData: DeepLinkData? = nil
@@ -43,6 +45,9 @@ struct Pr0grammApp: App {
         
         configureAudioSession()
         Pr0grammApp.logger.info("Pr0grammApp init")
+        
+        BackgroundNotificationManager.shared.registerBackgroundTask()
+        BackgroundNotificationManager.shared.requestNotificationPermission()
     }
 
     var body: some Scene {
@@ -52,7 +57,7 @@ struct Pr0grammApp: App {
                 .environmentObject(authService)
                 .environmentObject(navigationService)
                 .environmentObject(scenePhaseObserver)
-                .environmentObject(appOrientationManager) // Vorerst drin lassen, falls noch für andere Dinge genutzt
+                .environmentObject(appOrientationManager)
                 .onOpenURL { url in
                     Pr0grammApp.logger.info("App opened with URL: \(url.absoluteString)")
                     handleIncomingURL(url)
@@ -65,6 +70,27 @@ struct Pr0grammApp: App {
                     .environmentObject(appSettings)
                     .environmentObject(authService)
                 }
+        }
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            if newPhase == .background {
+                Pr0grammApp.logger.info("App entering background. Scheduling app refresh task.")
+                BackgroundNotificationManager.shared.scheduleAppRefresh()
+            } else if newPhase == .active {
+                Pr0grammApp.logger.info("App became active. Updating notification badge, resetting BG fetch failure count, and clearing delivered notifications.")
+                
+                UserDefaults.standard.set(0, forKey: BackgroundNotificationManager.backgroundFetchFailureCountKey)
+                Pr0grammApp.logger.info("Reset background fetch failure count due to app becoming active.")
+                
+                // --- NEW: Remove all delivered notifications when app becomes active ---
+                UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+                Pr0grammApp.logger.info("Removed all delivered notifications from Notification Center.")
+                // --- END NEW ---
+                
+                let currentTotal = authService.unreadInboxTotal
+                Task {
+                    await BackgroundNotificationManager.shared.appDidBecomeActiveOrInboxViewed(currentTotalUnread: currentTotal)
+                }
+            }
         }
     }
     
@@ -82,6 +108,8 @@ struct Pr0grammApp: App {
             } catch let error as NSError {
                 if error.code != -50 {
                     Self.logger.error("Failed to override output port to speaker: \(error.localizedDescription) (Code: \(error.code))")
+                } else {
+                     Self.logger.debug("Speaker output already set or override not possible (e.g. headphones connected). Error code -50 ignored.")
                 }
             }
             Self.logger.info("AVAudioSession configuration complete.")

@@ -117,7 +117,7 @@ class KeychainService {
     // MARK: - Private Generic Keychain Methods
 
     /// Generic function to save Data to the Keychain. Overwrites existing items with the same key.
-    /// Sets item accessibility to `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
+    /// Sets item accessibility.
     /// - Parameters:
     ///   - data: The `Data` object to save.
     ///   - key: The Keychain key (account) to associate with the data.
@@ -125,23 +125,25 @@ class KeychainService {
     private func saveData(_ data: Data, forKey key: String) -> Bool {
         // Base query to identify the item
         let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword, // Store as generic password item
-            kSecAttrService as String: serviceName,        // Isolate by service name (bundle ID)
-            kSecAttrAccount as String: key                 // Use the provided key as the account name
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: serviceName,
+            kSecAttrAccount as String: key
         ]
 
         // Attempt to delete any existing item first to prevent add conflicts
         let deleteStatus = SecItemDelete(query as CFDictionary)
         if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
-            // Log a warning but continue, as adding might still succeed if the item doesn't exist.
             Self.logger.warning("Failed to delete existing keychain item for key '\(key)' (Error: \(deleteStatus)). Continuing add attempt.")
         }
 
         // Prepare query for adding the new item
         var addQuery = query
-        addQuery[kSecValueData as String] = data // The actual data to store
-        // Set accessibility: Data is accessible only when the device is unlocked. Not backed up.
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        addQuery[kSecValueData as String] = data
+        // --- MODIFIED: Accessibility für Background-Zugriff ---
+        // Daten sind zugänglich, nachdem das Gerät einmal entsperrt wurde, auch wenn es später gesperrt ist.
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        Self.logger.info("Setting Keychain accessibility to kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly for key: \(key)")
+        // --- END MODIFICATION ---
 
         // Add the item to the Keychain
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
@@ -151,6 +153,12 @@ class KeychainService {
             return true
         } else {
             Self.logger.error("Failed to save data to keychain for key '\(key)' (Error: \(addStatus))")
+            // --- NEW: Log detailed error for kSecAttrAccessible ---
+            if let osStatusError = addStatus as? OSStatus {
+                 let errorDescription = SecCopyErrorMessageString(osStatusError, nil) as String? ?? "Unknown OSStatus error"
+                 Self.logger.error("Detailed OSStatus error for keychain save failure: \(errorDescription) (Code: \(osStatusError))")
+            }
+            // --- END NEW ---
             return false
         }
     }
@@ -163,15 +171,14 @@ class KeychainService {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
             kSecAttrAccount as String: key,
-            kSecReturnData as String: kCFBooleanTrue!,      // Request the actual data back
-            kSecMatchLimit as String: kSecMatchLimitOne     // Expect only one matching item
+            kSecReturnData as String: kCFBooleanTrue!,
+            kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
-        var dataTypeRef: AnyObject? // Will hold the retrieved data
+        var dataTypeRef: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &dataTypeRef)
 
         if status == errSecSuccess {
-            // Successfully retrieved data, attempt to cast it
             guard let retrievedData = dataTypeRef as? Data else {
                 Self.logger.error("Failed to cast retrieved data for key: \(key)")
                 return nil
@@ -179,12 +186,16 @@ class KeychainService {
             Self.logger.info("Successfully loaded data from keychain for key: \(key)")
             return retrievedData
         } else if status == errSecItemNotFound {
-            // Item simply doesn't exist, which is not an error in the loading context.
             Self.logger.info("No data found in keychain for key: \(key)")
             return nil
         } else {
-            // Any other status code indicates an error.
             Self.logger.error("Failed to load data from keychain for key '\(key)' (Error: \(status))")
+             // --- NEW: Log detailed error for kSecAttrAccessible ---
+            if let osStatusError = status as? OSStatus {
+                 let errorDescription = SecCopyErrorMessageString(osStatusError, nil) as String? ?? "Unknown OSStatus error"
+                 Self.logger.error("Detailed OSStatus error for keychain load failure: \(errorDescription) (Code: \(osStatusError))")
+            }
+            // --- END NEW ---
             return nil
         }
     }
@@ -205,11 +216,16 @@ class KeychainService {
             Self.logger.info("Successfully deleted data from keychain for key: \(key)")
             return true
         } else if status == errSecItemNotFound {
-            // Trying to delete something that's not there is considered success in this context.
             Self.logger.info("Attempted to delete data for key '\(key)', but item was not found.")
             return true
         } else {
             Self.logger.error("Failed to delete data from keychain for key '\(key)' (Error: \(status))")
+             // --- NEW: Log detailed error for kSecAttrAccessible ---
+            if let osStatusError = status as? OSStatus {
+                 let errorDescription = SecCopyErrorMessageString(osStatusError, nil) as String? ?? "Unknown OSStatus error"
+                 Self.logger.error("Detailed OSStatus error for keychain delete failure: \(errorDescription) (Code: \(osStatusError))")
+            }
+            // --- END NEW ---
             return false
         }
     }

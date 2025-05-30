@@ -86,7 +86,7 @@ class AuthService: ObservableObject {
 
 
     private var unreadCountSyncTimer: Timer?
-    private let unreadCountSyncInterval: TimeInterval = 60
+    private let unreadCountSyncInterval: TimeInterval = 300
 
 
     nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AuthService")
@@ -112,73 +112,104 @@ class AuthService: ObservableObject {
     }
     #endif
 
-    func fetchUnreadCounts() async {
+    /// Fetches unread counts. Designed for background tasks; throws errors instead of logging out.
+    func fetchUnreadCountsForBackgroundTask() async throws {
         guard isLoggedIn else {
-            AuthService.logger.trace("Skipping unread count fetch: User not logged in (isLoggedIn is false).")
-            if unreadInboxTotal != 0 {
-                await MainActor.run {
-                    unreadCommentCount = 0
-                    unreadMentionCount = 0
-                    unreadSystemNotificationCount = 0
-                    unreadFollowCount = 0
-                    unreadPrivateMessageCount = 0
-                    unreadInboxTotal = 0
+            AuthService.logger.trace("Skipping unread count fetch (BG Task): User not logged in.")
+            await MainActor.run {
+                if self.unreadInboxTotal != 0 {
+                    self.unreadCommentCount = 0; self.unreadMentionCount = 0; self.unreadSystemNotificationCount = 0
+                    self.unreadFollowCount = 0; self.unreadPrivateMessageCount = 0; self.unreadInboxTotal = 0
                 }
             }
             return
         }
-        AuthService.logger.info("Fetching unread inbox counts...")
+        AuthService.logger.info("Fetching unread inbox counts (for Background Task)...")
         do {
             let syncResponse = try await apiService.syncUser(offset: 0)
             
             var newTotal = 0
-            var comments = 0
-            var mentions = 0
-            var messages = 0
-            var notifications = 0
-            var follows = 0
+            var comments = 0; var mentions = 0; var messages = 0; var notifications = 0; var follows = 0
 
             if let inboxData = syncResponse.inbox {
-                comments = inboxData.comments ?? 0
-                mentions = inboxData.mentions ?? 0
-                messages = inboxData.messages ?? 0
-                notifications = inboxData.notifications ?? 0
+                comments = inboxData.comments ?? 0; mentions = inboxData.mentions ?? 0
+                messages = inboxData.messages ?? 0; notifications = inboxData.notifications ?? 0
                 follows = inboxData.follows ?? 0
-                
                 newTotal = comments + mentions + messages + notifications + follows
             }
             
             if self.userNonce == nil, let nonceFromSync = syncResponse.likeNonce {
                 await MainActor.run { self.userNonce = nonceFromSync }
-                 AuthService.logger.info("Updated userNonce from sync: \(nonceFromSync)")
+                 AuthService.logger.info("Updated userNonce from sync (BG Task): \(nonceFromSync)")
             }
 
             await MainActor.run {
-                self.unreadCommentCount = comments + mentions // Kommentare + Mentions
-                self.unreadMentionCount = mentions            // Nur Mentions (wird aktuell nicht separat angezeigt, aber für Vollständigkeit)
-                self.unreadPrivateMessageCount = messages     // Private Nachrichten
-                self.unreadSystemNotificationCount = notifications // Nur reine System-Benachrichtigungen
-                self.unreadFollowCount = follows              // Nur Follows (Stelzes)
-
+                self.unreadCommentCount = comments + mentions
+                self.unreadMentionCount = mentions
+                self.unreadPrivateMessageCount = messages
+                self.unreadSystemNotificationCount = notifications
+                self.unreadFollowCount = follows
                 self.unreadInboxTotal = newTotal
             }
-            AuthService.logger.info("Unread inbox counts updated. Total: \(newTotal), Comments: \(self.unreadCommentCount), Messages: \(self.unreadPrivateMessageCount), System: \(self.unreadSystemNotificationCount), Follows: \(self.unreadFollowCount)")
+            AuthService.logger.info("Unread inbox counts updated (BG Task). Total: \(newTotal)")
+        } catch {
+            AuthService.logger.error("Failed to fetch unread counts (BG Task): \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    func fetchUnreadCounts() async {
+        guard isLoggedIn else {
+            AuthService.logger.trace("Skipping unread count fetch: User not logged in (isLoggedIn is false).")
+            if unreadInboxTotal != 0 {
+                await MainActor.run {
+                    unreadCommentCount = 0; unreadMentionCount = 0; unreadSystemNotificationCount = 0
+                    unreadFollowCount = 0; unreadPrivateMessageCount = 0; unreadInboxTotal = 0
+                }
+            }
+            return
+        }
+        AuthService.logger.info("Fetching unread inbox counts (Foreground)...")
+        do {
+            let syncResponse = try await apiService.syncUser(offset: 0)
+            
+            var newTotal = 0
+            var comments = 0; var mentions = 0; var messages = 0; var notifications = 0; var follows = 0
+
+            if let inboxData = syncResponse.inbox {
+                comments = inboxData.comments ?? 0; mentions = inboxData.mentions ?? 0
+                messages = inboxData.messages ?? 0; notifications = inboxData.notifications ?? 0
+                follows = inboxData.follows ?? 0
+                newTotal = comments + mentions + messages + notifications + follows
+            }
+            
+            if self.userNonce == nil, let nonceFromSync = syncResponse.likeNonce {
+                await MainActor.run { self.userNonce = nonceFromSync }
+                 AuthService.logger.info("Updated userNonce from sync (Foreground): \(nonceFromSync)")
+            }
+
+            await MainActor.run {
+                self.unreadCommentCount = comments + mentions
+                self.unreadMentionCount = mentions
+                self.unreadPrivateMessageCount = messages
+                self.unreadSystemNotificationCount = notifications
+                self.unreadFollowCount = follows
+                self.unreadInboxTotal = newTotal
+            }
+            AuthService.logger.info("Unread inbox counts updated (Foreground). Total: \(newTotal)")
 
         } catch {
-            AuthService.logger.error("Failed to fetch unread counts: \(error.localizedDescription)")
+            AuthService.logger.error("Failed to fetch unread counts (Foreground): \(error.localizedDescription)")
             if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
                 await MainActor.run {
-                    unreadCommentCount = 0
-                    unreadMentionCount = 0
-                    unreadSystemNotificationCount = 0
-                    unreadFollowCount = 0
-                    unreadPrivateMessageCount = 0
-                    unreadInboxTotal = 0
+                    unreadCommentCount = 0; unreadMentionCount = 0; unreadSystemNotificationCount = 0
+                    unreadFollowCount = 0; unreadPrivateMessageCount = 0; unreadInboxTotal = 0
                 }
                 await logout()
             }
         }
     }
+
 
     private func startUnreadCountSyncTimer() {
         guard isLoggedIn else {
@@ -698,7 +729,6 @@ class AuthService: ObservableObject {
             AuthService.logger.error("Failed to decode followed users from UserDefaults: \(error.localizedDescription)")
         }
     }
-    // --- END FOLLOW MANAGEMENT ---
 
 
     func performVote(itemId: Int, voteType: Int) async {
@@ -992,7 +1022,7 @@ class AuthService: ObservableObject {
                 let apiResponse = try await apiService.fetchFavorites(
                     username: username,
                     collectionKeyword: collectionKeyword,
-                    flags: 1,
+                    flags: 1, // Flags für Favoriten können angepasst werden, falls nötig; hier hartkodiert auf 1 (SFW)
                     olderThanId: olderThanId
                 )
                 let fetchedItems = apiResponse.items
@@ -1027,7 +1057,7 @@ class AuthService: ObservableObject {
         await MainActor.run { loginError = nil; self.currentUser = nil; self.userCollections = [] }
 
         do {
-            let profileInfoResponse = try await apiService.getProfileInfo(username: username, flags: 31)
+            let profileInfoResponse = try await apiService.getProfileInfo(username: username, flags: 31) // Flags 31 für alle Infos
             
             let newUserInfo = UserInfo(
                 id: profileInfoResponse.user.id,
@@ -1036,13 +1066,13 @@ class AuthService: ObservableObject {
                 score: profileInfoResponse.user.score ?? 0,
                 mark: profileInfoResponse.user.mark,
                 badges: profileInfoResponse.badges,
-                collections: nil
+                collections: nil // Wird separat gesetzt
             )
             
             await MainActor.run {
                 self.currentUser = newUserInfo
                 self.userCollections = profileInfoResponse.collections ?? []
-                self.currentUser?.collections = self.userCollections
+                self.currentUser?.collections = self.userCollections // Auch im currentUser aktualisieren
             }
             AuthService.logger.info("Successfully created UserInfo for: \(newUserInfo.name) with \(newUserInfo.badges?.count ?? 0) badges and \(self.userCollections.count) collections.")
             if setLoadingState { await MainActor.run { isLoading = false } }
@@ -1061,25 +1091,28 @@ class AuthService: ObservableObject {
              AuthService.logger.warning("Cannot fetch user collections: currentUser is nil.")
              return false
         }
+        // Wenn userCollections bereits durch getProfileInfo geladen wurden, nicht erneut laden.
         if !self.userCollections.isEmpty {
             AuthService.logger.info("User collections already loaded (\(self.userCollections.count) found). Skipping redundant fetchUserCollections call.")
             return true
         }
         
         AuthService.logger.warning("User collections were not loaded via profile/info. Attempting old /collections/get.")
-        await MainActor.run { self.userCollections = [] }
+        await MainActor.run { self.userCollections = [] } // Zurücksetzen, falls vorherige Versuche fehlschlugen
 
         do {
-            let response = try await apiService.getUserCollections()
+            let response = try await apiService.getUserCollections() // Alte API, falls nötig
             await MainActor.run { self.userCollections = response.collections }
             AuthService.logger.info("Fetched \(response.collections.count) collections using OLD /collections/get API for \(username).")
             
+            // Aktualisiere auch die collections im currentUser Objekt
             if self.currentUser != nil {
                 self.currentUser?.collections = response.collections
             }
             return true
         } catch let error as URLError where error.code == .userAuthenticationRequired {
             AuthService.logger.error("Failed to fetch user collections (old API): Authentication required. Session might be invalid.")
+            // Hier kein Logout, da dies eine Hilfsfunktion sein kann
             return false
         } catch {
             AuthService.logger.error("Failed to fetch user collections (old API): \(error.localizedDescription)")
@@ -1116,7 +1149,7 @@ class AuthService: ObservableObject {
         let collectionIdToClearCache = self.appSettings.selectedCollectionIdForFavorites
 
         await MainActor.run {
-            self.isLoggedIn = false;
+            self.isLoggedIn = false; // Triggers didSet
             self.currentUser = nil; self.userNonce = nil;
             self.needsCaptcha = false; self.captchaToken = nil;
             self.captchaImage = nil; self.favoritedItemIDs = [];
@@ -1125,15 +1158,7 @@ class AuthService: ObservableObject {
             self.votedCommentStates = [:]; self.isVotingComment = [:]
             self.votedTagStates = [:]; self.isVotingTag = [:]
             self.userCollections = []
-            self.appSettings.selectedCollectionIdForFavorites = nil
-            self.unreadCommentCount = 0
-            self.unreadMentionCount = 0
-            self.unreadSystemNotificationCount = 0
-            self.unreadFollowCount = 0
-            self.unreadPrivateMessageCount = 0
-            self.unreadInboxTotal = 0
-            self.followedUsers = []
-            self.subscribedUsernames = []
+            self.appSettings.selectedCollectionIdForFavorites = nil // Wichtig für Konsistenz
         }
         await clearCookies()
         _ = keychainService.deleteCookieProperties(forKey: sessionCookieKey)
