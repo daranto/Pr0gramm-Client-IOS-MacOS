@@ -236,14 +236,29 @@ class BackgroundNotificationManager {
 
     private func scheduleStandardNotification(newCommentCount: Int, newPrivateMessageCount: Int, newFollowCount: Int, newNotificationCount: Int, totalNew: Int, overallTotal: Int) async {
         let content = UNMutableNotificationContent()
-        content.title = "Neue Nachrichten auf pr0gramm"
+        content.title = "Neue Nachrichten"
         
         var bodyParts: [String] = []
-        if newCommentCount > 0 { bodyParts.append("\(newCommentCount) Kommentare/Antworten") }
-        if newPrivateMessageCount > 0 { bodyParts.append("\(newPrivateMessageCount) PNs") }
-        if newFollowCount > 0 { bodyParts.append("\(newFollowCount) Stelzes") }
-        if newNotificationCount > 0 { bodyParts.append("\(newNotificationCount) System") }
 
+        if newCommentCount > 0 {
+            bodyParts.append("\(newCommentCount) \(newCommentCount == 1 ? "Kommentar/Antwort" : "Kommentare/Antworten")")
+        }
+        if newPrivateMessageCount > 0 {
+            bodyParts.append("\(newPrivateMessageCount) \(newPrivateMessageCount == 1 ? "PN" : "PNs")")
+        }
+        if newFollowCount > 0 { bodyParts.append("\(newFollowCount) Stelzes") }
+        
+        if newNotificationCount > 0 {
+            bodyParts.append("\(newNotificationCount) \(newNotificationCount == 1 ? "Systemnachricht" : "Systemnachrichten")")
+        }
+
+        if bodyParts.isEmpty {
+            // --- MODIFIED: Pluralization for fallback message ---
+            content.body = "Du hast \(totalNew) neue \(totalNew == 1 ? "Nachricht" : "Nachrichten")."
+            // --- END MODIFICATION ---
+        } else {
+            content.body = bodyParts.joined(separator: ", ") + "."
+        }
         if bodyParts.isEmpty {
             // Sollte nicht passieren, wenn totalNew > 0, aber als Fallback
             content.body = "Du hast \(totalNew) neue Nachrichten."
