@@ -3,6 +3,7 @@
 
 import SwiftUI
 import os
+import Combine // Für Keyboard-Notifications
 
 struct ConversationDetailView: View {
     let partnerUsername: String
@@ -29,16 +30,27 @@ struct ConversationDetailView: View {
     @State private var previewLinkTargetFromMessage: PreviewLinkTarget? = nil
 
     @FocusState private var isTextEditorFocused: Bool
-
+    
+    @State private var keyboardHeight: CGFloat = 0
+    @State private var keyboardIsAnimating: Bool = false
+    
+    // --- NEUE STATE VARIABLEN FÜR VERBESSERTE SCROLL-FUNKTION ---
+    @State private var textFieldHeight: CGFloat = 44 // Standard-Höhe für einzeiliges TextField
+    @State private var previousTextFieldHeight: CGFloat = 44
+    @State private var shouldScrollToBottom: Bool = false
+    @State private var scrollViewContentOffset: CGFloat = 0
+    @State private var isUserScrolling: Bool = false
+    @State private var lastScrollTime: Date = Date()
+    // --- END NEUE STATE VARIABLEN ---
 
     private let apiService = APIService()
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ConversationDetailView")
 
+    @State private var scrollViewProxy: ScrollViewProxy? = nil
+
     var body: some View {
         VStack(spacing: 0) {
-            // --- MODIFIED: Rufe die neue buildMessageList Funktion auf ---
             buildMessageList()
-            // --- END MODIFICATION ---
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onTapGesture {
                     isTextEditorFocused = false
@@ -79,10 +91,102 @@ struct ConversationDetailView: View {
                     .padding().background(Material.regular).cornerRadius(10).shadow(radius: 5)
             }
         }
-        .background(Color(UIColor.systemBackground)) // Stellt sicher, dass der Hintergrund konsistent ist
+        // --- VERBESSERTE KEYBOARD NOTIFICATIONS ---
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+            handleKeyboardWillShow(notification: notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { notification in
+            handleKeyboardDidShow()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
+            handleKeyboardWillHide(notification: notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
+            handleKeyboardDidHide()
+        }
+        // --- END VERBESSERTE KEYBOARD NOTIFICATIONS ---
     }
-
-    // --- NEW: Ausgelagerte Funktion zur Erstellung der Nachrichtenliste ---
+    
+    // --- NEUE KEYBOARD HANDLING METHODEN ---
+    private func handleKeyboardWillShow(notification: Notification) {
+        guard let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let animationDuration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval else { return }
+        
+        let safeAreaBottom = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first?.safeAreaInsets.bottom ?? 0
+        let newHeight = keyboardFrame.height - safeAreaBottom
+        
+        if self.keyboardHeight != newHeight {
+            self.keyboardIsAnimating = true
+            self.shouldScrollToBottom = true
+            
+            withAnimation(.linear(duration: animationDuration)) {
+                self.keyboardHeight = newHeight
+            }
+            ConversationDetailView.logger.debug("Keyboard WILL SHOW. New height: \(newHeight)")
+        }
+    }
+    
+    private func handleKeyboardDidShow() {
+        if keyboardIsAnimating && shouldScrollToBottom {
+            scrollToBottomIfNeeded()
+            keyboardIsAnimating = false
+            shouldScrollToBottom = false
+        }
+    }
+    
+    private func handleKeyboardWillHide(notification: Notification) {
+        guard let animationDuration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval else { return }
+        
+        if self.keyboardHeight != 0 {
+            self.keyboardIsAnimating = true
+            withAnimation(.linear(duration: animationDuration)) {
+                self.keyboardHeight = 0
+            }
+            ConversationDetailView.logger.debug("Keyboard WILL HIDE")
+        }
+    }
+    
+    private func handleKeyboardDidHide() {
+        if keyboardIsAnimating {
+            keyboardIsAnimating = false
+            // Nach dem Verstecken der Tastatur nur scrollen wenn nötig
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.scrollToBottomIfNeeded()
+            }
+        }
+    }
+    
+    private func scrollToBottomIfNeeded() {
+        guard let lastMessageId = messages.last?.id,
+              let proxy = self.scrollViewProxy else { return }
+        
+        // Nur scrollen wenn der User nicht gerade manuell scrollt
+        let now = Date()
+        if now.timeIntervalSince(lastScrollTime) < 1.0 && isUserScrolling {
+            return
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            withAnimation(.smooth(duration: 0.3)) {
+                proxy.scrollTo(lastMessageId, anchor: .bottom)
+            }
+            ConversationDetailView.logger.debug("Scrolled to bottom message ID: \(lastMessageId)")
+        }
+    }
+    
+    private func handleTextFieldSizeChange() {
+        let heightDifference = textFieldHeight - previousTextFieldHeight
+        
+        // Wenn das Textfeld wächst, nach unten scrollen
+        if heightDifference > 0 && isTextEditorFocused {
+            shouldScrollToBottom = true
+            scrollToBottomIfNeeded()
+        }
+        
+        previousTextFieldHeight = textFieldHeight
+    }
+    // --- END NEUE KEYBOARD HANDLING METHODEN ---
+    
     @ViewBuilder
     private func buildMessageList() -> some View {
         if isLoading && messages.isEmpty {
@@ -96,38 +200,43 @@ struct ConversationDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            // Die List wird immer gerendert, auch wenn messages leer ist.
-            // Die Logik für "Keine Nachrichten" kommt in die List selbst.
             ScrollViewReader { proxy in
                 List {
-                    // Lade-Indikator für ältere Nachrichten
                     if isLoadingMore {
                         HStack { Spacer(); ProgressView("Lade ältere..."); Spacer() }
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
                             .padding(.vertical, 8)
                     }
                     
-                    // "Keine Nachrichten"-Meldung, wenn messages leer ist und nicht geladen wird
                     if messages.isEmpty && !isLoading && !isLoadingMore && errorMessage == nil {
-                        Section { // In Section für korrekte Darstellung in leerer Liste
+                        Section {
                             Text("Keine Nachrichten in dieser Konversation.")
                                 .foregroundColor(.secondary)
                                 .padding()
                                 .frame(maxWidth: .infinity, alignment: .center)
                                 .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
                         }
                     } else {
-                        ForEach(messages) { message in
-                            ConversationMessageRow( // Diese Row ist in der Datei definiert
+                        ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                            ConversationMessageRow(
                                 message: message,
                                 isSentByCurrentUser: message.sent == 1,
                                 currentUserMark: authService.currentUser?.mark ?? 0,
+                                currentUsername: authService.currentUser?.name ?? "Ich",
                                 partnerMark: conversationPartner?.mark ?? 0,
                                 partnerName: conversationPartner?.name ?? partnerUsername
                             )
                             .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 3, leading: 10, bottom: 3, trailing: 10))
+                            .listRowInsets(EdgeInsets(
+                                top: index == 0 ? 15 : 3,
+                                leading: 10,
+                                bottom: 3,
+                                trailing: 10
+                            ))
+                            .listRowBackground(Color.clear)
                             .id(message.id)
                             .onAppear {
                                 if message.id == messages.first?.id && canLoadMore && !isLoadingMore && !isLoading {
@@ -140,31 +249,47 @@ struct ConversationDetailView: View {
                             }
                         }
                     }
+                    
+                    // --- VERBESSERTER KEYBOARD SPACER MIT DYNAMISCHER HÖHE ---
+                    Color.clear
+                        .frame(height: max(keyboardHeight, 0))
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                        .id("KeyboardSpacer")
+                    // --- END VERBESSERTER KEYBOARD SPACER ---
                 }
                 .listStyle(.plain)
-                .background(Color.clear) // Damit der äußere Hintergrund durchscheint
-                .scrollContentBackground(.hidden) // Für iOS 16+
+                .background(Color(UIColor.systemGroupedBackground))
+                .scrollContentBackground(.hidden)
                 .refreshable { await refreshMessages() }
+                // --- VERBESSERTE SCROLL DETECTION ---
+                .simultaneousGesture(
+                    DragGesture()
+                        .onChanged { _ in
+                            isUserScrolling = true
+                            lastScrollTime = Date()
+                        }
+                        .onEnded { _ in
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                isUserScrolling = false
+                            }
+                        }
+                )
+                // --- END VERBESSERTE SCROLL DETECTION ---
                 .onAppear {
+                    self.scrollViewProxy = proxy
                     if let lastMessageId = messages.last?.id {
-                        proxy.scrollTo(lastMessageId, anchor: .bottom)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            proxy.scrollTo(lastMessageId, anchor: .bottom)
+                        }
                     }
                 }
                 .onChange(of: messages.count) { oldValue, newValue in
-                    if newValue > oldValue, let lastMessageId = messages.last?.id {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            withAnimation(.smooth(duration: 0.2)) {
-                                proxy.scrollTo(lastMessageId, anchor: .bottom)
-                            }
-                        }
-                    } else if newValue < oldValue { // z.B. nach Refresh
-                         if let lastMessageId = messages.last?.id {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                withAnimation(.smooth(duration: 0.2)) {
-                                    proxy.scrollTo(lastMessageId, anchor: .bottom)
-                                }
-                            }
-                         }
+                    // Nur bei neuen Nachrichten automatisch scrollen
+                    if newValue > oldValue {
+                        shouldScrollToBottom = true
+                        scrollToBottomIfNeeded()
                     }
                 }
                 .environment(\.openURL, OpenURLAction { url in
@@ -180,7 +305,6 @@ struct ConversationDetailView: View {
             }
         }
     }
-    // --- END NEW ---
     
     private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
         guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
@@ -240,20 +364,41 @@ struct ConversationDetailView: View {
                     .padding(.horizontal)
             }
             HStack(alignment: .bottom, spacing: 8) {
-                TextEditor(text: $newMessageText)
+                // --- VERBESSERTES TEXTFIELD MIT HÖHEN-TRACKING ---
+                TextField("Nachricht eingeben...", text: $newMessageText, axis: .vertical)
                     .focused($isTextEditorFocused)
-                    .scrollContentBackground(.hidden)
+                    .textFieldStyle(.plain)
+                    .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 8))
                     .background(
-                        RoundedRectangle(cornerRadius: 20)
-                            .fill(Color(uiColor: .systemGray5))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 20)
-                                    .stroke(Color(uiColor: .systemGray3), lineWidth: 0.5)
-                            )
+                        GeometryReader { geometry in
+                            RoundedRectangle(cornerRadius: 20)
+                                .fill(Color(uiColor: .systemGray5))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 20)
+                                        .stroke(Color(uiColor: .systemGray3), lineWidth: 0.5)
+                                )
+                                .onAppear {
+                                    textFieldHeight = geometry.size.height
+                                }
+                                .onChange(of: geometry.size.height) { oldHeight, newHeight in
+                                    if abs(newHeight - textFieldHeight) > 1 {
+                                        textFieldHeight = newHeight
+                                        handleTextFieldSizeChange()
+                                    }
+                                }
+                        }
                     )
-                    .frame(minHeight: 38, maxHeight: 150)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1...6)
                     .accessibilityLabel("Nachricht eingeben")
+                    .onChange(of: newMessageText) { oldValue, newValue in
+                        // Bei Textänderungen nach kurzer Verzögerung scrollen
+                        if isTextEditorFocused && !newValue.isEmpty {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                scrollToBottomIfNeeded()
+                            }
+                        }
+                    }
+                // --- END VERBESSERTES TEXTFIELD ---
                 
                 Button {
                     Task { await sendMessage() }
@@ -275,6 +420,7 @@ struct ConversationDetailView: View {
             .padding(.top, 8)
             .padding(.bottom, bottomPaddingForInput)
         }
+        .background(.thinMaterial)
     }
 
     private func clearErrors() {
@@ -377,6 +523,11 @@ struct ConversationDetailView: View {
                 ConversationDetailView.logger.info("Successfully sent message to \(partnerUsername). API returned success. Updating messages from response.")
                 self.newMessageText = ""
                 self.messages = response.messages.sorted { $0.created < $1.created }
+                // Nach dem Senden automatisch nach unten scrollen
+                shouldScrollToBottom = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.scrollToBottomIfNeeded()
+                }
             } else {
                 let apiError = "Unbekannter Fehler beim Senden (API success:false)."
                 ConversationDetailView.logger.error("Failed to send message to \(partnerUsername): \(apiError)")
@@ -402,17 +553,16 @@ struct ConversationDetailView: View {
     }
 }
 
-// ConversationMessageRow ist hier definiert, da sie spezifisch für diese View ist.
-// Wenn sie auch woanders genutzt wird, könnte man sie auslagern.
+// MARK: - ConversationMessageRow bleibt unverändert
 struct ConversationMessageRow: View {
     let message: PrivateMessage
     let isSentByCurrentUser: Bool
     let currentUserMark: Int
+    let currentUsername: String
     let partnerMark: Int
     let partnerName: String
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ConversationMessageRowLocal")
-    @EnvironmentObject var authService: AuthService // Für den aktuellen Benutzernamen im Avatar
 
     private var backgroundColor: Color {
         isSentByCurrentUser ? Color.accentColor : Color(uiColor: .systemGray5)
@@ -423,10 +573,11 @@ struct ConversationMessageRow: View {
     }
     
     private var senderDisplayName: String {
-        return message.name // API liefert den Namen des Senders der Nachricht
+        isSentByCurrentUser ? currentUsername : partnerName
     }
+    
     private var senderMarkValue: Int {
-        return message.mark // API liefert das Mark des Senders der Nachricht
+        isSentByCurrentUser ? currentUserMark : partnerMark
     }
     
     private func getInitials(from name: String) -> String {
@@ -443,26 +594,21 @@ struct ConversationMessageRow: View {
         if initials.count > 2 {
             initials = String(initials.prefix(2))
         }
-        if initials.count == 1 && (parts.first?.count ?? 0) == 1 {
-            // Nichts tun, ein Buchstabe ist okay
-        }
         return initials.isEmpty ? "?" : initials
     }
 
     private func isColorLight(_ color: Color) -> Bool {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         guard UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a) else {
-            return false // Default zu dunklem Text, falls Farbbestimmung fehlschlägt
+            return false
         }
-        // Luminanzformel (vereinfacht)
         let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        return luminance > 0.6 // Schwellenwert für "hell"
+        return luminance > 0.6
     }
 
     @ViewBuilder
     private var avatarView: some View {
-        let nameForAvatar = isSentByCurrentUser ? (authService.currentUser?.name ?? "Ich") : partnerName
-        let initials = getInitials(from: nameForAvatar)
+        let initials = getInitials(from: senderDisplayName)
         let avatarBackgroundColor = Mark(rawValue: senderMarkValue).displayColor
         let initialsColor: Color = isColorLight(avatarBackgroundColor) ? .black : .white
         
@@ -479,9 +625,9 @@ struct ConversationMessageRow: View {
 
     private var attributedMessageContent: AttributedString {
         var attributedString = AttributedString(message.message ?? "")
-        let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont) // Konsistente Schrift
+        let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont)
         attributedString.font = baseUIFont
-        attributedString.foregroundColor = textColorForBubble // Setzt die Grundfarbe
+        attributedString.foregroundColor = textColorForBubble
 
         do {
             let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
@@ -489,10 +635,9 @@ struct ConversationMessageRow: View {
             for match in matches {
                 guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
                 attributedString[range].link = url
-                // Linkfarbe anpassen, damit sie auf dem Bubble-Hintergrund gut lesbar ist
                 attributedString[range].foregroundColor = isSentByCurrentUser ? .white.opacity(0.85) : Color.accentColor
                 attributedString[range].underlineStyle = .single
-                attributedString[range].font = baseUIFont // Stelle sicher, dass auch Links die Basisschrift haben
+                attributedString[range].font = baseUIFont
             }
         } catch {
             Self.logger.error("Error creating NSDataDetector in ConversationMessageRow: \(error.localizedDescription)")
@@ -505,7 +650,7 @@ struct ConversationMessageRow: View {
         let calendar = Calendar.current
 
         let timeFormatter = DateFormatter()
-        timeFormatter.dateFormat = "HH:mm" // Nur Zeit
+        timeFormatter.dateFormat = "HH:mm"
         let timeString = timeFormatter.string(from: date)
 
         if calendar.isDateInToday(date) {
@@ -514,11 +659,10 @@ struct ConversationMessageRow: View {
             return "Gestern, \(timeString)"
         } else {
             let dateFormatter = DateFormatter()
-            // Prüfe, ob das Datum im aktuellen Jahr liegt
             if calendar.isDate(date, equalTo: Date(), toGranularity: .year) {
-                dateFormatter.dateFormat = "d. MMMM" // z.B. "5. Juni"
+                dateFormatter.dateFormat = "d. MMMM"
             } else {
-                dateFormatter.dateFormat = "dd.MM.yy" // z.B. "05.06.23"
+                dateFormatter.dateFormat = "dd.MM.yy"
             }
             let dateString = dateFormatter.string(from: date)
             return "\(dateString), \(timeString)"
@@ -526,42 +670,42 @@ struct ConversationMessageRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 0) { // spacing: 0, um Kontrolle über avatarView.padding zu haben
+        HStack(alignment: .bottom, spacing: 6) {
             if !isSentByCurrentUser {
                 avatarView
-                    .padding(.trailing, 6) // Abstand nur rechts vom Avatar
             } else {
-                Spacer(minLength: 36 + 6) // Platzhalter, wenn es die eigene Nachricht ist
+                Spacer(minLength: 0)
             }
 
             VStack(alignment: isSentByCurrentUser ? .trailing : .leading, spacing: 2) {
                 Text(attributedMessageContent)
-                    .fixedSize(horizontal: false, vertical: true) // Erlaubt mehrzeiligen Text
-                    .multilineTextAlignment(.leading) // Text immer linksbündig
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
                     .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
                     .background(backgroundColor)
                     .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .frame(minWidth: 50, maxWidth: UIScreen.main.bounds.width * 0.75) // Maximale Breite begrenzen
+                    .frame(minWidth: 50, maxWidth: UIScreen.main.bounds.width * 0.75,
+                           alignment: isSentByCurrentUser ? .trailing : .leading)
                 
-                HStack(spacing: 4) { // Für Zeitstempel und ggf. Lesestatus-Icon
+                HStack(spacing: 4) {
                     Text(formattedTimestamp(for: message.created))
                         .font(.caption2)
                         .foregroundColor(.gray)
-                    // Hier könnte später ein Lesestatus-Icon hin, falls benötigt
                 }
-                .padding(.horizontal, 0) // Kein extra horizontales Padding für diese HStack
-                .padding(.top, 2)
+                .padding(.horizontal, 0)
+                .frame(maxWidth: .infinity, alignment: isSentByCurrentUser ? .trailing : .leading)
             }
             
-            // Symmetrischer Spacer auf der anderen Seite
             if isSentByCurrentUser {
-                 Spacer().frame(width: 36 + 6, height: 0) // Höhe 0, um keinen vertikalen Platz zu beanspruchen
+                avatarView
             } else {
-                Spacer(minLength: 36 + 6)
+                Spacer(minLength: 0)
             }
         }
+        .frame(maxWidth: .infinity, alignment: isSentByCurrentUser ? .trailing : .leading)
     }
 }
+
 
 // MARK: - Preview
 #Preview {
