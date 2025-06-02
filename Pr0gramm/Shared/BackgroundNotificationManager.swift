@@ -19,12 +19,11 @@ class BackgroundNotificationManager {
     private let maxBackgroundFetchFailures = 5
     private let backgroundFetchRetryDelay: TimeInterval = 5
 
-    // --- Debug Log Buffer (intern) ---
     private var debugLogBuffer: [String] = []
     private func addToDebugLog(_ message: String) {
         let timestamp = Date().formatted(date: .omitted, time: .standard)
         debugLogBuffer.append("[\(timestamp)] \(message)")
-        if debugLogBuffer.count > 20 { // Etwas Puffer für interne Logs
+        if debugLogBuffer.count > 20 {
             debugLogBuffer.removeFirst()
         }
     }
@@ -33,10 +32,15 @@ class BackgroundNotificationManager {
         debugLogBuffer.removeAll()
         return log
     }
-    // --- END Debug Log Buffer ---
 
+    private weak var appSettings: AppSettings?
 
     private init() {}
+
+    func configure(appSettings: AppSettings) {
+        self.appSettings = appSettings
+        Self.logger.info("BackgroundNotificationManager configured with AppSettings.")
+    }
 
     private func getBackgroundFetchFailureCount() -> Int {
         UserDefaults.standard.integer(forKey: Self.backgroundFetchFailureCountKey)
@@ -75,6 +79,13 @@ class BackgroundNotificationManager {
     }
 
     func scheduleAppRefresh() {
+        guard let settings = self.appSettings, settings.enableBackgroundFetchForNotifications else {
+            Self.logger.info("Background refresh scheduling skipped: Disabled by user setting.")
+            BGTaskScheduler.shared.cancelAllTaskRequests()
+            Self.logger.info("Cancelled all pending background tasks due to user disabling the feature.")
+            return
+        }
+
         let failureCount = getBackgroundFetchFailureCount()
         if failureCount >= self.maxBackgroundFetchFailures {
             Self.logger.warning("Skipping scheduleAppRefresh: Maximum background fetch failures (\(failureCount)/\(self.maxBackgroundFetchFailures)) reached. Task will not be scheduled until app is opened.")
@@ -83,37 +94,53 @@ class BackgroundNotificationManager {
         }
 
         let request = BGAppRefreshTaskRequest(identifier: self.taskIdentifier)
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
+        // --- MODIFIED: Verwende das Intervall aus AppSettings ---
+        request.earliestBeginDate = Date(timeIntervalSinceNow: settings.backgroundFetchInterval.timeInterval)
+        // --- END MODIFICATION ---
 
         do {
             try BGTaskScheduler.shared.submit(request)
-            Self.logger.info("Successfully scheduled background app refresh task: \(self.taskIdentifier). Earliest next run: \(request.earliestBeginDate?.description ?? "N/A")")
-            addToDebugLog("BGTask: Scheduled. Next: \(request.earliestBeginDate?.description ?? "ASAP")")
+            Self.logger.info("Successfully scheduled background app refresh task: \(self.taskIdentifier). Earliest next run: \(request.earliestBeginDate?.description ?? "N/A") (Interval: \(settings.backgroundFetchInterval.displayName))")
+            addToDebugLog("BGTask: Scheduled. Next: \(request.earliestBeginDate?.description ?? "ASAP") (Interval: \(settings.backgroundFetchInterval.displayName))")
         } catch {
             Self.logger.error("Could not schedule app refresh task \(self.taskIdentifier): \(error.localizedDescription)")
             addToDebugLog("BGTask: Schedule FAILED: \(error.localizedDescription.prefix(50))")
         }
     }
 
+    func cancelAllBackgroundTasks() {
+        BGTaskScheduler.shared.cancelAllTaskRequests()
+        Self.logger.info("All background tasks for this app have been cancelled.")
+    }
+
     private func handleAppRefresh(task: BGAppRefreshTask) {
         addToDebugLog("BGTask: handleAppRefresh started.")
+        
+        // --- MODIFIED: Verwende die globale AppSettings Instanz, wenn vorhanden, sonst lokale ---
+        let currentAppSettings = self.appSettings ?? AppSettings()
+        // --- END MODIFICATION ---
+        
+        guard currentAppSettings.enableBackgroundFetchForNotifications else {
+            Self.logger.info("Background task \(self.taskIdentifier) aborted: Feature disabled by user in settings.")
+            addToDebugLog("BGTask: Aborted at start - Feature disabled by user.")
+            task.setTaskCompleted(success: true)
+            return
+        }
 
         let initialFailureCount = getBackgroundFetchFailureCount()
         if initialFailureCount >= self.maxBackgroundFetchFailures {
             Self.logger.warning("Background task \(self.taskIdentifier) aborted at start: Failure count (\(initialFailureCount)) reached maximum (\(self.maxBackgroundFetchFailures)).")
             addToDebugLog("BGTask: Aborted at start - Max failures reached.")
             task.setTaskCompleted(success: false)
-            // --- REMOVED: Debug Notification bei Ablauf/Abbruch wegen Fehlerlimit ---
             return
         }
         
-        scheduleAppRefresh()
+        scheduleAppRefresh() // Schedule next refresh
 
         task.expirationHandler = { [weak self] in
             guard let strongSelf = self else { return }
             BackgroundNotificationManager.logger.warning("Background task \(strongSelf.taskIdentifier) expired.")
             strongSelf.addToDebugLog("BGTask: EXPIRED!")
-            // --- REMOVED: Debug Notification bei Ablauf ---
             task.setTaskCompleted(success: false)
         }
 
@@ -121,8 +148,9 @@ class BackgroundNotificationManager {
             addToDebugLog("BGTask: Detached Task started.")
             BackgroundNotificationManager.logger.info("Background task operation \(self.taskIdentifier) starting within detached Task.")
             
-            let localAppSettings = AppSettings()
-            let localAuthService = AuthService(appSettings: localAppSettings)
+            // --- MODIFIED: Verwende die (potenziell globale) currentAppSettings Instanz ---
+            let localAuthService = AuthService(appSettings: currentAppSettings)
+            // --- END MODIFICATION ---
 
             addToDebugLog("BGTask: AppSettings/AuthService inited.")
             await localAuthService.checkInitialLoginStatus()
@@ -135,9 +163,7 @@ class BackgroundNotificationManager {
                 await self.saveLastNotifiedTotalCount(0)
                 self.resetBackgroundFetchFailureCountInternal()
                 task.setTaskCompleted(success: true)
-                // --- REMOVED: Debug Notification für "nicht eingeloggt" ---
                 Self.logger.info("Background task \(self.taskIdentifier) completed (user not logged in).")
-                // Log interne Debug-Infos, falls nötig
                 let finalStatusMessage = getFormattedDebugLogAndClear()
                 BackgroundNotificationManager.logger.info("Internal logs for this run (not logged in):\n\(finalStatusMessage)")
                 return
@@ -183,9 +209,7 @@ class BackgroundNotificationManager {
                     
                     self.resetBackgroundFetchFailureCountInternal()
                     task.setTaskCompleted(success: true)
-                    // --- REMOVED: Debug Notification für Erfolg ---
                     Self.logger.info("Background task \(self.taskIdentifier) completed successfully.")
-                    // Log interne Debug-Infos, falls nötig
                     let finalStatusMessageSuccess = getFormattedDebugLogAndClear()
                     BackgroundNotificationManager.logger.info("Internal logs for this successful run:\n\(finalStatusMessageSuccess)")
                     return
@@ -213,9 +237,7 @@ class BackgroundNotificationManager {
                 Self.logger.error("BGTask: All \(maxAttempts) fetch attempts failed. Last error: \(lastError?.localizedDescription ?? "Unknown")")
                 self.incrementBackgroundFetchFailureCount()
                 task.setTaskCompleted(success: false)
-                // --- REMOVED: Debug Notification für Fehlschlag ---
                 Self.logger.info("Background task \(self.taskIdentifier) completed with failure after all retries.")
-                // Log interne Debug-Infos, falls nötig
                 let finalStatusMessageFailure = getFormattedDebugLogAndClear()
                 BackgroundNotificationManager.logger.info("Internal logs for this failed run:\n\(finalStatusMessageFailure)")
             }
@@ -253,15 +275,7 @@ class BackgroundNotificationManager {
         }
 
         if bodyParts.isEmpty {
-            // --- MODIFIED: Pluralization for fallback message ---
             content.body = "Du hast \(totalNew) neue \(totalNew == 1 ? "Nachricht" : "Nachrichten")."
-            // --- END MODIFICATION ---
-        } else {
-            content.body = bodyParts.joined(separator: ", ") + "."
-        }
-        if bodyParts.isEmpty {
-            // Sollte nicht passieren, wenn totalNew > 0, aber als Fallback
-            content.body = "Du hast \(totalNew) neue Nachrichten."
         } else {
             content.body = bodyParts.joined(separator: ", ") + "."
         }
@@ -269,7 +283,7 @@ class BackgroundNotificationManager {
         content.sound = .default
         content.badge = NSNumber(value: overallTotal)
         
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false) // Minimale Verzögerung, um sofort auszulösen
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
 
         do {
@@ -280,8 +294,6 @@ class BackgroundNotificationManager {
         }
     }
     
-    // --- REMOVED: scheduleDebugNotification Methode ---
-
     private func getLastNotifiedTotalCount() async -> Int {
         return UserDefaults.standard.integer(forKey: lastNotifiedCountsKey)
     }

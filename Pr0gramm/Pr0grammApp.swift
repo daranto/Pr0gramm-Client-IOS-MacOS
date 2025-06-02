@@ -4,9 +4,7 @@ import SwiftUI
 import AVFoundation
 import os
 import BackgroundTasks
-// --- NEW: Import UserNotifications ---
 import UserNotifications
-// --- END NEW ---
 
 struct DeepLinkData: Identifiable {
     let id: Int
@@ -46,8 +44,11 @@ struct Pr0grammApp: App {
         configureAudioSession()
         Pr0grammApp.logger.info("Pr0grammApp init")
         
-        BackgroundNotificationManager.shared.registerBackgroundTask()
-        BackgroundNotificationManager.shared.requestNotificationPermission()
+        // --- MODIFIED: Konfiguriere BackgroundNotificationManager und registriere Task ---
+        BackgroundNotificationManager.shared.configure(appSettings: settings) // Konfigurieren
+        BackgroundNotificationManager.shared.registerBackgroundTask() // Nur registrieren
+        // Die Berechtigungsanfrage und das Scheduling erfolgen jetzt über AppSettings
+        // --- END MODIFICATION ---
     }
 
     var body: some Scene {
@@ -73,23 +74,29 @@ struct Pr0grammApp: App {
         }
         .onChange(of: scenePhase) { oldPhase, newPhase in
             if newPhase == .background {
-                Pr0grammApp.logger.info("App entering background. Scheduling app refresh task.")
+                Pr0grammApp.logger.info("App entering background. Scheduling app refresh task if enabled.")
+                // --- MODIFIED: scheduleAppRefresh prüft intern die Einstellung ---
                 BackgroundNotificationManager.shared.scheduleAppRefresh()
+                // --- END MODIFICATION ---
             } else if newPhase == .active {
                 Pr0grammApp.logger.info("App became active. Updating notification badge, resetting BG fetch failure count, and clearing delivered notifications.")
                 
                 UserDefaults.standard.set(0, forKey: BackgroundNotificationManager.backgroundFetchFailureCountKey)
                 Pr0grammApp.logger.info("Reset background fetch failure count due to app becoming active.")
                 
-                // --- NEW: Remove all delivered notifications when app becomes active ---
                 UNUserNotificationCenter.current().removeAllDeliveredNotifications()
                 Pr0grammApp.logger.info("Removed all delivered notifications from Notification Center.")
-                // --- END NEW ---
                 
                 let currentTotal = authService.unreadInboxTotal
                 Task {
                     await BackgroundNotificationManager.shared.appDidBecomeActiveOrInboxViewed(currentTotalUnread: currentTotal)
                 }
+                // --- NEW: Task planen, wenn App aktiv wird und Feature aktiviert ist ---
+                if appSettings.enableBackgroundFetchForNotifications {
+                    BackgroundNotificationManager.shared.scheduleAppRefresh()
+                    Pr0grammApp.logger.info("App active and background fetch enabled, ensuring task is scheduled.")
+                }
+                // --- END NEW ---
             }
         }
     }
@@ -106,7 +113,7 @@ struct Pr0grammApp: App {
                 try audioSession.overrideOutputAudioPort(.speaker)
                 Self.logger.info("AVAudioSession output successfully overridden to force speaker.")
             } catch let error as NSError {
-                if error.code != -50 {
+                if error.code != -50 { // -50: kAudioSessionOverrideCategoryDefaultRouteFailure / kAudioSessionCategoryChangePendingError
                     Self.logger.error("Failed to override output port to speaker: \(error.localizedDescription) (Code: \(error.code))")
                 } else {
                      Self.logger.debug("Speaker output already set or override not possible (e.g. headphones connected). Error code -50 ignored.")
@@ -245,6 +252,9 @@ struct DeepLinkItemLoaderView: View {
             var item = try await apiService.fetchItem(id: itemID, flags: flagsToFetchWith)
             
             if item == nil {
+                // Wenn Item nicht mit aktuellen Flags gefunden wurde und User eingeloggt ist,
+                // versuche es mit maximalen Flags (31), um sicherzustellen, dass der Link funktioniert,
+                // auch wenn der User den Content-Typ aktuell ausgeblendet hat.
                 if authService.isLoggedIn && flagsToFetchWith != 31 {
                     DeepLinkItemLoaderView.logger.warning("Item \(itemID) not found with flags \(flagsToFetchWith). Retrying with flags 31.")
                     item = try await apiService.fetchItem(id: itemID, flags: 31)

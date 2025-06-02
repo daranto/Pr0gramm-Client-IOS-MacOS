@@ -7,6 +7,34 @@ import os
 import Kingfisher
 import CloudKit // Needed for NSUbiquitousKeyValueStore
 import SwiftUI // Needed for ColorScheme, Color
+import BackgroundTasks // Für BGTaskScheduler
+import UserNotifications // Für Berechtigungen und Badge
+
+enum BackgroundFetchInterval: Int, CaseIterable, Identifiable {
+    case minutes30 = 1800 // 30 * 60
+    case minutes60 = 3600 // 60 * 60
+    case hours2 = 7200    // 2 * 3600
+    case hours4 = 14400   // 4 * 3600
+    case hours6 = 21600   // 6 * 3600
+    case hours12 = 43200  // 12 * 3600
+
+    var id: Int { self.rawValue }
+
+    var displayName: String {
+        switch self {
+        case .minutes30: return "30 Minuten"
+        case .minutes60: return "1 Stunde"
+        case .hours2: return "2 Stunden"
+        case .hours4: return "4 Stunden"
+        case .hours6: return "6 Stunden"
+        case .hours12: return "12 Stunden"
+        }
+    }
+
+    var timeInterval: TimeInterval {
+        return TimeInterval(self.rawValue)
+    }
+}
 
 enum FeedType: Int, CaseIterable, Identifiable {
     case new = 0
@@ -148,6 +176,8 @@ class AppSettings: ObservableObject {
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
     private static let enableUnlimitedStyleFeedKey = "enableUnlimitedStyleFeed_v1"
+    private static let enableBackgroundFetchForNotificationsKey = "enableBackgroundFetchForNotifications_v1"
+    private static let backgroundFetchIntervalKey = "backgroundFetchInterval_v1"
     private var keyValueStoreChangeObserver: NSObjectProtocol?
 
     @Published var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
@@ -266,6 +296,36 @@ class AppSettings: ObservableObject {
             if oldValue != enableUnlimitedStyleFeed {
                 UserDefaults.standard.set(enableUnlimitedStyleFeed, forKey: Self.enableUnlimitedStyleFeedKey)
                 Self.logger.info("Experimental 'Enable Unlimited Style Feed' setting changed to: \(self.enableUnlimitedStyleFeed)")
+            }
+        }
+    }
+
+    @Published var enableBackgroundFetchForNotifications: Bool {
+        didSet {
+            UserDefaults.standard.set(enableBackgroundFetchForNotifications, forKey: Self.enableBackgroundFetchForNotificationsKey)
+            Self.logger.info("Enable Background Fetch for Notifications setting changed to: \(self.enableBackgroundFetchForNotifications)")
+            if enableBackgroundFetchForNotifications {
+                BackgroundNotificationManager.shared.requestNotificationPermission()
+                BackgroundNotificationManager.shared.scheduleAppRefresh()
+            } else {
+                BackgroundNotificationManager.shared.cancelAllBackgroundTasks()
+                Task {
+                    // --- MODIFIED: Add try? ---
+                    try? await UNUserNotificationCenter.current().setBadgeCount(0)
+                    // --- END MODIFICATION ---
+                    UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+                    Self.logger.info("Background fetch disabled. Cancelled tasks, reset badge and cleared delivered notifications.")
+                }
+            }
+        }
+    }
+    
+    @Published var backgroundFetchInterval: BackgroundFetchInterval {
+        didSet {
+            UserDefaults.standard.set(backgroundFetchInterval.rawValue, forKey: Self.backgroundFetchIntervalKey)
+            Self.logger.info("Background Fetch Interval setting changed to: \(self.backgroundFetchInterval.displayName)")
+            if enableBackgroundFetchForNotifications {
+                BackgroundNotificationManager.shared.scheduleAppRefresh()
             }
         }
     }
@@ -389,14 +449,11 @@ class AppSettings: ObservableObject {
         self.isVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) as? Bool ?? true
         
         let initialRawFeedType = UserDefaults.standard.integer(forKey: Self.feedTypeKey)
-        // Wichtig: feedType als erstes initialisieren, da andere davon abhängen könnten
         self._feedType = Published(initialValue: FeedType(rawValue: initialRawFeedType) ?? .promoted)
         
-        // showNSFP zuerst initialisieren, da showSFW.didSet darauf zugreifen könnte (obwohl die Logik jetzt robuster sein sollte)
         let initialNSFPFromDefaults = UserDefaults.standard.object(forKey: Self.showNSFPKey) as? Bool
         self._showNSFP = Published(initialValue: initialNSFPFromDefaults ?? (UserDefaults.standard.object(forKey: Self.showSFWKey) as? Bool ?? true))
         
-        // Dann showSFW
         self._showSFW = Published(initialValue: UserDefaults.standard.object(forKey: Self.showSFWKey) as? Bool ?? true)
         
         self.showNSFW = UserDefaults.standard.bool(forKey: Self.showNSFWKey)
@@ -428,11 +485,9 @@ class AppSettings: ObservableObject {
         let initialRawAccentColor = UserDefaults.standard.string(forKey: Self.accentColorChoiceKey)
         self.accentColorChoice = AccentColorChoice(rawValue: initialRawAccentColor ?? AccentColorChoice.blue.rawValue) ?? .blue
         self.enableUnlimitedStyleFeed = UserDefaults.standard.bool(forKey: Self.enableUnlimitedStyleFeedKey)
-        
-        // Jetzt, da alle Properties initialisiert sind, können wir die Logik ausführen, die `self` verwendet.
-        // Die Logik im didSet von showSFW und feedType, sowie in updateUserLoginStatusForApiFlags
-        // wird nun sicher auf bereits initialisierte Properties zugreifen.
-        // Ein expliziter Aufruf zur Anpassung von showNSFP ist hier nicht mehr nötig, da die didSets dies übernehmen.
+        self.enableBackgroundFetchForNotifications = UserDefaults.standard.object(forKey: Self.enableBackgroundFetchForNotificationsKey) as? Bool ?? false
+        let initialRawFetchInterval = UserDefaults.standard.integer(forKey: Self.backgroundFetchIntervalKey)
+        self.backgroundFetchInterval = BackgroundFetchInterval(rawValue: initialRawFetchInterval) ?? .minutes60
         
         Self.logger.info("AppSettings initialized (Stage 2 Log):")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
@@ -448,7 +503,8 @@ class AppSettings: ObservableObject {
         Self.logger.info("- startupFilters (SFW:\(self.startupFilterSFW), NSFW:\(self.startupFilterNSFW), NSFL:\(self.startupFilterNSFL), POL:\(self.startupFilterPOL))")
         Self.logger.info("- accentColorChoice: \(self.accentColorChoice.displayName)")
         Self.logger.info("- enableUnlimitedStyleFeed: \(self.enableUnlimitedStyleFeed)")
-
+        Self.logger.info("- enableBackgroundFetchForNotifications: \(self.enableBackgroundFetchForNotifications)")
+        Self.logger.info("- backgroundFetchInterval: \(self.backgroundFetchInterval.displayName)")
 
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
@@ -465,6 +521,8 @@ class AppSettings: ObservableObject {
         if UserDefaults.standard.object(forKey: Self.startupFilterPOLKey) == nil { UserDefaults.standard.set(self.startupFilterPOL, forKey: Self.startupFilterPOLKey) }
         if UserDefaults.standard.object(forKey: Self.accentColorChoiceKey) == nil { UserDefaults.standard.set(self.accentColorChoice.rawValue, forKey: Self.accentColorChoiceKey) }
         if UserDefaults.standard.object(forKey: Self.enableUnlimitedStyleFeedKey) == nil { UserDefaults.standard.set(self.enableUnlimitedStyleFeed, forKey: Self.enableUnlimitedStyleFeedKey) }
+        if UserDefaults.standard.object(forKey: Self.enableBackgroundFetchForNotificationsKey) == nil { UserDefaults.standard.set(self.enableBackgroundFetchForNotifications, forKey: Self.enableBackgroundFetchForNotificationsKey) }
+        if UserDefaults.standard.object(forKey: Self.backgroundFetchIntervalKey) == nil { UserDefaults.standard.set(self.backgroundFetchInterval.rawValue, forKey: Self.backgroundFetchIntervalKey) }
 
 
         updateKingfisherCacheLimit()
@@ -478,29 +536,13 @@ class AppSettings: ObservableObject {
     public func applyStartupFiltersIfNeeded() {
         if self.enableStartupFilters {
             Self.logger.info("Applying custom startup filters as per settings.")
-            // Wichtig: Zuerst showSFW setzen, damit dessen didSet showNSFP korrekt anpassen kann
             self.showSFW = self.startupFilterSFW
             self.showNSFW = self.startupFilterNSFW
             self.showNSFL = self.startupFilterNSFL
             self.showPOL = self.startupFilterPOL
             
-            // Für den Junk-Feed muss showNSFP separat von showSFW betrachtet werden,
-            // aber da wir keinen startupFilterNSFP mehr haben, wird es hier implizit durch
-            // die Logik im didSet von feedType bzw. showSFW (oder den Defaultwert) beeinflusst.
-            // Wenn die Startfilter angewendet werden und der FeedType Junk ist, wird
-            // die Logik in showSFW.didSet und feedType.didSet showNSFP korrekt setzen.
-            // Für den Fall, dass der User Junk als Start-Feed hat und SFW aus, NSFP aber an sein soll,
-            // müsste man die Logik hier oder in FilterView anpassen oder startupFilterNSFP wieder einführen.
-            // Aktuell wird NSFP im Junk-Feed über die generelle `showNSFP` gesteuert, die in `FilterView`
-            // angepasst werden kann.
             if self.feedType == .junk {
-                // Falls SFW im Startup aus ist, könnte NSFP dennoch aktiv sein, wenn es vorher so eingestellt war.
-                // Da wir keinen separaten Startup-Toggle für NSFP mehr haben, belassen wir den aktuellen
-                // Wert von showNSFP für den Junk-Feed, es sei denn, startupFilterSFW ist an (dann wird showNSFP durch showSFW.didSet ohnehin gesetzt)
-                // Dies ist eine Vereinfachung, da der User NSFP für Junk nicht mehr direkt im Startup-Filter setzen kann.
                 if !self.startupFilterSFW {
-                    // Lasse showNSFP unberührt, es sei denn, es gibt eine spezifischere Anforderung.
-                    // Der User würde dies in der FilterView für Junk anpassen.
                 }
             }
 

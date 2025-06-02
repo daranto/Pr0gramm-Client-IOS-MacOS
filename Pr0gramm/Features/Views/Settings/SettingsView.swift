@@ -60,7 +60,6 @@ struct SettingsView: View {
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
-                // --- MODIFIED: Section "Filter beim App-Start" nur für eingeloggte User ---
                 if authService.isLoggedIn {
                     Section {
                         Toggle("Eigene Filter beim App-Start", isOn: $settings.enableStartupFilters)
@@ -68,7 +67,6 @@ struct SettingsView: View {
                         
                         if settings.enableStartupFilters {
                             Group {
-                                // --- MODIFIED: NSFP Toggle entfernt, Logik in AppSettings ---
                                 Toggle("SFW anzeigen", isOn: $settings.startupFilterSFW)
                                 Toggle("NSFW anzeigen", isOn: $settings.startupFilterNSFW)
                                 Toggle("NSFL anzeigen", isOn: $settings.startupFilterNSFL)
@@ -85,7 +83,6 @@ struct SettingsView: View {
                     }
                     .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
                 }
-                // --- END MODIFICATION ---
 
 
                 Section {
@@ -105,6 +102,31 @@ struct SettingsView: View {
                 } footer: {
                      Text("Die Option 'Automatisch' zeigt Untertitel nur an, wenn das Video im Player stummgeschaltet ist. 'Immer an' versucht, Untertitel immer anzuzeigen, falls verfügbar.")
                         .font(UIConstants.footnoteFont)
+                }
+                .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+                
+                Section {
+                    Toggle("Hintergrundaktualisierung für Nachrichten", isOn: $settings.enableBackgroundFetchForNotifications)
+                        .font(UIConstants.bodyFont)
+                    
+                    // --- NEW: Picker für Intervall, nur wenn Fetch aktiv ---
+                    if settings.enableBackgroundFetchForNotifications {
+                        Picker("Abrufintervall (ca.)", selection: $settings.backgroundFetchInterval) {
+                            ForEach(BackgroundFetchInterval.allCases) { interval in
+                                Text(interval.displayName).tag(interval)
+                                    .font(UIConstants.bodyFont)
+                            }
+                        }
+                        .font(UIConstants.bodyFont)
+                    }
+                    // --- END NEW ---
+                } header: {
+                    Text("Benachrichtigungen")
+                } footer: {
+                    // --- MODIFIED: Footer Text angepasst ---
+                    Text("Erlaubt der App, im Hintergrund nach neuen Nachrichten zu suchen und dich per Push-Benachrichtigung zu informieren. iOS entscheidet letztendlich, wann und wie oft die App tatsächlich im Hintergrund ausgeführt wird, um Akku zu sparen. Das gewählte Intervall ist eine Empfehlung an das System.\nDie Berechtigung für Mitteilungen wird angefragt, sobald du die Hintergrundaktualisierung aktivierst.")
+                       .font(UIConstants.footnoteFont)
+                    // --- END MODIFICATION ---
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
