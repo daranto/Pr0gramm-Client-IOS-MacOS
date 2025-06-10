@@ -18,15 +18,16 @@ struct UserUploadsView: View {
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
-    // --- NEW: NavigationPath für interne Item-Navigation ---
-    @State private var navigationPath = NavigationPath()
-    @StateObject private var playerManager = VideoPlayerManager()
+    // @State private var navigationPath = NavigationPath() // Entfernt, da kein eigener Stack mehr
+    @EnvironmentObject var playerManager: VideoPlayerManager // PlayerManager wird jetzt per EnvironmentObject erwartet
 
     @State private var searchText = ""
     @State private var currentSearchTagForAPI: String? = nil
     @State private var searchDebounceTimer: Timer? = nil
     private let searchDebounceInterval: TimeInterval = 0.75
     @State private var hasAttemptedSearchSinceAppear = false
+
+    @State private var primaryLoadTask: Task<Void, Never>? = nil
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserUploadsView")
@@ -51,47 +52,35 @@ struct UserUploadsView: View {
     }
 
     var body: some View {
-        // --- MODIFIED: Eigener NavigationStack für .searchable und .navigationDestination ---
-        NavigationStack(path: $navigationPath) {
-            uploadsContentView
-                .navigationTitle("Uploads von \(username)")
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-                #endif
-                .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Uploads nach Tags filtern")
-                .onSubmit(of: .search) {
-                    UserUploadsView.logger.info("Search submitted for user '\(username)' with: \(searchText)")
-                    searchDebounceTimer?.invalidate()
-                    Task {
-                        await performSearchLogic(isInitialSearch: true)
-                    }
-                }
-                // --- NEW: .navigationDestination für Item.self HIER ---
-                .navigationDestination(for: Item.self) { item in
-                    detailView(for: item) // Ruft die lokale detailView Funktion auf
-                }
-                // --- END NEW ---
-        }
-        // --- END MODIFICATION ---
+        // KEIN NavigationStack hier mehr
+        uploadsContentView
+            .navigationTitle("Uploads von \(username)")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Uploads nach Tags filtern")
+            .onSubmit(of: .search) {
+                UserUploadsView.logger.info("Search submitted for user '\(username)' with: \(searchText)")
+                searchDebounceTimer?.invalidate()
+                triggerPrimaryLoadTask { await performSearchLogic(isInitialSearch: true) }
+            }
+            // .navigationDestination(for: Item.self) // Entfernt, wird von ProfileView gehandhabt
         .onChange(of: searchText) { oldValue, newValue in
             UserUploadsView.logger.info("Search text for user '\(username)' changed from '\(oldValue)' to '\(newValue)'")
             searchDebounceTimer?.invalidate()
+            primaryLoadTask?.cancel()
 
             let trimmedNewValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             let previousAPITag = currentSearchTagForAPI?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
             if trimmedNewValue.isEmpty && !previousAPITag.isEmpty {
                 UserUploadsView.logger.info("Search text cleared for user '\(username)', loading unfiltered uploads.")
-                Task {
-                    await performSearchLogic(isInitialSearch: true)
-                }
+                triggerPrimaryLoadTask { await performSearchLogic(isInitialSearch: true) }
             } else if !trimmedNewValue.isEmpty && trimmedNewValue.count >= 2 {
                 UserUploadsView.logger.info("Starting debounce timer for search (user '\(username)'): '\(trimmedNewValue)'")
                 searchDebounceTimer = Timer.scheduledTimer(withTimeInterval: searchDebounceInterval, repeats: false) { _ in
                     UserUploadsView.logger.info("Debounce timer fired for search (user '\(username)'): '\(trimmedNewValue)'")
-                    Task {
-                        await performSearchLogic(isInitialSearch: true)
-                    }
+                    triggerPrimaryLoadTask { await performSearchLogic(isInitialSearch: true) }
                 }
             } else if trimmedNewValue.isEmpty && previousAPITag.isEmpty && !items.isEmpty && hasAttemptedSearchSinceAppear {
                  UserUploadsView.logger.info("Search text empty for user '\(username)', no previous API tag, items exist. No API call needed.")
@@ -100,43 +89,39 @@ struct UserUploadsView: View {
             }
         }
         .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) { Button("OK") { errorMessage = nil } } message: { Text(errorMessage ?? "Unbekannter Fehler") }
-        .task {
-            playerManager.configure(settings: settings)
+        .task(id: username) {
+            // playerManager.configure(settings: settings) // Wird jetzt von ProfileView übernommen
             hasAttemptedSearchSinceAppear = false
+            UserUploadsView.logger.info("UserUploadsView .task (id: username) for \(username). Current items: \(items.count)")
             if items.isEmpty && currentSearchTagForAPI == nil {
-                await refreshUploads()
+                triggerPrimaryLoadTask { await refreshUploads() }
             } else if currentSearchTagForAPI != nil {
-                await performSearchLogic(isInitialSearch: true)
+                triggerPrimaryLoadTask { await performSearchLogic(isInitialSearch: true) }
             }
+        }
+        .onDisappear {
+            primaryLoadTask?.cancel()
+            searchDebounceTimer?.invalidate()
+            UserUploadsView.logger.info("UserUploadsView onDisappear for \(username). Cancelled primaryLoadTask and searchDebounceTimer.")
         }
         .onChange(of: settings.apiFlags) { _, _ in
             UserUploadsView.logger.info("API flags changed, resetting search and refreshing uploads for \(username).")
             currentSearchTagForAPI = nil
             searchText = ""
-            Task { await refreshUploads() }
+            triggerPrimaryLoadTask { await refreshUploads() }
         }
         .onChange(of: settings.seenItemIDs) { _, _ in UserUploadsView.logger.trace("UserUploadsView detected change in seenItemIDs, body will update.") }
     }
-
-    @ViewBuilder
-    private func detailView(for destinationItem: Item) -> some View {
-        // Diese Funktion wird jetzt vom lokalen .navigationDestination aufgerufen
-        if let index = items.firstIndex(where: { $0.id == destinationItem.id }) {
-            PagedDetailView(
-                items: $items,
-                selectedIndex: index,
-                playerManager: playerManager,
-                loadMoreAction: { Task { await loadMoreUploads() } }
-            )
-            .environmentObject(settings) // Weitergeben, da PagedDetailView es braucht
-            .environmentObject(authService)
-        } else {
-            Text("Fehler: Item \(destinationItem.id) nicht mehr in der Uploads-Liste gefunden.")
-                .onAppear {
-                    UserUploadsView.logger.warning("Navigation destination item \(destinationItem.id) not found in current items list for user \(username).")
-                }
+    
+    private func triggerPrimaryLoadTask(operation: @escaping () async -> Void) {
+        primaryLoadTask?.cancel()
+        primaryLoadTask = Task {
+            await operation()
         }
     }
+
+    // detailView Funktion wird nicht mehr benötigt, da NavigationLink direkt Item pusht
+    // und ProfileView das .navigationDestination(for: Item.self) hat.
 
     @ViewBuilder private var uploadsContentView: some View {
         Group {
@@ -152,7 +137,9 @@ struct UserUploadsView: View {
                      Text(error)
                         .font(UIConstants.bodyFont)
                  } actions: {
-                     Button("Erneut versuchen") { Task { await refreshUploads() } }
+                     Button("Erneut versuchen") {
+                         triggerPrimaryLoadTask { await refreshUploads() }
+                     }
                         .font(UIConstants.bodyFont)
                  }
                  .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -180,7 +167,7 @@ struct UserUploadsView: View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 3) {
                  ForEach(items) { item in
-                     NavigationLink(value: item) { // NavigationLink value ist jetzt direkt das Item
+                     NavigationLink(value: item) { // value ist Item
                          FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id))
                      }.buttonStyle(.plain)
                  }
@@ -196,7 +183,9 @@ struct UserUploadsView: View {
             }
             .padding(.horizontal, 5).padding(.bottom)
         }
-        .refreshable { await refreshUploads() }
+        .refreshable {
+            triggerPrimaryLoadTask { await refreshUploads() }
+        }
     }
 
     @MainActor
@@ -208,8 +197,9 @@ struct UserUploadsView: View {
             if items.isEmpty {
                 if currentSearchTagForAPI != nil {
                     currentSearchTagForAPI = nil
-                    await refreshUploads()
                 }
+                // primaryLoadTask wird schon von der aufrufenden Stelle (onSubmit, onChange) verwaltet
+                await refreshUploads()
             }
             UserUploadsView.logger.info("performSearchLogic for user '\(username)': Search text empty, no previous API tag. No API call needed unless list is empty.")
             return
@@ -218,21 +208,30 @@ struct UserUploadsView: View {
         currentSearchTagForAPI = trimmedSearchText.isEmpty ? nil : trimmedSearchText
         
         UserUploadsView.logger.info("performSearchLogic for user '\(username)': isInitial=\(isInitialSearch). API Tag: '\(currentSearchTagForAPI ?? "nil")'")
-        await refreshUploads()
+        await refreshUploads() // refreshUploads wird nun den currentSearchTagForAPI verwenden
         hasAttemptedSearchSinceAppear = true
     }
 
     @MainActor
     func refreshUploads() async {
+        guard !Task.isCancelled else {
+            UserUploadsView.logger.info("refreshUploads execution for \(username) cancelled at entry.")
+            return
+        }
+
         UserUploadsView.logger.info("Refreshing uploads for user: \(username), search: '\(currentSearchTagForAPI ?? "nil")'")
         let cacheKey = userUploadsCacheKey
-        self.isLoading = true; self.errorMessage = nil
+        
+        self.isLoading = true
+        self.errorMessage = nil
+        
         defer { Task { @MainActor in self.isLoading = false; UserUploadsView.logger.info("Finished uploads refresh process for \(username).") } }
         
         canLoadMore = true; isLoadingMore = false; var initialItemsFromCache: [Item]? = nil
 
         if items.isEmpty {
             initialItemsFromCache = await settings.loadItemsFromCache(forKey: cacheKey)
+            if Task.isCancelled { UserUploadsView.logger.info("Refresh task for \(username) cancelled during cache load."); return }
             if let cached = initialItemsFromCache, !cached.isEmpty {
                  UserUploadsView.logger.info("Found \(cached.count) uploaded items in cache initially for \(username) (search: '\(currentSearchTagForAPI ?? "nil")').");
                  self.items = cached
@@ -246,13 +245,17 @@ struct UserUploadsView: View {
         
         do {
             let apiResponse = try await apiService.fetchItems(flags: settings.apiFlags, user: username, tags: apiTagsParameter)
+            if Task.isCancelled { UserUploadsView.logger.info("Refresh task for \(username) cancelled after API call but before UI update."); return }
+
             let fetchedItemsFromAPI = apiResponse.items
             UserUploadsView.logger.info("API fetch for uploads completed: \(fetchedItemsFromAPI.count) items for user \(username).");
             
             await MainActor.run {
-                let oldIDs = Set(self.items.map { $0.id })
-                let newIDs = Set(fetchedItemsFromAPI.map { $0.id })
-                let contentActuallyChanged = oldIDs != newIDs
+                if Task.isCancelled { UserUploadsView.logger.info("Refresh task for \(username) cancelled just before UI update."); return }
+
+                // let oldIDs = Set(self.items.map { $0.id }) // Nicht mehr nötig, da NavigationPath von ProfileView verwaltet wird
+                // let newIDs = Set(fetchedItemsFromAPI.map { $0.id })
+                // let contentActuallyChanged = oldIDs != newIDs
 
                 self.items = fetchedItemsFromAPI
                 if fetchedItemsFromAPI.isEmpty {
@@ -271,18 +274,18 @@ struct UserUploadsView: View {
                 }
                 UserUploadsView.logger.info("UserUploadsView updated with \(fetchedItemsFromAPI.count) items from API for \(username). Can load more: \(self.canLoadMore)")
                 
-                // NavigationPath nur zurücksetzen, wenn sich der Inhalt tatsächlich geändert hat
-                // und ein Detail View offen war.
-                if !navigationPath.isEmpty && contentActuallyChanged {
-                    navigationPath = NavigationPath()
-                    UserUploadsView.logger.info("Popped local navigation in UserUploadsView due to content change for \(username).")
-                }
+                // if !navigationPath.isEmpty && contentActuallyChanged { // Nicht mehr nötig
+                //     navigationPath = NavigationPath()
+                //     UserUploadsView.logger.info("Popped local navigation in UserUploadsView due to content change for \(username).")
+                // }
             }
             await settings.saveItemsToCache(fetchedItemsFromAPI, forKey: cacheKey);
+            if Task.isCancelled { UserUploadsView.logger.info("Refresh task for \(username) cancelled after saving to cache."); return }
             await settings.updateCacheSizes()
         }
         catch let error as URLError where error.code == .userAuthenticationRequired {
             UserUploadsView.logger.error("API fetch for uploads failed: Authentication required (User: \(username)). Session might be invalid.");
+            if Task.isCancelled { return }
             await MainActor.run {
                 self.items = [];
                 self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden.";
@@ -291,8 +294,15 @@ struct UserUploadsView: View {
             await settings.saveItemsToCache([], forKey: cacheKey);
             await authService.logout()
         }
+        catch is CancellationError {
+            UserUploadsView.logger.info("Uploads refresh task API call explicitly cancelled for \(username).")
+            if items.isEmpty && initialItemsFromCache == nil {
+                // Optional: this.errorMessage = "Ladevorgang abgebrochen."
+            }
+        }
         catch {
             UserUploadsView.logger.error("API fetch for uploads failed (User: \(username)): \(error.localizedDescription)");
+            if Task.isCancelled { return }
             await MainActor.run {
                 if self.items.isEmpty {
                     self.errorMessage = "Fehler beim Laden der Uploads: \(error.localizedDescription)"
@@ -306,6 +316,7 @@ struct UserUploadsView: View {
 
     @MainActor
     func loadMoreUploads() async {
+        guard !Task.isCancelled else { UserUploadsView.logger.info("loadMoreUploads for \(username) cancelled at entry."); return }
         guard !isLoadingMore && canLoadMore && !isLoading else { UserUploadsView.logger.debug("Skipping loadMoreUploads for \(username): State prevents loading."); return }
         guard let lastItemId = items.last?.id else { UserUploadsView.logger.warning("Skipping loadMoreUploads for \(username): No last item found."); return }
         let cacheKey = userUploadsCacheKey; UserUploadsView.logger.info("--- Starting loadMoreUploads for user \(username), search '\(currentSearchTagForAPI ?? "nil")' older than \(lastItemId) ---");
@@ -316,12 +327,16 @@ struct UserUploadsView: View {
 
         do {
             let apiResponse = try await apiService.fetchItems(flags: settings.apiFlags, user: username, tags: apiTagsParameter, olderThanId: lastItemId)
+            if Task.isCancelled { UserUploadsView.logger.info("Load more uploads task cancelled after API call for \(username)."); return }
+
             let newItems = apiResponse.items
             UserUploadsView.logger.info("Loaded \(newItems.count) more uploaded items from API for \(username) (requesting older than \(lastItemId)).");
             var appendedItemCount = 0
             
             await MainActor.run {
-                guard self.isLoadingMore else { UserUploadsView.logger.info("Load more for \(username) cancelled before UI update."); return }
+                if Task.isCancelled { UserUploadsView.logger.info("Load more task for \(username) cancelled just before UI update."); return }
+                guard self.isLoadingMore else { UserUploadsView.logger.info("Load more for \(username) cancelled before UI update (isLoadingMore became false)."); return }
+
                 if newItems.isEmpty {
                     UserUploadsView.logger.info("Reached end of uploads feed for \(username) because API returned 0 items for loadMore.")
                     self.canLoadMore = false
@@ -351,20 +366,23 @@ struct UserUploadsView: View {
             if appendedItemCount > 0 {
                 let itemsToSave = await MainActor.run { self.items }
                 await settings.saveItemsToCache(itemsToSave, forKey: cacheKey);
+                if Task.isCancelled { UserUploadsView.logger.info("Load more uploads task cancelled after saving to cache for \(username)."); return }
                 await settings.updateCacheSizes()
             }
         }
         catch let error as URLError where error.code == .userAuthenticationRequired {
             UserUploadsView.logger.error("API fetch for more uploads failed: Authentication required (User: \(username)). Session might be invalid.");
+            if Task.isCancelled { return }
             await MainActor.run {
                 self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden.";
                 self.canLoadMore = false;
             }
             await authService.logout()
         }
-        catch is CancellationError { UserUploadsView.logger.info("Load more uploads API call cancelled for \(username).") }
+        catch is CancellationError { UserUploadsView.logger.info("Load more uploads API call explicitly cancelled for \(username).") }
         catch {
             UserUploadsView.logger.error("API fetch failed during loadMoreUploads for \(username): \(error.localizedDescription)");
+            if Task.isCancelled { return }
             await MainActor.run {
                 guard self.isLoadingMore else { return };
                 if items.isEmpty { errorMessage = "Fehler beim Nachladen: \(error.localizedDescription)" };
@@ -376,6 +394,11 @@ struct UserUploadsView: View {
 
 // MARK: - Previews
 #Preview {
-    let previewSettings = AppSettings(); let previewAuthService = AuthService(appSettings: previewSettings); previewAuthService.isLoggedIn = true; previewAuthService.currentUser = UserInfo(id: 123, name: "PreviewUser", registered: 1, score: 100, mark: 2, badges: []); return NavigationStack { UserUploadsView(username: "PreviewUser").environmentObject(previewSettings).environmentObject(previewAuthService) }
+    let previewSettings = AppSettings(); let previewAuthService = AuthService(appSettings: previewSettings); previewAuthService.isLoggedIn = true; previewAuthService.currentUser = UserInfo(id: 123, name: "PreviewUser", registered: 1, score: 100, mark: 2, badges: []);
+    // PlayerManager wird jetzt von der ProfileView (oder einer höheren View) als EnvironmentObject erwartet
+    let playerManager = VideoPlayerManager()
+    playerManager.configure(settings: previewSettings)
+    
+    return NavigationStack { UserUploadsView(username: "PreviewUser").environmentObject(previewSettings).environmentObject(previewAuthService).environmentObject(playerManager) }
 }
 // --- END OF COMPLETE FILE ---

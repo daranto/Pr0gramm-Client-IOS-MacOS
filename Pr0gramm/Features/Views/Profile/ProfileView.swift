@@ -9,8 +9,7 @@ enum ProfileNavigationTarget: Hashable {
     case favoritedComments(username: String)
     case allCollections(username: String)
     case collectionItems(collection: ApiCollection, username: String)
-    case allUserUploads(username: String)
-    case allUserComments(username: String)
+    case userProfileComments(username: String) // Wieder hinzugefügt
     case postDetail(item: Item, targetCommentID: Int?)
     case userFollowList(username: String)
 }
@@ -45,6 +44,7 @@ struct ProfileView: View {
             .sheet(isPresented: $showingLoginSheet) {
                 LoginView()
                     .environmentObject(authService)
+                    .environmentObject(settings)
             }
             .overlay {
                  if authService.isLoading {
@@ -65,10 +65,7 @@ struct ProfileView: View {
                  case .collectionItems(let collection, let username):
                      CollectionItemsView(collection: collection, username: username)
                         .environmentObject(playerManager)
-                 case .allUserUploads(let username):
-                     UserUploadsView(username: username)
-                        .environmentObject(playerManager)
-                 case .allUserComments(let username):
+                 case .userProfileComments(let username): // Wiederhergestellt
                      UserProfileCommentsView(username: username)
                         .environmentObject(playerManager)
                  case .postDetail(let item, let targetCommentID):
@@ -100,10 +97,10 @@ struct ProfileView: View {
     @ViewBuilder
     private var loggedInContent: some View {
         if let user = authService.currentUser, let badges = user.badges, !badges.isEmpty {
-            Section {
+            Section { // Die Section hier ist wichtig, um den headerProminence-Fehler zu vermeiden
                 badgeScrollView(badges: badges)
                      .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
-            }
+            } // Kein Header Text hier, nur für die Gruppierung
         }
 
         Section("Benutzerinformationen") {
@@ -136,7 +133,8 @@ struct ProfileView: View {
                         .font(UIConstants.bodyFont)
                 }
 
-                NavigationLink(value: ProfileNavigationTarget.allUserComments(username: user.name)) {
+                // NavigationLink für "Meine Kommentare" wiederhergestellt
+                NavigationLink(value: ProfileNavigationTarget.userProfileComments(username: user.name)) {
                     Text("Meine Kommentare")
                         .font(UIConstants.bodyFont)
                 }
@@ -211,7 +209,7 @@ struct ProfileView: View {
                         .help(badge.description ?? "")
                 }
             }
-            .padding(.horizontal)
+            .padding(.leading, 1)
         }
     }
 
@@ -251,6 +249,8 @@ struct ProfileView: View {
 private struct LoggedInProfilePreviewWrapper: View {
     @StateObject private var settings: AppSettings
     @StateObject private var authService: AuthService
+    @StateObject private var playerManager = VideoPlayerManager()
+
 
     init() {
         let si = AppSettings()
@@ -283,12 +283,14 @@ private struct LoggedInProfilePreviewWrapper: View {
 
         _settings = StateObject(wrappedValue: si)
         _authService = StateObject(wrappedValue: ai)
+        playerManager.configure(settings: si)
     }
 
     var body: some View {
         ProfileView()
             .environmentObject(settings)
             .environmentObject(authService)
+            .environmentObject(playerManager)
     }
 }
 
@@ -300,5 +302,6 @@ private struct LoggedInProfilePreviewWrapper: View {
     ProfileView()
         .environmentObject(AppSettings())
         .environmentObject(AuthService(appSettings: AppSettings()))
+        .environmentObject(VideoPlayerManager())
 }
 // --- END OF COMPLETE FILE ---
