@@ -56,7 +56,7 @@ struct ProfileView: View {
                  switch target {
                  case .uploads(let username):
                      UserUploadsView(username: username)
-                        .environmentObject(playerManager)
+                        .environmentObject(playerManager) // PlayerManager hier übergeben
                  case .favoritedComments(let username):
                      UserFavoritedCommentsView(username: username)
                         .environmentObject(playerManager)
@@ -65,7 +65,7 @@ struct ProfileView: View {
                  case .collectionItems(let collection, let username):
                      CollectionItemsView(collection: collection, username: username)
                         .environmentObject(playerManager)
-                 case .userProfileComments(let username): // Wiederhergestellt
+                 case .userProfileComments(let username):
                      UserProfileCommentsView(username: username)
                         .environmentObject(playerManager)
                  case .postDetail(let item, let targetCommentID):
@@ -79,15 +79,17 @@ struct ProfileView: View {
                         .environmentObject(playerManager)
                  }
             }
-            .navigationDestination(for: Item.self) { item in
-                PagedDetailViewWrapperForItem(
-                    item: item,
-                    playerManager: playerManager,
-                    targetCommentID: nil
-                )
-                .environmentObject(settings)
-                .environmentObject(authService)
-            }
+            // --- MODIFICATION: Entfernt von hier ---
+            // .navigationDestination(for: Item.self) { item in
+            //     PagedDetailViewWrapperForItem(
+            //         item: item,
+            //         playerManager: playerManager,
+            //         targetCommentID: nil
+            //     )
+            //     .environmentObject(settings)
+            //     .environmentObject(authService)
+            // }
+            // --- END MODIFICATION ---
             .task {
                 playerManager.configure(settings: settings)
             }
@@ -97,10 +99,10 @@ struct ProfileView: View {
     @ViewBuilder
     private var loggedInContent: some View {
         if let user = authService.currentUser, let badges = user.badges, !badges.isEmpty {
-            Section { // Die Section hier ist wichtig, um den headerProminence-Fehler zu vermeiden
+            Section {
                 badgeScrollView(badges: badges)
                      .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
-            } // Kein Header Text hier, nur für die Gruppierung
+            }
         }
 
         Section("Benutzerinformationen") {
@@ -133,7 +135,6 @@ struct ProfileView: View {
                         .font(UIConstants.bodyFont)
                 }
 
-                // NavigationLink für "Meine Kommentare" wiederhergestellt
                 NavigationLink(value: ProfileNavigationTarget.userProfileComments(username: user.name)) {
                     Text("Meine Kommentare")
                         .font(UIConstants.bodyFont)
