@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Represents the main tabs of the application.
 enum Tab: Int, CaseIterable, Identifiable {
-    case feed = 0, favorites = 1, search = 2, inbox = 3, profile = 4, settings = 5
+    case feed = 0, favorites = 1, search = 2, inbox = 3, calendar = 4, profile = 5, settings = 6
     var id: Int { self.rawValue }
 }
 
@@ -57,6 +57,9 @@ struct MainView: View {
                 case .settings:
                     SettingsView()
                         .forceRotation(orientation: .all)
+                case .calendar:
+                    CalendarView()
+                        .forceRotation(orientation: .all)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -72,7 +75,7 @@ struct MainView: View {
 
     private var tabBarHStack: some View {
         HStack(spacing: 0) {
-            ForEach(Tab.allCases) { tab in
+            ForEach(Tab.allCases.sorted(by: { $0.rawValue < $1.rawValue })) { tab in
                  if (tab == .favorites || tab == .inbox) && !authService.isLoggedIn { /* Skip */ }
                  else {
                      Button { handleTap(on: tab) } label: {
@@ -116,6 +119,7 @@ struct MainView: View {
         case .inbox: return "envelope.fill"
         case .profile: return "person.crop.circle"
         case .settings: return "gearshape.fill"
+        case .calendar: return "calendar"
         }
     }
 
@@ -127,6 +131,7 @@ struct MainView: View {
         case .inbox: return "Nachrichten"
         case .profile: return "Profil"
         case .settings: return "Einstellungen"
+        case .calendar: return "Kalender"
         }
     }
 }

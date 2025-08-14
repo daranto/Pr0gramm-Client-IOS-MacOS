@@ -366,6 +366,39 @@ struct FollowActionResponse: Codable {
     let ts: Int?
 }
 
+// --- NEW: Calendar Structs ---
+struct CalendarEventsResponse: Codable {
+    let success: Bool
+    let events: [CalendarEvent]
+}
+
+struct CalendarEventResponse: Codable {
+    let success: Bool
+    let event: CalendarEvent
+}
+
+struct CalendarEvent: Codable, Identifiable, Hashable {
+    let id: Int
+    let userId: Int
+    let title: String
+    let description: String
+    let location: String
+    let startTime: String
+    let endTime: String
+    let conditions: String?
+    let imageTagRequired: String?
+    let rewardsDescription: String?
+    let created: String
+    let modified: String
+    let categoryId: Int
+    let startTimeTs: Int
+    let endTimeTs: Int
+    let userName: String
+    let userMark: Int
+    let categoryName: String
+    let categoryColor: String
+}
+// --- END NEW ---
 
 extension Array where Element == URLQueryItem {
     func removingDuplicatesByName() -> [URLQueryItem] {
@@ -1221,6 +1254,49 @@ class APIService {
             throw error
         }
     }
+    
+    // --- NEW: Calendar API Methods ---
+    func fetchCalendarEvents(startTimestamp: Int, endTimestamp: Int) async throws -> CalendarEventsResponse {
+        let endpoint = "/calendar/getEventsByDateRange"
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        urlComponents.queryItems = [
+            URLQueryItem(name: "startTimestamp", value: String(startTimestamp)),
+            URLQueryItem(name: "endTimestamp", value: String(endTimestamp))
+        ]
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        let request = URLRequest(url: url)
+        APIService.logger.info("Fetching calendar events from \(startTimestamp) to \(endTimestamp)")
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            return try handleApiResponse(data: data, response: response, endpoint: endpoint)
+        } catch {
+            APIService.logger.error("Error fetching calendar events: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    func fetchCalendarEvent(byId eventId: Int) async throws -> CalendarEventResponse {
+        let endpoint = "/calendar/getEventById"
+        guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        urlComponents.queryItems = [URLQueryItem(name: "eventId", value: String(eventId))]
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        let request = URLRequest(url: url)
+        APIService.logger.info("Fetching calendar event with ID: \(eventId)")
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            return try handleApiResponse(data: data, response: response, endpoint: endpoint)
+        } catch {
+            APIService.logger.error("Error fetching calendar event with ID \(eventId): \(error.localizedDescription)")
+            throw error
+        }
+    }
+    // --- END NEW ---
 
     private func handleApiResponse<T: Decodable>(data: Data, response: URLResponse, endpoint: String) throws -> T {
         guard let httpResponse = response as? HTTPURLResponse else { APIService.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }

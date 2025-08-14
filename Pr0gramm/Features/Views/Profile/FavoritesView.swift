@@ -93,6 +93,8 @@ struct FavoritesView: View {
         case .inbox: return "Inbox"
         case .profile: return "Profile"
         case .settings: return "Settings"
+        case .calendar: return "Calendar"
+            
         }
     }
 
