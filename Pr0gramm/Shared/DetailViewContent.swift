@@ -205,7 +205,24 @@ struct DetailViewContent: View {
         ZStack(alignment: .bottom) {
             Group {
                 if item.isVideo {
-                    if let actualPlayer = playerManager.player, playerManager.playerItemID == item.id {
+                    if playerManager.showRetryButton && playerManager.playerItemID == item.id {
+                        VStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.largeTitle)
+                                .foregroundColor(.orange)
+                            Text(playerManager.playerError ?? "Video konnte nicht geladen werden")
+                                .foregroundColor(.white)
+                                .font(.headline)
+                                .multilineTextAlignment(.center)
+                            Button("Erneut versuchen") {
+                                playerManager.forceRetry()
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.white)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.black)
+                    } else if let actualPlayer = playerManager.player, playerManager.playerItemID == item.id {
                         CustomVideoPlayerRepresentable(player: actualPlayer, handler: keyboardActionHandler, onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen, horizontalSizeClass: horizontalSizeClass)
                             .id(item.id)
                     } else {

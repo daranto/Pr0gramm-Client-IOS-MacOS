@@ -21,12 +21,20 @@ class VideoPlayerManager: ObservableObject {
     @Published private(set) var subtitleCues: [SubtitleCue] = []
     @Published private(set) var currentSubtitleText: String? = nil
     @Published private(set) var subtitleError: String? = nil
+    
+    // MARK: - Published Error/Retry State
+    @Published private(set) var playerError: String? = nil
+    @Published private(set) var showRetryButton: Bool = false
+    private var itemForFailedPlayer: Item?
+    private var retryCount = 0
+    private let maxRetries = 3
 
     // MARK: - Private Observer Properties
     private var muteObserver: NSKeyValueObservation? = nil
     private var loopObserver: NSObjectProtocol? = nil
     private var timeObserverToken: Any? = nil
-    private var playerStatusObserver: NSKeyValueObservation? = nil
+    private var playerItemStatusObserver: NSKeyValueObservation? = nil
+    private var playerItemErrorObserver: NSKeyValueObservation? = nil
 
 
     // MARK: - Private Task Properties
@@ -35,9 +43,7 @@ class VideoPlayerManager: ObservableObject {
     // MARK: - Dependencies
     private weak var settings: AppSettings?
     private var shouldAutoplayWhenReady: Bool = false
-    // --- NEW: Flag, um zu wissen, ob der Player explizit durch die View gestartet werden soll ---
     private var playCommandFromViewPending: Bool = false
-    // --- END NEW ---
 
 
     // Seek time constants
@@ -55,7 +61,6 @@ class VideoPlayerManager: ObservableObject {
         VideoPlayerManager.logger.debug("VideoPlayerManager configured with AppSettings.")
     }
 
-    // --- NEW: Methode für Views, um Play anzufordern ---
     @MainActor
     func requestPlay(for itemID: Int) {
         guard self.playerItemID == itemID, let player = self.player else {
@@ -63,7 +68,7 @@ class VideoPlayerManager: ObservableObject {
             return
         }
         
-        if player.status == .readyToPlay {
+        if player.currentItem?.status == .readyToPlay {
             if player.timeControlStatus != .playing {
                 VideoPlayerManager.logger.info("[Manager] requestPlay: Player for item \(itemID) is ready and not playing. Starting play.")
                 player.play()
@@ -75,17 +80,23 @@ class VideoPlayerManager: ObservableObject {
             self.playCommandFromViewPending = true // Merken, dass Play angefordert wurde
         }
     }
-    // --- END NEW ---
 
 
     /// Creates a new AVPlayer for the given video item or ensures the existing one plays if it's for the same item.
     /// Cleans up any previously active player. Reads transientSessionMuteState first, then isVideoMuted.
     /// Also fetches and parses subtitles based on AppSettings.subtitleActivationMode.
     @MainActor
-    func setupPlayerIfNeeded(for item: Item, isFullscreen: Bool) {
+    func setupPlayerIfNeeded(for item: Item, isFullscreen: Bool, forceReload: Bool = false) {
         guard let settings = self.settings else {
             VideoPlayerManager.logger.error("[Manager] Cannot setup player: AppSettings not configured.")
             return
+        }
+        
+        if playerItemID != item.id || forceReload {
+            self.retryCount = 0
+            self.playerError = nil
+            self.showRetryButton = false
+            self.itemForFailedPlayer = nil
         }
 
         self.subtitleCues = []
@@ -94,7 +105,7 @@ class VideoPlayerManager: ObservableObject {
         self.subtitleFetchTask?.cancel()
         self.subtitleFetchTask = nil
         self.shouldAutoplayWhenReady = false
-        self.playCommandFromViewPending = false // Zurücksetzen
+        self.playCommandFromViewPending = false
 
 
         guard item.isVideo else {
@@ -108,7 +119,7 @@ class VideoPlayerManager: ObservableObject {
         }
 
         // Wenn Player für dieses Item schon existiert
-        if playerItemID == item.id, let existingPlayer = player {
+        if !forceReload && playerItemID == item.id, let existingPlayer = player {
             VideoPlayerManager.logger.debug("[Manager] Player already exists for video item \(item.id). Ensuring state. IsFullscreen: \(isFullscreen)")
             
             let targetMuteState = settings.transientSessionMuteState ?? settings.isVideoMuted
@@ -117,16 +128,11 @@ class VideoPlayerManager: ObservableObject {
                 existingPlayer.isMuted = targetMuteState
             }
 
-            // --- MODIFIED: Player-Start-Logik vereinfacht, View (via isActive) sollte requestPlay() rufen ---
             if !isFullscreen {
-                // Wenn die View aktiv wird, wird sie requestPlay() rufen.
-                // Hier nur sicherstellen, dass der Status-Observer korrekt läuft.
-                // Wenn der Player schon spielt, ist alles gut.
                 VideoPlayerManager.logger.trace("[Manager] Existing player for \(item.id). Play state will be managed by view's isActive via requestPlay.")
             } else { // isFullscreen
                 VideoPlayerManager.logger.trace("[Manager] Player exists for \(item.id) but isFullscreen is true. System controls playback.")
             }
-            // --- END MODIFICATION ---
 
             if subtitleError != nil && subtitleCues.isEmpty {
                 VideoPlayerManager.logger.debug("[Manager] Player exists, subtitle error was present. Attempting subtitle fetch again.")
@@ -148,7 +154,8 @@ class VideoPlayerManager: ObservableObject {
             return
         }
 
-        let newPlayer = AVPlayer(url: url)
+        let playerItem = AVPlayerItem(url: url)
+        let newPlayer = AVPlayer(playerItem: playerItem)
         let initialMute = settings.transientSessionMuteState ?? settings.isVideoMuted
         if settings.transientSessionMuteState == nil {
             settings.transientSessionMuteState = initialMute
@@ -180,7 +187,7 @@ class VideoPlayerManager: ObservableObject {
         }
 
         if !isFullscreen {
-            self.shouldAutoplayWhenReady = true // Flag für den Status-Observer, wenn nicht im Fullscreen gestartet wird
+            self.shouldAutoplayWhenReady = true
             VideoPlayerManager.logger.debug("[Manager] New player for item \(item.id). ShouldAutoplayWhenReady set to true (not fullscreen).")
         } else {
              self.shouldAutoplayWhenReady = false
@@ -190,8 +197,8 @@ class VideoPlayerManager: ObservableObject {
 
     @MainActor
     private func setupObservers(for player: AVPlayer, item: Item) {
-        guard let settings = self.settings else {
-             VideoPlayerManager.logger.error("[Manager] Cannot setup observers: AppSettings not configured.")
+        guard let settings = self.settings, let playerItem = player.currentItem else {
+             VideoPlayerManager.logger.error("[Manager] Cannot setup observers: AppSettings or player.currentItem is nil.")
              return
         }
 
@@ -216,47 +223,51 @@ class VideoPlayerManager: ObservableObject {
         }
         VideoPlayerManager.logger.debug("[Manager] Added mute KVO observer for item \(item.id).")
 
-        self.playerStatusObserver = player.observe(\.status, options: [.new, .initial]) { [weak self, weakPlayer = player] capturedLocalPlayer, change in
-            guard let strongSelf = self, capturedLocalPlayer == weakPlayer else { return }
+        self.playerItemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self, weak player, weakPlayerItem = playerItem, itemForObserver = item] capturedItem, change in
+            guard let strongSelf = self, let player = player, capturedItem == weakPlayerItem else { return }
             Task { @MainActor in
-                let currentItemID = strongSelf.playerItemID ?? -1
-                if capturedLocalPlayer.status == .readyToPlay {
-                    VideoPlayerManager.logger.info("[Manager] Player for item \(currentItemID) is now readyToPlay.")
-                    // --- MODIFIED: Prüfe shouldAutoplayWhenReady ODER playCommandFromViewPending ---
+                switch capturedItem.status {
+                case .readyToPlay:
+                    VideoPlayerManager.logger.info("[Manager] PlayerItem for item \(itemForObserver.id) is now readyToPlay.")
                     if strongSelf.shouldAutoplayWhenReady || strongSelf.playCommandFromViewPending {
-                        if capturedLocalPlayer.timeControlStatus != .playing {
-                            VideoPlayerManager.logger.info("[Manager] Player for item \(currentItemID) ready. Autoplaying (auto: \(strongSelf.shouldAutoplayWhenReady), pending: \(strongSelf.playCommandFromViewPending)).")
-                            capturedLocalPlayer.play()
-                        } else {
-                            VideoPlayerManager.logger.trace("[Manager] Player for item \(currentItemID) ready, but already playing.")
+                        if player.timeControlStatus != .playing {
+                            VideoPlayerManager.logger.info("[Manager] PlayerItem ready. Autoplaying (auto: \(strongSelf.shouldAutoplayWhenReady), pending: \(strongSelf.playCommandFromViewPending)).")
+                            player.play()
                         }
                         strongSelf.shouldAutoplayWhenReady = false
                         strongSelf.playCommandFromViewPending = false
                     }
-                    // --- END MODIFICATION ---
-                } else if capturedLocalPlayer.status == .failed {
-                    VideoPlayerManager.logger.error("[Manager] Player for item \(currentItemID) failed. Error: \(String(describing: capturedLocalPlayer.error))")
+                case .failed:
+                    VideoPlayerManager.logger.error("[Manager] PlayerItem for item \(itemForObserver.id) failed. Error: \(String(describing: capturedItem.error))")
                     strongSelf.shouldAutoplayWhenReady = false
                     strongSelf.playCommandFromViewPending = false
-                } else if capturedLocalPlayer.status == .unknown {
-                    VideoPlayerManager.logger.debug("[Manager] Player for item \(currentItemID) status is unknown.")
+                    strongSelf.handlePlayerFailure(for: itemForObserver, error: capturedItem.error)
+                case .unknown:
+                    VideoPlayerManager.logger.debug("[Manager] PlayerItem for item \(itemForObserver.id) status is unknown.")
+                @unknown default:
+                    VideoPlayerManager.logger.warning("[Manager] PlayerItem for item \(itemForObserver.id) has an unknown future status.")
                 }
             }
         }
-        VideoPlayerManager.logger.debug("[Manager] Added player status KVO observer for item \(item.id).")
+        VideoPlayerManager.logger.debug("[Manager] Added player item status KVO observer for item \(item.id).")
 
-
-        guard let playerItem = player.currentItem else {
-            VideoPlayerManager.logger.error("[Manager] Player has no currentItem for item \(item.id). Cannot add loop/time observers.")
-            return
+        self.playerItemErrorObserver = playerItem.observe(\.error, options: [.new]) { [weak self, itemForObserver = item] itemWithError, _ in
+            guard let strongSelf = self, let error = itemWithError.error else { return }
+            Task { @MainActor in
+                VideoPlayerManager.logger.error("[Manager] Observed an error on playerItem for item \(itemForObserver.id): \(error.localizedDescription)")
+                strongSelf.handlePlayerFailure(for: itemForObserver, error: error)
+            }
         }
+        VideoPlayerManager.logger.debug("[Manager] Added player item error KVO observer for item \(item.id).")
+
+
         self.loopObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: nil) { [weak self, weakPlayerItem = player.currentItem, itemID = item.id] notification in
              Task { @MainActor [weak self, weakPlayerItem, itemID] in
                  guard let strongSelf = self,
-                       let capturedPlayerItem = weakPlayerItem,
+                       let capturedItem = weakPlayerItem,
                        let currentPlayer = strongSelf.player,
-                       (notification.object as? AVPlayerItem) == capturedPlayerItem,
-                       currentPlayer.currentItem == capturedPlayerItem,
+                       (notification.object as? AVPlayerItem) == capturedItem,
+                       currentPlayer.currentItem == capturedItem,
                        let currentManagerItemID = strongSelf.playerItemID,
                        currentManagerItemID == itemID else {
                      return
@@ -275,6 +286,66 @@ class VideoPlayerManager: ObservableObject {
              }
         }
         VideoPlayerManager.logger.debug("[Manager] Added periodic time observer for item \(item.id).")
+    }
+    
+    @MainActor
+    private func handlePlayerFailure(for failedItem: Item, error: Error?) {
+        guard self.playerItemID == failedItem.id else {
+            VideoPlayerManager.logger.warning("handlePlayerFailure for item \(failedItem.id) called, but the manager is now on item \(self.playerItemID ?? -1). Aborting.")
+            return
+        }
+
+        self.itemForFailedPlayer = failedItem
+        
+        if let nsError = error as? NSError, nsError.domain == AVFoundationErrorDomain {
+            if nsError.code == AVError.Code.fileFormatNotRecognized.rawValue {
+                VideoPlayerManager.logger.error("Player failure for item \(failedItem.id): Format not supported. No retries will be attempted.")
+                self.player = nil
+                self.playerError = "Videoformat wird nicht unterstützt."
+                self.showRetryButton = false
+                return
+            }
+        }
+
+        self.retryCount += 1
+        VideoPlayerManager.logger.info("Player failure for item \(failedItem.id). Retry attempt \(self.retryCount)/\(self.maxRetries).")
+
+        if self.retryCount < self.maxRetries {
+            Task {
+                try? await Task.sleep(for: .seconds(Double(self.retryCount)))
+                
+                guard self.playerItemID == failedItem.id, !self.showRetryButton else {
+                    VideoPlayerManager.logger.info("Retry for item \(failedItem.id) cancelled, user moved on or max retries were reached.")
+                    return
+                }
+                VideoPlayerManager.logger.info("Retrying player setup for item \(failedItem.id)...")
+                
+                if let url = failedItem.imageUrl, let player = self.player {
+                    let newItem = AVPlayerItem(url: url)
+                    self.shouldAutoplayWhenReady = true // Ensure autoplay is re-enabled for the new item
+                    player.replaceCurrentItem(with: newItem)
+                    setupObservers(for: player, item: failedItem)
+                } else {
+                    setupPlayerIfNeeded(for: failedItem, isFullscreen: false, forceReload: true)
+                }
+            }
+        } else {
+            VideoPlayerManager.logger.error("Max retries (\(self.maxRetries)) reached for item \(failedItem.id). Showing error and retry button.")
+            self.player = nil
+            self.playerError = "Video konnte nicht geladen werden."
+            self.showRetryButton = true
+        }
+    }
+
+    @MainActor
+    public func forceRetry() {
+        guard let itemToRetry = self.itemForFailedPlayer else {
+            VideoPlayerManager.logger.error("forceRetry called but itemForFailedPlayer is nil.")
+            return
+        }
+        VideoPlayerManager.logger.info("Force retry triggered by user for item \(itemToRetry.id).")
+        self.shouldAutoplayWhenReady = true // Also set for manual retry
+        self.setupPlayerIfNeeded(for: itemToRetry, isFullscreen: false, forceReload: true)
     }
 
     @MainActor
@@ -358,8 +429,12 @@ class VideoPlayerManager: ObservableObject {
         self.currentSubtitleText = nil
         self.subtitleError = nil
         self.shouldAutoplayWhenReady = false
-        self.playCommandFromViewPending = false // Zurücksetzen
-        let hadObservers = muteObserver != nil || loopObserver != nil || timeObserverToken != nil || playerStatusObserver != nil
+        self.playCommandFromViewPending = false
+        self.playerError = nil
+        self.showRetryButton = false
+        self.retryCount = 0
+        self.itemForFailedPlayer = nil
+        let hadObservers = muteObserver != nil || loopObserver != nil || timeObserverToken != nil || playerItemStatusObserver != nil
         if hadPlayer || hadObservers || hadSubtitleTask || hadSubtitles {
              VideoPlayerManager.logger.debug("[Manager] Cleaning up player state for item \(cleanupItemID)...")
         } else {
@@ -383,10 +458,15 @@ class VideoPlayerManager: ObservableObject {
              muteObserver = nil
              VideoPlayerManager.logger.trace("[Manager] Invalidated mute observer internally.")
         }
-        if playerStatusObserver != nil {
-            playerStatusObserver?.invalidate()
-            playerStatusObserver = nil
-            VideoPlayerManager.logger.trace("[Manager] Invalidated player status observer internally.")
+        if playerItemStatusObserver != nil {
+            playerItemStatusObserver?.invalidate()
+            playerItemStatusObserver = nil
+            VideoPlayerManager.logger.trace("[Manager] Invalidated player item status observer internally.")
+        }
+        if playerItemErrorObserver != nil {
+            playerItemErrorObserver?.invalidate()
+            playerItemErrorObserver = nil
+            VideoPlayerManager.logger.trace("[Manager] Invalidated player item error observer internally.")
         }
         if let observer = loopObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -419,13 +499,15 @@ class VideoPlayerManager: ObservableObject {
 
     deinit {
         let kvoMuteObserver = self.muteObserver
-        let kvoStatusObserver = self.playerStatusObserver
+        let kvoItemStatusObserver = self.playerItemStatusObserver
+        let kvoItemErrorObserver = self.playerItemErrorObserver
         let ncObserver = self.loopObserver
         let timeToken = self.timeObserverToken
         Task { @MainActor [weak self] in
             guard let strongSelf = self else { return }
             kvoMuteObserver?.invalidate()
-            kvoStatusObserver?.invalidate()
+            kvoItemStatusObserver?.invalidate()
+            kvoItemErrorObserver?.invalidate()
             if let ncObserver = ncObserver { NotificationCenter.default.removeObserver(ncObserver) }
             if let token = timeToken, let player = strongSelf.player {
                 player.removeTimeObserver(token)

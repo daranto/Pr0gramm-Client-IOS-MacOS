@@ -91,10 +91,8 @@ struct UnlimitedFeedItemView: View {
     let onWillEndFullScreenPr0Tok: () -> Void
     let onUpvoteItem: () -> Void
     let onDownvoteItem: () -> Void
-    // --- NEW: Callbacks für Sheet-Präsentation ---
     let onWillPresentCommentSheet: () -> Void
     let onDidDismissCommentSheet: () -> Void
-    // --- END NEW ---
 
 
     var item: Item { itemData.item }
@@ -186,9 +184,7 @@ struct UnlimitedFeedItemView: View {
                     }
                 }
             }
-            // --- MODIFIED: onDismiss Callback hinzugefügt ---
             .sheet(isPresented: $showingCommentsSheet, onDismiss: onDidDismissCommentSheet) {
-            // --- END MODIFICATION ---
                 ItemCommentsSheetView(
                     itemId: itemData.item.id,
                     uploaderName: itemData.item.user,
@@ -258,7 +254,24 @@ struct UnlimitedFeedItemView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(50)
         } else if item.isVideo {
-             if isActive, let player = playerManager.player, playerManager.playerItemID == item.id {
+            if isActive && playerManager.showRetryButton && playerManager.playerItemID == item.id {
+                VStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.largeTitle)
+                        .foregroundColor(.orange)
+                    Text(playerManager.playerError ?? "Video konnte nicht geladen werden")
+                        .foregroundColor(.white)
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                    Button("Erneut versuchen") {
+                        playerManager.forceRetry()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+            } else if isActive, let player = playerManager.player, playerManager.playerItemID == item.id {
                  CustomVideoPlayerRepresentable(
                      player: player,
                      handler: keyboardActionHandlerForVideo,
@@ -447,9 +460,7 @@ struct UnlimitedFeedItemView: View {
                 
                 Button {
                     Self.logger.info("Kommentar-Button getippt für Item \(item.id)")
-                    // --- MODIFIED: Callback aufrufen, bevor Sheet gezeigt wird ---
                     onWillPresentCommentSheet()
-                    // --- END MODIFICATION ---
                     showingCommentsSheet = true
                 } label: {
                     Image(systemName: "message").font(.title).foregroundColor(.white)
@@ -509,10 +520,8 @@ struct UnlimitedFeedItemView: View {
         onWillEndFullScreenPr0Tok: { print("Preview: Will end fullscreen") },
         onUpvoteItem: { print("Preview: Upvote Item") },
         onDownvoteItem: { print("Preview: Downvote Item") },
-        // --- NEW: Dummy Callbacks für Preview ---
         onWillPresentCommentSheet: { print("Preview: Will present comment sheet") },
         onDidDismissCommentSheet: { print("Preview: Did dismiss comment sheet") }
-        // --- END NEW ---
     )
     .environmentObject(settings)
     .environmentObject(authService)
