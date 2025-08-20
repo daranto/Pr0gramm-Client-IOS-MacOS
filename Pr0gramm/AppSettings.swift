@@ -62,14 +62,12 @@ enum CommentSortOrder: Int, CaseIterable, Identifiable {
 
 enum SubtitleActivationMode: Int, CaseIterable, Identifiable {
     case disabled = 0
-    case automatic = 1
     case alwaysOn = 2
     var id: Int { self.rawValue }
     var displayName: String {
         switch self {
         case .disabled: return "Deaktiviert"
-        case .automatic: return "Automatisch"
-        case .alwaysOn: return "Immer an"
+        case .alwaysOn: return "Aktiviert"
         }
     }
 }
@@ -310,9 +308,7 @@ class AppSettings: ObservableObject {
             } else {
                 BackgroundNotificationManager.shared.cancelAllBackgroundTasks()
                 Task {
-                    // --- MODIFIED: Add try? ---
                     try? await UNUserNotificationCenter.current().setBadgeCount(0)
-                    // --- END MODIFICATION ---
                     UNUserNotificationCenter.current().removeAllDeliveredNotifications()
                     Self.logger.info("Background fetch disabled. Cancelled tasks, reset badge and cleared delivered notifications.")
                 }
@@ -467,7 +463,7 @@ class AppSettings: ObservableObject {
         self.hideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
 
         let initialRawSubtitleActivationMode = UserDefaults.standard.integer(forKey: Self.subtitleActivationModeKey)
-        self.subtitleActivationMode = SubtitleActivationMode(rawValue: initialRawSubtitleActivationMode) ?? .automatic
+        self.subtitleActivationMode = SubtitleActivationMode(rawValue: initialRawSubtitleActivationMode) ?? .disabled
         self.selectedCollectionIdForFavorites = UserDefaults.standard.object(forKey: Self.selectedCollectionIdForFavoritesKey) as? Int
         let initialRawColorScheme = UserDefaults.standard.integer(forKey: Self.colorSchemeSettingKey)
         self.colorSchemeSetting = ColorSchemeSetting(rawValue: initialRawColorScheme) ?? .system
@@ -532,6 +528,17 @@ class AppSettings: ObservableObject {
             await updateCacheSizes()
         }
     }
+    
+    /// Cycles through the available subtitle activation modes.
+    func cycleSubtitleMode() {
+        switch self.subtitleActivationMode {
+        case .disabled:
+            self.subtitleActivationMode = .alwaysOn
+        case .alwaysOn:
+            self.subtitleActivationMode = .disabled
+        }
+    }
+
 
     public func applyStartupFiltersIfNeeded() {
         if self.enableStartupFilters {

@@ -25,7 +25,7 @@ class VideoPlayerManager: ObservableObject {
     // MARK: - Published Error/Retry State
     @Published private(set) var playerError: String? = nil
     @Published private(set) var showRetryButton: Bool = false
-    private var itemForFailedPlayer: Item?
+    private var currentItem: Item?
     private var retryCount = 0
     private let maxRetries = 3
 
@@ -96,7 +96,7 @@ class VideoPlayerManager: ObservableObject {
             self.retryCount = 0
             self.playerError = nil
             self.showRetryButton = false
-            self.itemForFailedPlayer = nil
+            self.currentItem = nil
         }
 
         self.subtitleCues = []
@@ -133,15 +133,11 @@ class VideoPlayerManager: ObservableObject {
             } else { // isFullscreen
                 VideoPlayerManager.logger.trace("[Manager] Player exists for \(item.id) but isFullscreen is true. System controls playback.")
             }
-
-            if subtitleError != nil && subtitleCues.isEmpty {
-                VideoPlayerManager.logger.debug("[Manager] Player exists, subtitle error was present. Attempting subtitle fetch again.")
-                if let subtitleInfo = item.subtitles?.first {
-                     self.subtitleFetchTask = Task {
-                         await fetchAndParseSubtitles(for: item, subtitlePath: subtitleInfo.path)
-                     }
-                }
+            
+            Task {
+                await updateSubtitleStateForCurrentItem()
             }
+            
             return
         }
 
@@ -166,24 +162,12 @@ class VideoPlayerManager: ObservableObject {
 
         self.player = newPlayer
         self.playerItemID = item.id
+        self.currentItem = item
 
         setupObservers(for: newPlayer, item: item)
 
-        let shouldFetchSubtitles: Bool
-        switch settings.subtitleActivationMode {
-        case .disabled: shouldFetchSubtitles = false
-        case .alwaysOn: shouldFetchSubtitles = true
-        case .automatic: shouldFetchSubtitles = initialMute
-        }
-
-        if shouldFetchSubtitles, let subtitleInfo = item.subtitles?.first {
-             self.subtitleFetchTask = Task {
-                 await fetchAndParseSubtitles(for: item, subtitlePath: subtitleInfo.path)
-             }
-        } else if !shouldFetchSubtitles && settings.subtitleActivationMode == .automatic {
-             VideoPlayerManager.logger.debug("[Manager] Subtitle fetch deferred (mode=automatic, initially unmuted).")
-        } else if item.subtitles?.first == nil {
-             VideoPlayerManager.logger.debug("[Manager] No subtitles found in item data for \(item.id).")
+        Task {
+            await updateSubtitleStateForCurrentItem()
         }
 
         if !isFullscreen {
@@ -211,14 +195,8 @@ class VideoPlayerManager: ObservableObject {
                       strongSettings.transientSessionMuteState = newMutedState
                       VideoPlayerManager.logger.info("[Manager] User changed mute via player controls. New state: \(newMutedState). Transient session state updated.")
                  }
-                if strongSettings.subtitleActivationMode == .automatic && newMutedState == true {
-                    if let subtitleInfo = itemCopy.subtitles?.first, strongSelf.subtitleCues.isEmpty, strongSelf.subtitleError == nil, strongSelf.subtitleFetchTask == nil {
-                        VideoPlayerManager.logger.info("[Manager] Player muted in automatic mode. Triggering deferred subtitle fetch for item \(itemCopy.id).")
-                        strongSelf.subtitleFetchTask = Task {
-                            await strongSelf.fetchAndParseSubtitles(for: itemCopy, subtitlePath: subtitleInfo.path)
-                        }
-                    }
-                }
+                // Re-evaluate subtitle state whenever mute changes
+                await strongSelf.updateSubtitleStateForCurrentItem()
             }
         }
         VideoPlayerManager.logger.debug("[Manager] Added mute KVO observer for item \(item.id).")
@@ -295,7 +273,7 @@ class VideoPlayerManager: ObservableObject {
             return
         }
 
-        self.itemForFailedPlayer = failedItem
+        self.currentItem = failedItem
         
         if let nsError = error as? NSError, nsError.domain == AVFoundationErrorDomain {
             if nsError.code == AVError.Code.fileFormatNotRecognized.rawValue {
@@ -339,12 +317,11 @@ class VideoPlayerManager: ObservableObject {
 
     @MainActor
     public func forceRetry() {
-        guard let itemToRetry = self.itemForFailedPlayer else {
-            VideoPlayerManager.logger.error("forceRetry called but itemForFailedPlayer is nil.")
+        guard let itemToRetry = self.currentItem else {
+            VideoPlayerManager.logger.error("forceRetry called but currentItem is nil.")
             return
         }
         VideoPlayerManager.logger.info("Force retry triggered by user for item \(itemToRetry.id).")
-        self.shouldAutoplayWhenReady = true // Also set for manual retry
         self.setupPlayerIfNeeded(for: itemToRetry, isFullscreen: false, forceReload: true)
     }
 
@@ -415,6 +392,49 @@ class VideoPlayerManager: ObservableObject {
               self.currentSubtitleText = foundText
          }
     }
+    
+    public func cycleSubtitleMode() {
+        settings?.cycleSubtitleMode()
+        Task {
+            await updateSubtitleStateForCurrentItem()
+        }
+    }
+
+    private func updateSubtitleStateForCurrentItem() async {
+        guard let item = self.currentItem, item.id == self.playerItemID, let settings = self.settings else {
+            return
+        }
+        guard let subtitleInfo = item.subtitles?.first, !subtitleInfo.path.isEmpty else {
+            VideoPlayerManager.logger.debug("[Subtitles] No subtitles available for item \(item.id).")
+            self.subtitleCues = []
+            self.currentSubtitleText = nil
+            return
+        }
+
+        var shouldShowSubtitles = false
+        switch settings.subtitleActivationMode {
+        case .disabled:
+            shouldShowSubtitles = false
+        case .alwaysOn:
+            shouldShowSubtitles = true
+        }
+        
+        VideoPlayerManager.logger.info("[Subtitles] Updating state for item \(item.id). Mode: \(settings.subtitleActivationMode.displayName), ShouldShow: \(shouldShowSubtitles)")
+
+        if shouldShowSubtitles {
+            if subtitleCues.isEmpty && subtitleError == nil { // Fetch only if not already loaded and no error
+                subtitleFetchTask?.cancel()
+                subtitleFetchTask = Task {
+                    await fetchAndParseSubtitles(for: item, subtitlePath: subtitleInfo.path)
+                }
+            }
+        } else {
+            // Hide subtitles
+            subtitleFetchTask?.cancel()
+            self.subtitleCues = []
+            self.currentSubtitleText = nil
+        }
+    }
 
 
     @MainActor
@@ -433,7 +453,7 @@ class VideoPlayerManager: ObservableObject {
         self.playerError = nil
         self.showRetryButton = false
         self.retryCount = 0
-        self.itemForFailedPlayer = nil
+        self.currentItem = nil
         let hadObservers = muteObserver != nil || loopObserver != nil || timeObserverToken != nil || playerItemStatusObserver != nil
         if hadPlayer || hadObservers || hadSubtitleTask || hadSubtitles {
              VideoPlayerManager.logger.debug("[Manager] Cleaning up player state for item \(cleanupItemID)...")

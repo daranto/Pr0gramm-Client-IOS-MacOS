@@ -89,7 +89,7 @@ struct SettingsView: View {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
                         .font(UIConstants.bodyFont)
 
-                    Picker("Untertitel anzeigen", selection: $settings.subtitleActivationMode) {
+                    Picker("Untertitel", selection: $settings.subtitleActivationMode) {
                         ForEach(SubtitleActivationMode.allCases) { mode in
                              Text(mode.displayName).tag(mode)
                                 .font(UIConstants.bodyFont)
@@ -100,7 +100,7 @@ struct SettingsView: View {
                 } header: {
                      Text("Video & Ton")
                 } footer: {
-                     Text("Die Option 'Automatisch' zeigt Untertitel nur an, wenn das Video im Player stummgeschaltet ist. 'Immer an' versucht, Untertitel immer anzuzeigen, falls verfügbar.")
+                     Text("Legt fest, ob für Videos standardmäßig Untertitel angezeigt werden sollen, falls verfügbar.")
                         .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
@@ -109,7 +109,6 @@ struct SettingsView: View {
                     Toggle("Hintergrundaktualisierung für Nachrichten", isOn: $settings.enableBackgroundFetchForNotifications)
                         .font(UIConstants.bodyFont)
                     
-                    // --- NEW: Picker für Intervall, nur wenn Fetch aktiv ---
                     if settings.enableBackgroundFetchForNotifications {
                         Picker("Abrufintervall (ca.)", selection: $settings.backgroundFetchInterval) {
                             ForEach(BackgroundFetchInterval.allCases) { interval in
@@ -119,14 +118,11 @@ struct SettingsView: View {
                         }
                         .font(UIConstants.bodyFont)
                     }
-                    // --- END NEW ---
                 } header: {
                     Text("Benachrichtigungen")
                 } footer: {
-                    // --- MODIFIED: Footer Text angepasst ---
                     Text("Erlaubt der App, im Hintergrund nach neuen Nachrichten zu suchen und dich per Push-Benachrichtigung zu informieren. iOS entscheidet letztendlich, wann und wie oft die App tatsächlich im Hintergrund ausgeführt wird, um Akku zu sparen. Das gewählte Intervall ist eine Empfehlung an das System.\nDie Berechtigung für Mitteilungen wird angefragt, sobald du die Hintergrundaktualisierung aktivierst.")
                        .font(UIConstants.footnoteFont)
-                    // --- END MODIFICATION ---
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 

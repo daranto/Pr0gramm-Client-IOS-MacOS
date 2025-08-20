@@ -106,6 +106,7 @@ struct DetailViewContent: View {
     let addTagsAction: (String) async -> String?
     let upvoteCommentAction: (Int) -> Void
     let downvoteCommentAction: (Int) -> Void
+    let cycleSubtitleModeAction: () -> Void
     
     let onTagTappedInSheetCallback: ((String) -> Void)?
 
@@ -163,6 +164,7 @@ struct DetailViewContent: View {
         addTagsAction: @escaping (String) async -> String?,
         upvoteCommentAction: @escaping (Int) -> Void,
         downvoteCommentAction: @escaping (Int) -> Void,
+        cycleSubtitleModeAction: @escaping () -> Void,
         onTagTappedInSheetCallback: ((String) -> Void)? = nil
     ) {
         self.item = item
@@ -197,6 +199,7 @@ struct DetailViewContent: View {
         self.addTagsAction = addTagsAction
         self.upvoteCommentAction = upvoteCommentAction
         self.downvoteCommentAction = downvoteCommentAction
+        self.cycleSubtitleModeAction = cycleSubtitleModeAction
         self.onTagTappedInSheetCallback = onTagTappedInSheetCallback
     }
 
@@ -304,6 +307,20 @@ struct DetailViewContent: View {
                 showCollectionSelectionAction()
             }
             .disabled(isProcessingFavorite || !authService.isLoggedIn)
+    }
+
+    @ViewBuilder
+    private var subtitleToggleButton: some View {
+        if item.isVideo, let subtitles = item.subtitles, !subtitles.isEmpty {
+            Button(action: cycleSubtitleModeAction) {
+                Image(systemName: "captions.bubble")
+                    .font(actionIconFont)
+                    .foregroundColor(settings.subtitleActivationMode == .disabled ? .secondary : .accentColor)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
 
@@ -420,9 +437,10 @@ struct DetailViewContent: View {
 
     @ViewBuilder private var infoAndTagsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 15) {
+            HStack(alignment: .center, spacing: 10) {
                 voteCounterView
                 Spacer()
+                subtitleToggleButton
                 if authService.isLoggedIn { addCommentButton }
                 if authService.isLoggedIn { favoriteButton }
                 shareButton
@@ -1005,6 +1023,10 @@ struct PreviewWrapper: View {
                 },
                 upvoteCommentAction: { commentId in print("Preview: Upvote comment \(commentId)") },
                 downvoteCommentAction: { commentId in print("Preview: Downvote comment \(commentId)") },
+                cycleSubtitleModeAction: {
+                    print("Preview: Cycle subtitle mode tapped.")
+                    settings.cycleSubtitleMode()
+                },
                 onTagTappedInSheetCallback: nil
             )
             .sheet(item: $commentReplyTarget) { target in CommentInputView(itemId: target.itemId, parentId: target.parentId, onSubmit: { _ in }) }

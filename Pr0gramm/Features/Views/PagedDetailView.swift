@@ -6,7 +6,6 @@ import os
 import AVKit
 import Kingfisher
 
-// --- MODIFIED: PreviewLinkTarget erweitert ---
 struct PreviewLinkTarget: Identifiable, Equatable {
     let itemID: Int
     let commentID: Int? // Optional comment ID
@@ -16,7 +15,6 @@ struct PreviewLinkTarget: Identifiable, Equatable {
         return lhs.itemID == rhs.itemID && lhs.commentID == rhs.commentID
     }
 }
-// --- END MODIFICATION ---
 
 struct FullscreenImageTarget: Identifiable, Equatable {
     let item: Item; var id: Int { item.id }
@@ -87,6 +85,8 @@ struct PagedDetailTabViewItem: View {
     let addTagsAction: (String) async -> String?
     let upvoteCommentAction: (Int) -> Void
     let downvoteCommentAction: (Int) -> Void
+    let cycleSubtitleModeAction: () -> Void
+    
     let onTagTappedInSheetCallback: ((String) -> Void)?
 
 
@@ -132,6 +132,7 @@ struct PagedDetailTabViewItem: View {
             addTagsAction: addTagsAction,
             upvoteCommentAction: upvoteCommentAction,
             downvoteCommentAction: downvoteCommentAction,
+            cycleSubtitleModeAction: cycleSubtitleModeAction,
             onTagTappedInSheetCallback: onTagTappedInSheetCallback
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -224,12 +225,10 @@ struct PagedDetailView: View {
     var body: some View {
         tabViewContent
         .background(KeyCommandView(handler: keyboardActionHandler))
-        // --- MODIFIED: Updated sheet call for LinkedItemPreviewWrapperView ---
         .sheet(item: $previewLinkTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
              LinkedItemPreviewWrapperView(itemID: targetWrapper.itemID, targetCommentID: targetWrapper.commentID) // Pass commentID
                  .environmentObject(settings).environmentObject(authService)
         }
-        // --- END MODIFICATION ---
         .sheet(item: $userProfileSheetTarget, onDismiss: resumePlayerIfNeeded) { target in
             UserProfileSheetView(username: target.username)
                 .environmentObject(authService)
@@ -451,6 +450,7 @@ struct PagedDetailView: View {
                  },
                  upvoteCommentAction: { commentId in Task { await handleCommentVoteTap(commentId: commentId, voteType: 1) } },
                  downvoteCommentAction: { commentId in Task { await handleCommentVoteTap(commentId: commentId, voteType: -1) } },
+                 cycleSubtitleModeAction: { playerManager.cycleSubtitleMode() },
                  onTagTappedInSheetCallback: self.onTagTappedInSheetCallback,
                  previewLinkTarget: $previewLinkTarget,
                  userProfileSheetTarget: $userProfileSheetTarget,
@@ -1049,16 +1049,15 @@ struct PagedDetailView: View {
 }
 
 @MainActor
-// --- MODIFIED: LinkedItemPreviewWrapperView angepasst ---
 struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
-    let targetCommentID: Int? // Hinzugefügt
+    let targetCommentID: Int?
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
     @Environment(\.dismiss) var dismiss
 
-    init(itemID: Int, targetCommentID: Int? = nil) { // Initializer angepasst
+    init(itemID: Int, targetCommentID: Int? = nil) {
         self.itemID = itemID
         self.targetCommentID = targetCommentID
         PagedDetailView.logger.debug("LinkedItemPreviewWrapperView init. itemID: \(itemID), targetCommentID: \(targetCommentID ?? -1)")
@@ -1066,7 +1065,6 @@ struct LinkedItemPreviewWrapperView: View {
 
     var body: some View {
         NavigationStack {
-            // Übergebe targetCommentID an LinkedItemPreviewView
             LinkedItemPreviewView(itemID: itemID, targetCommentID: targetCommentID)
                 .environmentObject(settings).environmentObject(authService)
                 .navigationTitle("Vorschau")
@@ -1077,7 +1075,6 @@ struct LinkedItemPreviewWrapperView: View {
         }
     }
 }
-// --- END MODIFICATION ---
 
 
 #Preview {
