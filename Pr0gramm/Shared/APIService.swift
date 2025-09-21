@@ -366,7 +366,6 @@ struct FollowActionResponse: Codable {
     let ts: Int?
 }
 
-// --- NEW: Calendar Structs ---
 struct CalendarEventsResponse: Codable {
     let success: Bool
     let events: [CalendarEvent]
@@ -398,8 +397,6 @@ struct CalendarEvent: Codable, Identifiable, Hashable {
     let categoryName: String
     let categoryColor: String
 }
-// --- END NEW ---
-
 extension Array where Element == URLQueryItem {
     func removingDuplicatesByName() -> [URLQueryItem] {
         var addedDict = [String: Bool]()
@@ -454,17 +451,21 @@ class APIService {
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
             throw URLError(.badURL)
         }
-        var queryItems = [URLQueryItem(name: "flags", value: String(flags))]
-        var logDescription = "flags=\(flags)"
+        
+        var queryItems: [URLQueryItem] = []
+        var logDescriptionParts: [String] = []
+
+        queryItems.append(URLQueryItem(name: "flags", value: String(flags)))
+        logDescriptionParts.append("flags=\(flags)")
 
         if showJunkParameter {
             queryItems.append(URLQueryItem(name: "show_junk", value: "1"))
-            logDescription += ", show_junk=1"
+            logDescriptionParts.append("show_junk=1")
         }
 
         if let name = collectionNameForUser {
             queryItems.append(URLQueryItem(name: "collection", value: name))
-            logDescription += ", collectionName=\(name)"
+            logDescriptionParts.append("collectionName=\(name)")
             if isOwnCollection {
                 guard let ownerUsername = user else {
                     APIService.logger.error("Error: isOwnCollection is true, but no user (owner) provided for collection '\(name)'.")
@@ -472,30 +473,34 @@ class APIService {
                 }
                 queryItems.append(URLQueryItem(name: "user", value: ownerUsername))
                 queryItems.append(URLQueryItem(name: "self", value: "true"))
-                logDescription += ", collectionOwner=\(ownerUsername), self=true"
+                logDescriptionParts.append("collectionOwner=\(ownerUsername), self=true")
             }
         } else if let regularUser = user {
             queryItems.append(URLQueryItem(name: "user", value: regularUser))
-            logDescription += ", user=\(regularUser) (for uploads/feed)"
+            logDescriptionParts.append("user=\(regularUser) (for uploads/feed)")
         }
 
-        if let tags = tags, !tags.isEmpty {
-            queryItems.append(URLQueryItem(name: "tags", value: tags))
-            logDescription += ", tags='\(tags)'"
-        }
         if let promotedValue = promoted, collectionNameForUser == nil, !showJunkParameter {
             queryItems.append(URLQueryItem(name: "promoted", value: String(promotedValue)))
-            logDescription += ", promoted=\(promotedValue)"
+            logDescriptionParts.append("promoted=\(promotedValue)")
         }
         if let olderId = olderThanId {
             queryItems.append(URLQueryItem(name: "older", value: String(olderId)))
-            logDescription += ", older=\(olderId)"
+            logDescriptionParts.append("older=\(olderId)")
+        }
+        
+        if let tags = tags, !tags.isEmpty {
+            queryItems.append(URLQueryItem(name: "tags", value: tags))
+            logDescriptionParts.append("tags='\(tags)'")
         }
         
         urlComponents.queryItems = queryItems.removingDuplicatesByName()
+        
         guard let url = urlComponents.url else { throw URLError(.badURL) }
         
+        let logDescription = logDescriptionParts.joined(separator: ", ")
         APIService.logger.info("Fetching items from \(endpoint) with params: [\(logDescription)] URL: \(url.absoluteString)")
+        
         let request = URLRequest(url: url)
 
         do {
@@ -1255,7 +1260,6 @@ class APIService {
         }
     }
     
-    // --- NEW: Calendar API Methods ---
     func fetchCalendarEvents(startTimestamp: Int, endTimestamp: Int) async throws -> CalendarEventsResponse {
         let endpoint = "/calendar/getEventsByDateRange"
         guard var urlComponents = URLComponents(url: baseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
@@ -1296,7 +1300,6 @@ class APIService {
             throw error
         }
     }
-    // --- END NEW ---
 
     private func handleApiResponse<T: Decodable>(data: Data, response: URLResponse, endpoint: String) throws -> T {
         guard let httpResponse = response as? HTTPURLResponse else { APIService.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }
