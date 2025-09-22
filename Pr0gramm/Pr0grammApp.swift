@@ -183,7 +183,7 @@ struct DeepLinkItemLoaderView: View {
     @State private var fetchedItem: Item? = nil
     @State private var isLoading: Bool = true
     @State private var errorMessage: String? = nil
-    @State private var isFilterMismatch: Bool = false // Neuer State für den Filter-Konflikt
+    @State private var isFilterMismatch: Bool = false
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DeepLinkItemLoaderView")
@@ -201,7 +201,6 @@ struct DeepLinkItemLoaderView: View {
                 }
                 .padding()
             } else if isFilterMismatch, let item = fetchedItem {
-                // Neuer View, wenn der Post durch Filter ausgeblendet ist
                 VStack(spacing: 15) {
                     Image(systemName: "eye.slash.fill")
                         .font(.system(size: 40))
@@ -231,17 +230,11 @@ struct DeepLinkItemLoaderView: View {
                     PagedDetailViewWrapperForItem(
                         item: item,
                         playerManager: playerManager,
-                        targetCommentID: targetCommentID
+                        targetCommentID: targetCommentID,
+                        isPresentedInSheet: true
                     )
                     .environmentObject(settings)
                     .environmentObject(authService)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button("Fertig") {
-                                dismissSheet()
-                            }
-                        }
-                    }
                     .navigationTitle("Post \(item.id)")
                     #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)
@@ -275,22 +268,18 @@ struct DeepLinkItemLoaderView: View {
             let itemWithCurrentFilters = try await apiService.fetchItem(id: itemID, flags: flagsToFetchWith)
 
             if let item = itemWithCurrentFilters {
-                // Item passt zu den aktuellen Filtern, normaler Ablauf
                 DeepLinkItemLoaderView.logger.info("Item \(itemID) found with current filters.")
                 fetchedItem = item
                 isFilterMismatch = false
             } else {
-                // Item passt nicht zu den Filtern, versuche es mit allen Flags, um zu sehen, ob es existiert
                 DeepLinkItemLoaderView.logger.warning("Item \(itemID) not found with flags \(flagsToFetchWith). Retrying with flags 31.")
                 let itemWithAllFlags = try await apiService.fetchItem(id: itemID, flags: 31)
 
                 if let item = itemWithAllFlags {
-                    // Item existiert, ist aber ausgeblendet
                     DeepLinkItemLoaderView.logger.info("Item \(itemID) exists but is hidden by current filters. Setting isFilterMismatch to true.")
                     fetchedItem = item
                     isFilterMismatch = true
                 } else {
-                    // Item existiert nicht oder ist aus anderen Gründen nicht verfügbar
                     DeepLinkItemLoaderView.logger.warning("Item \(itemID) could not be fetched for deep link, even with broad flags.")
                     errorMessage = "Post konnte nicht gefunden werden."
                 }

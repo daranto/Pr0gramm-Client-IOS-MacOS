@@ -11,9 +11,7 @@ struct UserProfileSheetView: View {
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) var dismiss
-    // --- MODIFIED: PlayerManager als EnvironmentObject ---
     @EnvironmentObject var playerManager: VideoPlayerManager
-    // --- END MODIFICATION ---
 
 
     @State private var profileInfo: ProfileInfoResponse?
@@ -46,7 +44,6 @@ struct UserProfileSheetView: View {
     @State private var previewLinkTargetFromComment: PreviewLinkTarget? = nil
     @State private var didLoad: Bool = false
 
-    // @StateObject private var playerManager = VideoPlayerManager() // Entfernt
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserProfileSheetView")
@@ -97,7 +94,6 @@ struct UserProfileSheetView: View {
             .onAppear {
                 guard !didLoad else { return }
                 didLoad = true
-                // playerManager.configure(settings: settings) // Wird jetzt von höherer Ebene konfiguriert
                 Task {
                     await loadAllData()
                 }
@@ -146,17 +142,12 @@ struct UserProfileSheetView: View {
                     NavigationStack{
                         PagedDetailViewWrapperForItem(
                             item: item,
-                            playerManager: playerManager, // Verwende den EnvironmentObject PlayerManager
-                            targetCommentID: targetCommentIDForDetailSheet
+                            playerManager: playerManager,
+                            targetCommentID: targetCommentIDForDetailSheet,
+                            isPresentedInSheet: true
                         )
                         .environmentObject(settings)
                         .environmentObject(authService)
-                        // .environmentObject(playerManager) // Nicht nötig, da direkt übergeben
-                        .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showPostDetailSheet = false } } }
-                        .navigationTitle(item.user)
-                        #if os(iOS)
-                        .navigationBarTitleDisplayMode(.inline)
-                        #endif
                     }
                 }
             }
@@ -165,7 +156,7 @@ struct UserProfileSheetView: View {
                     UserUploadsView(username: username)
                         .environmentObject(settings)
                         .environmentObject(authService)
-                        .environmentObject(playerManager) // PlayerManager weitergeben
+                        .environmentObject(playerManager)
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllUploadsSheet = false } } }
                 }
             }
@@ -174,7 +165,7 @@ struct UserProfileSheetView: View {
                     UserProfileCommentsView(username: username)
                         .environmentObject(settings)
                         .environmentObject(authService)
-                        .environmentObject(playerManager) // PlayerManager weitergeben
+                        .environmentObject(playerManager)
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllCommentsSheet = false } } }
                 }
             }
@@ -183,7 +174,7 @@ struct UserProfileSheetView: View {
                     ConversationDetailView(partnerUsername: username)
                         .environmentObject(settings)
                         .environmentObject(authService)
-                        .environmentObject(playerManager) // PlayerManager weitergeben
+                        .environmentObject(playerManager)
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
                                 Button("Schließen") { showConversationSheet = false }
@@ -195,7 +186,6 @@ struct UserProfileSheetView: View {
                  LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
                      .environmentObject(settings)
                      .environmentObject(authService)
-                     // .environmentObject(playerManager) // Falls LinkedItemPreviewView Videos abspielen soll
             }
         }
     }
@@ -603,76 +593,5 @@ struct UserProfileSheetView: View {
     }
 
     private func formatDateGerman(date: Date) -> String { germanDateFormatter.string(from: date) }
-}
-
-#Preview("UserProfileSheetView Preview") {
-    struct PreviewWrapper: View {
-        @StateObject private var authService: AuthService
-        @StateObject private var settings = AppSettings()
-        // --- NEW: Add PlayerManager for Preview ---
-        @StateObject private var playerManager = VideoPlayerManager()
-
-
-        init() {
-            let tempSettings = AppSettings()
-            let tempAuth = AuthService(appSettings: tempSettings)
-            tempAuth.isLoggedIn = true
-            tempAuth.currentUser = UserInfo(id: 1, name: "Rockabilly", registered: 1609459200, score: 12345, mark: 2, badges: [
-                ApiBadge(image: "pr0-coin.png", description: "Test Badge 1", created: 0, link: nil, category: nil),
-                ApiBadge(image: "pr0mium-s.png", description: "Test Badge 2", created: 0, link: nil, category: nil),
-            ], collections: [])
-            
-            #if DEBUG
-            tempAuth.setFollowedUsersForPreview([
-                FollowListItem(subscribed: 1, name: "AnotherUser", mark: 1, followCreated: 0, itemId: nil, thumb: nil, preview: nil, lastPost: nil)
-            ])
-            #endif
-
-
-            _settings = StateObject(wrappedValue: tempSettings)
-            _authService = StateObject(wrappedValue: tempAuth)
-            // --- NEW: Configure PlayerManager ---
-            playerManager.configure(settings: tempSettings)
-        }
-
-        var body: some View {
-            Text("Parent View")
-                .sheet(isPresented: .constant(true)) {
-                    UserProfileSheetView(username: "AnotherUser")
-                        .environmentObject(authService)
-                        .environmentObject(settings)
-                        .environmentObject(playerManager) // Pass PlayerManager
-                }
-        }
-    }
-    return PreviewWrapper()
-}
-
-#Preview("Own Profile in Sheet (for testing)") {
-     struct PreviewWrapperOwn: View {
-        @StateObject private var authService: AuthService
-        @StateObject private var settings = AppSettings()
-        @StateObject private var playerManager = VideoPlayerManager() // Add PlayerManager
-
-        init() {
-            let tempSettings = AppSettings()
-            let tempAuth = AuthService(appSettings: tempSettings)
-            tempAuth.isLoggedIn = true
-            tempAuth.currentUser = UserInfo(id: 1, name: "Rockabilly", registered: 1609459200, score: 12345, mark: 2, badges: [], collections: [])
-            _settings = StateObject(wrappedValue: tempSettings)
-            _authService = StateObject(wrappedValue: tempAuth)
-            playerManager.configure(settings: tempSettings) // Configure PlayerManager
-        }
-        var body: some View {
-            Text("Parent View")
-                .sheet(isPresented: .constant(true)) {
-                    UserProfileSheetView(username: "Rockabilly")
-                        .environmentObject(authService)
-                        .environmentObject(settings)
-                        .environmentObject(playerManager) // Pass PlayerManager
-                }
-        }
-    }
-    return PreviewWrapperOwn()
 }
 // --- END OF COMPLETE FILE ---

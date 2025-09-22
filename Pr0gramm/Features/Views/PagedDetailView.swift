@@ -192,6 +192,7 @@ struct PagedDetailView: View {
 
     let loadMoreAction: () async -> Void
     let onTagTappedInSheetCallback: ((String) -> Void)?
+    let isPresentedInSheet: Bool // Neue Eigenschaft
 
     let commentMaxDepth = 5
     let preloadThreshold = 5
@@ -206,7 +207,8 @@ struct PagedDetailView: View {
         playerManager: VideoPlayerManager,
         loadMoreAction: @escaping () async -> Void,
         initialTargetCommentID: Int? = nil,
-        onTagTappedInSheetCallback: ((String) -> Void)? = nil
+        onTagTappedInSheetCallback: ((String) -> Void)? = nil,
+        isPresentedInSheet: Bool = false // Neuer Initializer-Parameter
     ) {
         self._items = items
         self._selectedIndex = State(initialValue: selectedIndex)
@@ -214,11 +216,12 @@ struct PagedDetailView: View {
         self.loadMoreAction = loadMoreAction
         self._currentItemTargetCommentID = State(initialValue: initialTargetCommentID)
         self.onTagTappedInSheetCallback = onTagTappedInSheetCallback
+        self.isPresentedInSheet = isPresentedInSheet // Zuweisen
 
         if selectedIndex >= 0 && selectedIndex < items.wrappedValue.count {
             self._previouslySelectedItemForMarking = State(initialValue: items.wrappedValue[selectedIndex])
         }
-        PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex), initialTargetCommentID: \(initialTargetCommentID ?? -1), onTagTappedInSheetCallback is \(onTagTappedInSheetCallback == nil ? "nil" : "set")")
+        PagedDetailView.logger.info("PagedDetailView init with selectedIndex: \(selectedIndex), initialTargetCommentID: \(initialTargetCommentID ?? -1), isPresentedInSheet: \(isPresentedInSheet)")
     }
 
 
@@ -226,14 +229,14 @@ struct PagedDetailView: View {
         tabViewContent
         .background(KeyCommandView(handler: keyboardActionHandler))
         .sheet(item: $previewLinkTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
-             LinkedItemPreviewWrapperView(itemID: targetWrapper.itemID, targetCommentID: targetWrapper.commentID) // Pass commentID
+             LinkedItemPreviewWrapperView(itemID: targetWrapper.itemID, targetCommentID: targetWrapper.commentID)
                  .environmentObject(settings).environmentObject(authService)
         }
         .sheet(item: $userProfileSheetTarget, onDismiss: resumePlayerIfNeeded) { target in
             UserProfileSheetView(username: target.username)
                 .environmentObject(authService)
                 .environmentObject(settings)
-                .environmentObject(playerManager) // PlayerManager hier weitergeben
+                .environmentObject(playerManager)
         }
         .sheet(item: $fullscreenImageTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
              FullscreenImageView(item: targetWrapper.item)
@@ -322,10 +325,15 @@ struct PagedDetailView: View {
         #endif
         .toolbar {
              ToolbarItem(placement: .principal) { Text(currentItemTitle).font(.headline).lineLimit(1) }
-             ToolbarItem(placement: .navigationBarTrailing) {
+             ToolbarItemGroup(placement: .navigationBarTrailing) {
                  if selectedIndex >= 0 && selectedIndex < items.count && settings.seenItemIDs.contains(items[selectedIndex].id) {
                      Image(systemName: "checkmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, Color.accentColor).font(.body)
-                 } else { EmptyView() }
+                 }
+                 if isPresentedInSheet {
+                     Button("Fertig") {
+                         dismiss()
+                     }
+                 }
              }
         }
         .onChange(of: selectedIndex) { oldValue, newValue in
@@ -1124,7 +1132,8 @@ struct LinkedItemPreviewWrapperView: View {
                     initialTargetCommentID: nil,
                     onTagTappedInSheetCallback: { tag in
                         print("Preview PagedDetailView: Tag '\(tag)' tapped in sheet context.")
-                    }
+                    },
+                    isPresentedInSheet: true
                  )
              }
              .environmentObject(previewSettings)
