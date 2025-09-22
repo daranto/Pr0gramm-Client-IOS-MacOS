@@ -536,14 +536,12 @@ struct DetailViewContent: View {
             mediaContentInternal
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 15) {
-                    infoAndTagsContent.padding([.horizontal, .top]);
-                    commentsContentSectionWithScrollReader(proxyEnabled: true)
-                        .padding([.horizontal, .bottom])
-                }
+            if authService.isLoggedIn {
+                commentsContentSectionWithScrollReader(proxyEnabled: true)
+                    .padding([.horizontal, .bottom])
+            } else {
+                loginHintView()
             }
-            .frame(minWidth: 300, idealWidth: 450, maxWidth: 600).background(Color(.secondarySystemBackground))
         }
     }
     
@@ -559,8 +557,12 @@ struct DetailViewContent: View {
                     }
                     .aspectRatio(guessAspectRatio() ?? 1.0, contentMode: .fit)
                     infoAndTagsContent.padding(.horizontal).padding(.vertical, 10)
-                    commentsContentSection(scrollViewProxy: proxy)
-                        .padding(.horizontal).padding(.bottom, 10)
+                    if authService.isLoggedIn {
+                        commentsContentSection(scrollViewProxy: proxy)
+                            .padding(.horizontal).padding(.bottom, 10)
+                    } else {
+                        loginHintView()
+                    }
                 }
             }
             .onChange(of: infoLoadingStatus) { _, newStatus in
@@ -916,6 +918,20 @@ struct DetailViewContent: View {
             }
         }
     }
+
+
+    @ViewBuilder
+    private func loginHintView() -> some View {
+        VStack(spacing: 20) {
+            Image(systemName: "lock.fill").font(.largeTitle).foregroundColor(.accentColor)
+            Text("Bitte logge dich ein, um Kommentare zu sehen.")
+                .font(.title3)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 120)
+        .padding()
+    }
 }
 
 // --- Preview Code ---
@@ -1068,3 +1084,5 @@ struct PreviewWrapper: View {
      PreviewWrapper(isLoggedIn: false)
 }
 // --- END OF COMPLETE FILE ---
+
+
