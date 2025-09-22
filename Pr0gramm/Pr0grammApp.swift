@@ -44,11 +44,8 @@ struct Pr0grammApp: App {
         configureAudioSession()
         Pr0grammApp.logger.info("Pr0grammApp init")
         
-        // --- MODIFIED: Konfiguriere BackgroundNotificationManager und registriere Task ---
-        BackgroundNotificationManager.shared.configure(appSettings: settings) // Konfigurieren
-        BackgroundNotificationManager.shared.registerBackgroundTask() // Nur registrieren
-        // Die Berechtigungsanfrage und das Scheduling erfolgen jetzt über AppSettings
-        // --- END MODIFICATION ---
+        BackgroundNotificationManager.shared.configure(appSettings: settings)
+        BackgroundNotificationManager.shared.registerBackgroundTask()
     }
 
     var body: some Scene {
@@ -75,9 +72,7 @@ struct Pr0grammApp: App {
         .onChange(of: scenePhase) { oldPhase, newPhase in
             if newPhase == .background {
                 Pr0grammApp.logger.info("App entering background. Scheduling app refresh task if enabled.")
-                // --- MODIFIED: scheduleAppRefresh prüft intern die Einstellung ---
                 BackgroundNotificationManager.shared.scheduleAppRefresh()
-                // --- END MODIFICATION ---
             } else if newPhase == .active {
                 Pr0grammApp.logger.info("App became active. Updating notification badge, resetting BG fetch failure count, and clearing delivered notifications.")
                 
@@ -91,12 +86,10 @@ struct Pr0grammApp: App {
                 Task {
                     await BackgroundNotificationManager.shared.appDidBecomeActiveOrInboxViewed(currentTotalUnread: currentTotal)
                 }
-                // --- NEW: Task planen, wenn App aktiv wird und Feature aktiviert ist ---
                 if appSettings.enableBackgroundFetchForNotifications {
                     BackgroundNotificationManager.shared.scheduleAppRefresh()
                     Pr0grammApp.logger.info("App active and background fetch enabled, ensuring task is scheduled.")
                 }
-                // --- END NEW ---
             }
         }
     }
@@ -113,7 +106,7 @@ struct Pr0grammApp: App {
                 try audioSession.overrideOutputAudioPort(.speaker)
                 Self.logger.info("AVAudioSession output successfully overridden to force speaker.")
             } catch let error as NSError {
-                if error.code != -50 { // -50: kAudioSessionOverrideCategoryDefaultRouteFailure / kAudioSessionCategoryChangePendingError
+                if error.code != -50 {
                     Self.logger.error("Failed to override output port to speaker: \(error.localizedDescription) (Code: \(error.code))")
                 } else {
                      Self.logger.debug("Speaker output already set or override not possible (e.g. headphones connected). Error code -50 ignored.")
@@ -186,9 +179,11 @@ struct DeepLinkItemLoaderView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
     @StateObject private var playerManager = VideoPlayerManager()
+    
     @State private var fetchedItem: Item? = nil
     @State private var isLoading: Bool = true
     @State private var errorMessage: String? = nil
+    @State private var isFilterMismatch: Bool = false // Neuer State für den Filter-Konflikt
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DeepLinkItemLoaderView")
@@ -205,6 +200,32 @@ struct DeepLinkItemLoaderView: View {
                     Button("Erneut versuchen") { Task { await loadItem() } }.padding(.top)
                 }
                 .padding()
+            } else if isFilterMismatch, let item = fetchedItem {
+                // Neuer View, wenn der Post durch Filter ausgeblendet ist
+                VStack(spacing: 15) {
+                    Image(systemName: "eye.slash.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary)
+                    Text("Post ausgeblendet")
+                        .font(.title2.bold())
+                    Text("Dieser Post (ID: \(item.id)) ist mit deinen aktuellen Filtern nicht sichtbar.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+
+                    Button("Trotzdem anzeigen") {
+                        isFilterMismatch = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top)
+
+                    Button("Abbrechen") {
+                        dismissSheet()
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .padding(30)
             } else if let item = fetchedItem {
                 NavigationStack {
                     PagedDetailViewWrapperForItem(
@@ -247,27 +268,32 @@ struct DeepLinkItemLoaderView: View {
         isLoading = true
         errorMessage = nil
         fetchedItem = nil
+        isFilterMismatch = false
+
         do {
             let flagsToFetchWith = authService.isLoggedIn ? settings.apiFlags : 1
-            var item = try await apiService.fetchItem(id: itemID, flags: flagsToFetchWith)
-            
-            if item == nil {
-                // Wenn Item nicht mit aktuellen Flags gefunden wurde und User eingeloggt ist,
-                // versuche es mit maximalen Flags (31), um sicherzustellen, dass der Link funktioniert,
-                // auch wenn der User den Content-Typ aktuell ausgeblendet hat.
-                if authService.isLoggedIn && flagsToFetchWith != 31 {
-                    DeepLinkItemLoaderView.logger.warning("Item \(itemID) not found with flags \(flagsToFetchWith). Retrying with flags 31.")
-                    item = try await apiService.fetchItem(id: itemID, flags: 31)
-                }
-            }
-            
-            fetchedItem = item
+            let itemWithCurrentFilters = try await apiService.fetchItem(id: itemID, flags: flagsToFetchWith)
 
-            if fetchedItem == nil {
-                errorMessage = "Post konnte nicht gefunden werden oder entspricht nicht deinen Filtern."
-                DeepLinkItemLoaderView.logger.warning("Item \(itemID) could not be fetched for deep link, even with broad flags.")
+            if let item = itemWithCurrentFilters {
+                // Item passt zu den aktuellen Filtern, normaler Ablauf
+                DeepLinkItemLoaderView.logger.info("Item \(itemID) found with current filters.")
+                fetchedItem = item
+                isFilterMismatch = false
             } else {
-                DeepLinkItemLoaderView.logger.info("Successfully loaded item \(itemID) for deep link.")
+                // Item passt nicht zu den Filtern, versuche es mit allen Flags, um zu sehen, ob es existiert
+                DeepLinkItemLoaderView.logger.warning("Item \(itemID) not found with flags \(flagsToFetchWith). Retrying with flags 31.")
+                let itemWithAllFlags = try await apiService.fetchItem(id: itemID, flags: 31)
+
+                if let item = itemWithAllFlags {
+                    // Item existiert, ist aber ausgeblendet
+                    DeepLinkItemLoaderView.logger.info("Item \(itemID) exists but is hidden by current filters. Setting isFilterMismatch to true.")
+                    fetchedItem = item
+                    isFilterMismatch = true
+                } else {
+                    // Item existiert nicht oder ist aus anderen Gründen nicht verfügbar
+                    DeepLinkItemLoaderView.logger.warning("Item \(itemID) could not be fetched for deep link, even with broad flags.")
+                    errorMessage = "Post konnte nicht gefunden werden."
+                }
             }
         } catch {
             DeepLinkItemLoaderView.logger.error("Error loading item ID \(itemID) for deep link: \(error.localizedDescription)")
