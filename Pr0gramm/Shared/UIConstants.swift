@@ -11,7 +11,6 @@ struct UIConstants {
     /// Checks if the app is running as an iOS app on macOS.
     static let isRunningOnMac = ProcessInfo.processInfo.isiOSAppOnMac
     
-    // --- NEW: Check if current device is an iPhone ---
     static let isCurrentDeviceiPhone: Bool = {
         #if targetEnvironment(macCatalyst)
         return false // Mac (Designed for iPad) ist nicht iPhone
@@ -19,7 +18,15 @@ struct UIConstants {
         return UIDevice.current.userInterfaceIdiom == .phone
         #endif
     }()
-    // --- END NEW ---
+
+    // Neuer Helper, um iPad und Mac zu erkennen
+    static let isPadOrMac: Bool = {
+        #if targetEnvironment(macCatalyst)
+        return true
+        #else
+        return UIDevice.current.userInterfaceIdiom == .pad || isRunningOnMac
+        #endif
+    }()
 
     // --- Adaptive Font Sizes ---
     static var largeTitleFont: Font { isRunningOnMac ? .largeTitle : .largeTitle }

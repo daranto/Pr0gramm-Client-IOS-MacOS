@@ -176,6 +176,7 @@ class AppSettings: ObservableObject {
     private static let enableUnlimitedStyleFeedKey = "enableUnlimitedStyleFeed_v1"
     private static let enableBackgroundFetchForNotificationsKey = "enableBackgroundFetchForNotifications_v1"
     private static let backgroundFetchIntervalKey = "backgroundFetchInterval_v1"
+    private static let forcePhoneLayoutOnPadAndMacKey = "forcePhoneLayoutOnPadAndMac_v1" // Neuer Key
     private var keyValueStoreChangeObserver: NSObjectProtocol?
 
     @Published var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
@@ -322,6 +323,16 @@ class AppSettings: ObservableObject {
             Self.logger.info("Background Fetch Interval setting changed to: \(self.backgroundFetchInterval.displayName)")
             if enableBackgroundFetchForNotifications {
                 BackgroundNotificationManager.shared.scheduleAppRefresh()
+            }
+        }
+    }
+
+    // Neue Einstellung für das Layout
+    @Published var forcePhoneLayoutOnPadAndMac: Bool {
+        didSet {
+            if oldValue != forcePhoneLayoutOnPadAndMac {
+                UserDefaults.standard.set(forcePhoneLayoutOnPadAndMac, forKey: Self.forcePhoneLayoutOnPadAndMacKey)
+                Self.logger.info("Force phone layout on iPad/Mac setting changed to: \(self.forcePhoneLayoutOnPadAndMac)")
             }
         }
     }
@@ -484,6 +495,7 @@ class AppSettings: ObservableObject {
         self.enableBackgroundFetchForNotifications = UserDefaults.standard.object(forKey: Self.enableBackgroundFetchForNotificationsKey) as? Bool ?? false
         let initialRawFetchInterval = UserDefaults.standard.integer(forKey: Self.backgroundFetchIntervalKey)
         self.backgroundFetchInterval = BackgroundFetchInterval(rawValue: initialRawFetchInterval) ?? .minutes60
+        self.forcePhoneLayoutOnPadAndMac = UserDefaults.standard.bool(forKey: Self.forcePhoneLayoutOnPadAndMacKey)
         
         Self.logger.info("AppSettings initialized (Stage 2 Log):")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
@@ -501,6 +513,7 @@ class AppSettings: ObservableObject {
         Self.logger.info("- enableUnlimitedStyleFeed: \(self.enableUnlimitedStyleFeed)")
         Self.logger.info("- enableBackgroundFetchForNotifications: \(self.enableBackgroundFetchForNotifications)")
         Self.logger.info("- backgroundFetchInterval: \(self.backgroundFetchInterval.displayName)")
+        Self.logger.info("- forcePhoneLayoutOnPadAndMac: \(self.forcePhoneLayoutOnPadAndMac)")
 
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
@@ -519,6 +532,7 @@ class AppSettings: ObservableObject {
         if UserDefaults.standard.object(forKey: Self.enableUnlimitedStyleFeedKey) == nil { UserDefaults.standard.set(self.enableUnlimitedStyleFeed, forKey: Self.enableUnlimitedStyleFeedKey) }
         if UserDefaults.standard.object(forKey: Self.enableBackgroundFetchForNotificationsKey) == nil { UserDefaults.standard.set(self.enableBackgroundFetchForNotifications, forKey: Self.enableBackgroundFetchForNotificationsKey) }
         if UserDefaults.standard.object(forKey: Self.backgroundFetchIntervalKey) == nil { UserDefaults.standard.set(self.backgroundFetchInterval.rawValue, forKey: Self.backgroundFetchIntervalKey) }
+        if UserDefaults.standard.object(forKey: Self.forcePhoneLayoutOnPadAndMacKey) == nil { UserDefaults.standard.set(self.forcePhoneLayoutOnPadAndMac, forKey: Self.forcePhoneLayoutOnPadAndMacKey) }
 
 
         updateKingfisherCacheLimit()

@@ -18,7 +18,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Darstellung") {
+                Section {
                     Picker("Farbschema", selection: $settings.colorSchemeSetting) {
                         ForEach(ColorSchemeSetting.allCases) { scheme in
                             Text(scheme.displayName).tag(scheme)
@@ -57,6 +57,17 @@ struct SettingsView: View {
                             .font(UIConstants.bodyFont)
                     }
                     
+                    if UIConstants.isPadOrMac {
+                        Toggle("iPhone-Layout auf iPad/Mac erzwingen", isOn: $settings.forcePhoneLayoutOnPadAndMac)
+                            .font(UIConstants.bodyFont)
+                    }
+                } header: {
+                    Text("Darstellung")
+                } footer: {
+                    if UIConstants.isPadOrMac {
+                        Text("Zeigt in der Detailansicht eine zentrierte Einzelspalten-Ansicht anstelle der optimierten Mehrspalten-Ansicht.")
+                            .font(UIConstants.footnoteFont)
+                    }
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 
