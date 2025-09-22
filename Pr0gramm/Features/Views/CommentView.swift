@@ -171,6 +171,13 @@ struct CommentView: View {
 
     @ViewBuilder
     private var contextMenuContent: some View {
+        Button {
+            UIPasteboard.general.string = comment.content
+            CommentView.logger.info("Copied comment text to pasteboard for comment \(comment.id)")
+        } label: {
+            Label("Text kopieren", systemImage: "doc.on.doc")
+        }
+        
         if authService.isLoggedIn {
             Button {
                 onReply()
@@ -420,3 +427,4 @@ extension String: Identifiable {
     return PreviewWrapperNoChildren()
 }
 // --- END OF COMPLETE FILE ---
+
