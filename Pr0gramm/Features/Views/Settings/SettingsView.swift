@@ -232,6 +232,13 @@ struct SettingsView: View {
                         Text("Lizenzen & Abhängigkeiten")
                             .font(UIConstants.bodyFont)
                     }
+                    if let coffeeURL = URL(string: "https://buymeacoffee.com/daranto") {
+                        Link(destination: coffeeURL) {
+                            Label("Buy Me a Coffee", systemImage: "cup.and.saucer")
+                                .font(UIConstants.bodyFont)
+                        }
+                        .tint(.accentColor)
+                    }
                     if let url = URL(string: "https://github.com/daranto/Pr0gramm-Client-IOS-MacOS") {
                         Link(destination: url) {
                             Label("Projekt auf GitHub", systemImage: "link")
@@ -361,3 +368,4 @@ struct LicenseAndDependenciesView: View {
     }
 }
 // --- END OF COMPLETE FILE ---
+
