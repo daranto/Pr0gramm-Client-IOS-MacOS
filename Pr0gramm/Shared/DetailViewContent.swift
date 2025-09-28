@@ -536,12 +536,22 @@ struct DetailViewContent: View {
             mediaContentInternal
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            if authService.isLoggedIn {
-                commentsContentSectionWithScrollReader(proxyEnabled: true)
-                    .padding([.horizontal, .bottom])
-            } else {
-                loginHintView()
+            VStack(spacing: 0) {
+                infoAndTagsContent
+                    .padding(.horizontal)
+                    .padding(.top, 10)
+                    .padding(.bottom, 8)
+
+                if authService.isLoggedIn {
+                    commentsContentSectionWithScrollReader(proxyEnabled: true)
+                        .padding([.horizontal, .bottom])
+                } else {
+                    loginHintView()
+                        .padding(.horizontal)
+                        .padding(.bottom)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
     
@@ -587,22 +597,24 @@ struct DetailViewContent: View {
     private func commentsContentSectionWithScrollReader(proxyEnabled: Bool) -> some View {
         if proxyEnabled {
             ScrollViewReader { proxy in
-                commentsContentSection(scrollViewProxy: proxy)
-                    .onChange(of: infoLoadingStatus) { _, newStatus in
-                        if newStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
-                             attemptScrollToComment(proxy: proxy, targetID: tid)
-                        }
+                ScrollView {
+                    commentsContentSection(scrollViewProxy: proxy)
+                }
+                .onChange(of: infoLoadingStatus) { _, newStatus in
+                    if newStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                         attemptScrollToComment(proxy: proxy, targetID: tid)
                     }
-                    .onChange(of: flatComments.count) { _, _ in
-                        if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
-                            attemptScrollToComment(proxy: proxy, targetID: tid)
-                        }
+                }
+                .onChange(of: flatComments.count) { _, _ in
+                    if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                        attemptScrollToComment(proxy: proxy, targetID: tid)
                     }
-                    .onAppear {
-                        if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
-                            attemptScrollToComment(proxy: proxy, targetID: tid)
-                        }
+                }
+                .onAppear {
+                    if infoLoadingStatus == .loaded, let tid = targetCommentID, !didAttemptScrollToTarget {
+                        attemptScrollToComment(proxy: proxy, targetID: tid)
                     }
+                }
             }
         } else {
             commentsContentSection(scrollViewProxy: nil)
