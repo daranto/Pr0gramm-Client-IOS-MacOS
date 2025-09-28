@@ -20,6 +20,7 @@ struct LinkedItemPreviewView: View {
     @State private var fetchedItem: Item? = nil // Holds the fetched item data
     @State private var isLoading = false
     @State private var errorMessage: String? = nil
+    @State private var isFilterMismatch: Bool = false
 
     @StateObject private var playerManager = VideoPlayerManager()
 
@@ -60,6 +61,31 @@ struct LinkedItemPreviewView: View {
                     .padding(.top)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if isFilterMismatch, let item = fetchedItem {
+                VStack(spacing: 15) {
+                    Image(systemName: "eye.slash.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary)
+                    Text("Post ausgeblendet")
+                        .font(.title2.bold())
+                    Text("Dieser Post (ID: \(item.id)) ist mit deinen aktuellen Filtern nicht sichtbar.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+
+                    Button("Trotzdem anzeigen") {
+                        isFilterMismatch = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top)
+
+                    Button("Abbrechen") {
+                        dismiss()
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .padding(30)
             } else if let item = fetchedItem {
                 // --- MODIFIED: Pass targetCommentID to PagedDetailViewWrapperForItem ---
                 PagedDetailViewWrapperForItem(
@@ -84,40 +110,55 @@ struct LinkedItemPreviewView: View {
     private func loadItem() async {
         if fetchedItem != nil || isLoading {
             LinkedItemPreviewView.logger.trace("loadItem skipped: Already loaded (\(fetchedItem != nil)) or already loading (\(isLoading)).")
-             return
+            return
         }
 
         await MainActor.run {
             isLoading = true
             errorMessage = nil
+            isFilterMismatch = false
         }
         LinkedItemPreviewView.logger.info("Fetching preview item with ID: \(itemID)")
 
         do {
-            let currentFlags = settings.apiFlags
-            let item = try await apiService.fetchItem(id: itemID, flags: currentFlags)
+            let flagsToFetchWith = authService.isLoggedIn ? settings.apiFlags : 1
+            LinkedItemPreviewView.logger.debug("Attempting fetch for item \(itemID) with flags: \(flagsToFetchWith)")
+            let itemWithCurrentFilters = try await apiService.fetchItem(id: itemID, flags: flagsToFetchWith)
 
-            await MainActor.run {
-                if let fetched = item {
-                    self.fetchedItem = fetched
-                    LinkedItemPreviewView.logger.info("Successfully fetched preview item \(itemID)")
-                } else {
-                    self.errorMessage = "Post konnte nicht gefunden werden oder entspricht nicht deinen Filtern."
-                    LinkedItemPreviewView.logger.warning("Could not fetch preview item \(itemID). API returned nil or filter mismatch.")
+            if let item = itemWithCurrentFilters {
+                await MainActor.run {
+                    self.fetchedItem = item
+                    self.isFilterMismatch = false
+                    self.isLoading = false
+                    LinkedItemPreviewView.logger.info("Item \(itemID) found with current filters.")
                 }
-                isLoading = false
+            } else {
+                LinkedItemPreviewView.logger.warning("Item \(itemID) not found with flags \(flagsToFetchWith). Retrying with flags 31.")
+                let itemWithAllFlags = try await apiService.fetchItem(id: itemID, flags: 31)
+
+                await MainActor.run {
+                    if let item = itemWithAllFlags {
+                        self.fetchedItem = item
+                        self.isFilterMismatch = true
+                        LinkedItemPreviewView.logger.info("Item \(itemID) exists but is hidden by current filters. isFilterMismatch set to true.")
+                    } else {
+                        self.errorMessage = "Post konnte nicht gefunden werden."
+                        LinkedItemPreviewView.logger.warning("Item \(itemID) could not be fetched even with broad flags (31).")
+                    }
+                    self.isLoading = false
+                }
             }
         } catch let error as URLError where error.code == .userAuthenticationRequired {
-             LinkedItemPreviewView.logger.error("Failed to fetch preview item \(itemID): Authentication required.")
-             await MainActor.run {
-                 self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."
-                 isLoading = false
-             }
+            LinkedItemPreviewView.logger.error("Failed to fetch preview item \(itemID): Authentication required.")
+            await MainActor.run {
+                self.errorMessage = "Sitzung abgelaufen. Bitte erneut anmelden."
+                self.isLoading = false
+            }
         } catch {
             LinkedItemPreviewView.logger.error("Failed to fetch preview item \(itemID): \(error.localizedDescription)")
             await MainActor.run {
                 self.errorMessage = "Netzwerkfehler: \(error.localizedDescription)"
-                 isLoading = false
+                self.isLoading = false
             }
         }
     }
@@ -144,3 +185,4 @@ struct LinkedItemPreviewView: View {
         .environmentObject(auth)
 }
 // --- END OF COMPLETE FILE ---
+
