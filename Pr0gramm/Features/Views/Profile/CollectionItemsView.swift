@@ -98,6 +98,21 @@ struct CollectionItemsView: View {
                  CollectionItemsView.logger.info("Search text empty for collection '\(collection.name)', items empty, but a search was attempted. Showing appropriate message.")
             }
         }
+        .navigationDestination(for: Item.self) { destinationItem in
+            if let index = items.firstIndex(where: { $0.id == destinationItem.id }) {
+                PagedDetailView(
+                    items: $items,
+                    selectedIndex: index,
+                    playerManager: playerManager,
+                    loadMoreAction: { Task { await loadMoreItems() } }
+                )
+                .environmentObject(settings)
+                .environmentObject(authService)
+            } else {
+                Text("Fehler: Item \(destinationItem.id) nicht in dieser Sammlung gefunden.")
+                    .onAppear { CollectionItemsView.logger.warning("Navigation destination item \(destinationItem.id) not found in CollectionItemsView.") }
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -534,3 +549,4 @@ struct CollectionItemsView: View {
     return Previewer()
 }
 // --- END OF COMPLETE FILE ---
+
