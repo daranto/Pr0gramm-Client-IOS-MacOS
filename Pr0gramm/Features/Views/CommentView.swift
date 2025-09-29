@@ -201,7 +201,7 @@ struct CommentView: View {
                 CommentView.logger.debug("Context Menu: Upvote button tapped for comment \(comment.id)")
                 onUpvoteComment()
             } label: {
-                Label("Upvote", systemImage: currentVote == 1 ? "plus.circle.fill" : "plus.circle")
+                Label("Upvote (\(comment.up))", systemImage: currentVote == 1 ? "plus.circle.fill" : "plus.circle")
             }
             .disabled(isVoting)
 
@@ -209,7 +209,7 @@ struct CommentView: View {
                 CommentView.logger.debug("Context Menu: Downvote button tapped for comment \(comment.id)")
                 onDownvoteComment()
             } label: {
-                Label("Downvote", systemImage: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
+                Label("Downvote (\(comment.down))", systemImage: currentVote == -1 ? "minus.circle.fill" : "minus.circle")
             }
             .disabled(isVoting)
 
@@ -427,4 +427,5 @@ extension String: Identifiable {
     return PreviewWrapperNoChildren()
 }
 // --- END OF COMPLETE FILE ---
+
 

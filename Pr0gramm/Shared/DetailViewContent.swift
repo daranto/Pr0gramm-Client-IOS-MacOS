@@ -286,6 +286,31 @@ struct DetailViewContent: View {
         }
     }
 
+    @ViewBuilder private var voteDistributionView: some View {
+        let up = max(0, item.up)
+        let down = max(0, item.down)
+        let total = up + down
+        if total > 0 {
+            VStack(alignment: .leading, spacing: 4) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.gray.opacity(0.4))
+                            .frame(height: 4)
+                        Capsule()
+                            .fill(Color.green)
+                            .frame(width: max(0, CGFloat(up) / CGFloat(total)) * geo.size.width, height: 4)
+                    }
+                }
+                .frame(height: 4)
+                Text("\(up) up / \(down) down")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .transition(.opacity)
+        }
+    }
+
     @ViewBuilder private var favoriteButton: some View {
         let buttonLabel = Image(systemName: isFavorited ? "heart.fill" : "heart")
             .font(actionIconFont)
@@ -446,6 +471,8 @@ struct DetailViewContent: View {
                 shareButton
             }
             .frame(minHeight: 44)
+
+            voteDistributionView
 
             uploaderInfoView
 
@@ -1096,5 +1123,6 @@ struct PreviewWrapper: View {
      PreviewWrapper(isLoggedIn: false)
 }
 // --- END OF COMPLETE FILE ---
+
 
 
