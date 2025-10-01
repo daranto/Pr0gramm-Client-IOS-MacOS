@@ -15,12 +15,20 @@ struct CommentsSection: View {
     let showCommentInputAction: (Int) -> Void // parentId
     let targetCommentID: Int?
     let onHighlightCompletedForCommentID: (Int) -> Void
-    // --- NEW: Callbacks für Comment Votes ---
     let onUpvoteComment: (Int) -> Void
     let onDownvoteComment: (Int) -> Void
-    // --- END NEW ---
 
-
+    // --- MODIFICATION START: Ein Strich pro Ebene in Akzentfarbe ---
+    /// Pro Kommentar genau eine vertikale Linie in der App-Akzentfarbe.
+    /// Die Einrückung richtet sich nach der Ebene (level), Top-Level hat ebenfalls eine Linie.
+    private static let threadLineWidth: CGFloat = 2
+    private static let threadLineSpacing: CGFloat = 6
+    private static func indentWidth(for level: Int) -> CGFloat {
+        // Abstand setzt sich aus (level * (Spacing + Linienbreite)) zusammen
+        return CGFloat(level) * (threadLineSpacing + threadLineWidth)
+    }
+    // --- MODIFICATION END ---
+    
     private var commentsToDisplay: [FlatCommentDisplayItem] {
         return flatComments
     }
@@ -56,31 +64,45 @@ struct CommentsSection: View {
              } else {
                  LazyVStack(alignment: .leading, spacing: 0) {
                      ForEach(commentsToDisplay) { flatItem in
-                         VStack(alignment: .leading, spacing: 0) {
-                             CommentView(
-                                 comment: flatItem.comment,
-                                 uploaderName: uploaderName,
-                                 previewLinkTarget: $previewLinkTarget,
-                                 userProfileSheetTarget: $userProfileSheetTarget,
-                                 hasChildren: flatItem.hasChildren,
-                                 isCollapsed: isCommentCollapsed(flatItem.id),
-                                 onToggleCollapse: { toggleCollapseAction(flatItem.id) },
-                                 onReply: { showCommentInputAction(flatItem.id) },
-                                 targetCommentID: targetCommentID,
-                                 onHighlightCompleted: onHighlightCompletedForCommentID,
-                                 // --- NEW: Pass new callbacks ---
-                                 onUpvoteComment: { onUpvoteComment(flatItem.id) },
-                                 onDownvoteComment: { onDownvoteComment(flatItem.id) }
-                                 // --- END NEW ---
-                             )
-                             .padding(.leading, CGFloat(flatItem.level * 15))
-                             .padding(.horizontal)
-                             .padding(.bottom, 4)
-                             if !isCommentCollapsed(flatItem.id) {
-                                  Divider()
-                             }
-                          }
-                          .id(flatItem.id)
+                        HStack(alignment: .top, spacing: 0) {
+                            // Container für die vertikalen Linien
+                            HStack(spacing: 0) {
+                                // Einrückung entsprechend der Ebene
+                                Color.clear
+                                    .frame(width: Self.indentWidth(for: flatItem.level))
+                                // Genau eine vertikale Linie in Akzentfarbe
+                                Rectangle()
+                                    .fill(Color.accentColor)
+                                    .frame(width: Self.threadLineWidth)
+                                    .clipShape(Capsule())
+                            }
+                            .padding(.trailing, 6) // Abstand zwischen Linie und Kommentar
+                            
+                            // Container für den Kommentar selbst und den Divider darunter
+                            VStack(alignment: .leading, spacing: 0) {
+                                CommentView(
+                                    comment: flatItem.comment,
+                                    uploaderName: uploaderName,
+                                    previewLinkTarget: $previewLinkTarget,
+                                    userProfileSheetTarget: $userProfileSheetTarget,
+                                    hasChildren: flatItem.hasChildren,
+                                    isCollapsed: isCommentCollapsed(flatItem.id),
+                                    onToggleCollapse: { toggleCollapseAction(flatItem.id) },
+                                    onReply: { showCommentInputAction(flatItem.id) },
+                                    targetCommentID: targetCommentID,
+                                    onHighlightCompleted: onHighlightCompletedForCommentID,
+                                    onUpvoteComment: { onUpvoteComment(flatItem.id) },
+                                    onDownvoteComment: { onDownvoteComment(flatItem.id) }
+                                )
+
+                                if !isCommentCollapsed(flatItem.id) {
+                                     Divider().padding(.top, 4)
+                                }
+                            }
+                        }
+                        .padding(.trailing, 8)
+                        .padding(.bottom, 4)
+                        .id(flatItem.id)
                      }
                  }
                  .padding(.vertical, 5)
@@ -89,7 +111,7 @@ struct CommentsSection: View {
     }
 }
 
-// Previews
+// Previews (bleiben unverändert)
 @MainActor private func createPreviewFlatCommentsHelper(maxDepth: Int = 5) -> [FlatCommentDisplayItem] {
     let comment1 = ItemComment(id: 1, parent: 0, content: "Top 1", created: 1, up: 10, down: 0, confidence: 1, name: "UserA", mark: 1)
     let comment2 = ItemComment(id: 2, parent: 1, content: "Reply 1.1", created: 2, up: 5, down: 0, confidence: 1, name: "UserB", mark: 2)
@@ -122,10 +144,8 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
     private func toggleCollapse(_ id: Int) { if collapsedIDs.contains(id) { collapsedIDs.remove(id) } else { collapsedIDs.insert(id) } }
     private func showCommentInput(_ parentId: Int) { print("Preview: Show Comment Input for parentId: \(parentId)") }
     private func highlightCompletedLog(_ id: Int) { print("Preview: Highlight completed for comment ID \(id)")}
-    // --- NEW: Dummy actions for preview ---
     private func upvoteCommentLog(_ id: Int) { print("Preview: Upvote comment ID \(id)")}
     private func downvoteCommentLog(_ id: Int) { print("Preview: Downvote comment ID \(id)")}
-    // --- END NEW ---
 
     var body: some View {
         content($previewTargetLink, $userProfileTargetLink, isCollapsed, toggleCollapse, showCommentInput, initialTargetCommentIDForPreview, highlightCompletedLog, upvoteCommentLog, downvoteCommentLog)
@@ -152,10 +172,8 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
                 showCommentInputAction: showCommentInput,
                 targetCommentID: actualTargetCommentIDInContent,
                 onHighlightCompletedForCommentID: highlightCompletedCb,
-                // --- NEW: Pass dummy actions ---
                 onUpvoteComment: upvoteCommentCb,
                 onDownvoteComment: downvoteCommentCb
-                // --- END NEW ---
             )
         }
     }
@@ -166,3 +184,5 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
 #Preview("Empty") { CommentsSectionPreviewWrapper { $linkTarget, $userTarget, isCollapsed, toggleCollapse, showCommentInput, actualTargetCommentIDInContent, highlightCompletedCb, upvoteCommentCb, downvoteCommentCb in CommentsSection(flatComments: [], totalCommentCount: 0, status: .loaded, uploaderName: "Test", previewLinkTarget: $linkTarget, userProfileSheetTarget: $userTarget, isCommentCollapsed: isCollapsed, toggleCollapseAction: toggleCollapse, showCommentInputAction: showCommentInput, targetCommentID: actualTargetCommentIDInContent, onHighlightCompletedForCommentID: highlightCompletedCb, onUpvoteComment: upvoteCommentCb, onDownvoteComment: downvoteCommentCb) } }
 
 // --- END OF COMPLETE FILE ---
+
+
