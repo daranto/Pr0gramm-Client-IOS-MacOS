@@ -1098,7 +1098,7 @@ struct PreviewWrapper: View {
     }
 }
 
-@MainActor func flattenHierarchyForPreview(comments: [ItemComment], maxDepth: Int = 5) -> [FlatCommentDisplayItem] {
+@MainActor func flattenHierarchyForPreview(comments: [ItemComment], maxDepth: Int = 10) -> [FlatCommentDisplayItem] {
     var flatList: [FlatCommentDisplayItem] = []
     let childrenByParentId = Dictionary(grouping: comments.filter { $0.parent != nil && $0.parent != 0 }, by: { $0.parent! })
     let commentDict = Dictionary(uniqueKeysWithValues: comments.map { ($0.id, $0) })
@@ -1123,6 +1123,5 @@ struct PreviewWrapper: View {
      PreviewWrapper(isLoggedIn: false)
 }
 // --- END OF COMPLETE FILE ---
-
 
 

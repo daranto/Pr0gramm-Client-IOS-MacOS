@@ -32,7 +32,7 @@ struct ItemCommentsSheetView: View {
     @State private var previewLinkTarget: PreviewLinkTarget? = nil // Für Links in Kommentaren
     @State private var userProfileSheetTarget: UserProfileSheetTarget? = nil // Für User-Profile aus Kommentaren
 
-    private let commentMaxDepth = 5 // Wie in PagedDetailView
+    private let commentMaxDepth = 10
 
     init(itemId: Int, uploaderName: String, initialComments: [ItemComment], initialInfoStatusProp: InfoLoadingStatus, onRetryLoadDetails: @escaping () -> Void) {
         self.itemId = itemId
@@ -309,3 +309,5 @@ struct CommentHelper {
     .environmentObject(authService)
 }
 // --- END OF COMPLETE FILE ---
+
+

@@ -194,7 +194,7 @@ struct PagedDetailView: View {
     let onTagTappedInSheetCallback: ((String) -> Void)?
     let isPresentedInSheet: Bool // Neue Eigenschaft
 
-    let commentMaxDepth = 5
+    let commentMaxDepth = 10
     let preloadThreshold = 5
     let prefetchLookahead = 3
     let swipeSettleDelay: Duration = .milliseconds(200)
@@ -1146,3 +1146,4 @@ struct LinkedItemPreviewWrapperView: View {
     return PreviewWrapper()
 }
 // --- END OF COMPLETE FILE ---
+
