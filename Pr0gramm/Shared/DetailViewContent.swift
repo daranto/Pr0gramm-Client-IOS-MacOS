@@ -298,7 +298,7 @@ struct DetailViewContent: View {
                             .fill(Color.gray.opacity(0.4))
                             .frame(height: 4)
                         Capsule()
-                            .fill(Color.green)
+                            .fill(Color.accentColor)
                             .frame(width: max(0, CGFloat(up) / CGFloat(total)) * geo.size.width, height: 4)
                     }
                 }
@@ -1123,6 +1123,4 @@ struct PreviewWrapper: View {
      PreviewWrapper(isLoggedIn: false)
 }
 // --- END OF COMPLETE FILE ---
-
-
 
