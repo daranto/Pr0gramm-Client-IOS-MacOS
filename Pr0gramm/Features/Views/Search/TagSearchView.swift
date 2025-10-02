@@ -71,6 +71,7 @@ struct TagSearchView: View {
                 loadMoreTask?.cancel()
             }
         }
+        .tint(settings.accentColorChoice.swiftUIColor)
     }
 
     @ViewBuilder
@@ -273,3 +274,5 @@ struct TagSearchView_PreviewWrapper: View {
     TagSearchView_PreviewWrapper()
 }
 // --- END OF COMPLETE FILE ---
+
+

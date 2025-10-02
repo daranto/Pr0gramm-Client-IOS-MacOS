@@ -136,6 +136,7 @@ struct ItemCommentsSheetView: View {
                     .environmentObject(settings)
             }
         }
+        .tint(.accentColor)
     }
 
     private func loadCommentsForItem() async {
@@ -309,6 +310,4 @@ struct CommentHelper {
     .environmentObject(authService)
 }
 // --- END OF COMPLETE FILE ---
-
-
 

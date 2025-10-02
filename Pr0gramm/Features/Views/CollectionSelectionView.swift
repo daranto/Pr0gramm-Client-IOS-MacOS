@@ -70,6 +70,7 @@ struct CollectionSelectionView: View {
                 CollectionSelectionView.logger.debug("CollectionSelectionView appeared for item \(item.id). Available collections: \(availableCollections.count)")
             }
         }
+        .tint(.accentColor)
     }
 }
 
@@ -125,3 +126,4 @@ struct CollectionSelectionView: View {
 }
 
 // --- END OF COMPLETE FILE ---
+

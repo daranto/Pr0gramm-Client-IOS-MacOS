@@ -188,6 +188,7 @@ struct UserProfileSheetView: View {
                      .environmentObject(authService)
             }
         }
+        .tint(settings.accentColorChoice.swiftUIColor)
     }
 
     private func loadAllData(forceRefresh: Bool = false) async {
@@ -595,3 +596,5 @@ struct UserProfileSheetView: View {
     private func formatDateGerman(date: Date) -> String { germanDateFormatter.string(from: date) }
 }
 // --- END OF COMPLETE FILE ---
+
+

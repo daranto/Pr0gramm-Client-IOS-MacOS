@@ -69,6 +69,7 @@ struct CommentInputView: View {
                  Self.logger.debug("CommentInputView appeared for itemId: \(itemId), parentId: \(parentId)")
             }
         }
+        .tint(.accentColor)
     }
 
     /// Handles the submission process.
@@ -129,3 +130,4 @@ struct CommentInputView: View {
     }
 }
 // --- END OF COMPLETE FILE ---
+

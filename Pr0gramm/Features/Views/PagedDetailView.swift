@@ -1081,6 +1081,7 @@ struct LinkedItemPreviewWrapperView: View {
                 #endif
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } } }
         }
+        .tint(.accentColor)
     }
 }
 
