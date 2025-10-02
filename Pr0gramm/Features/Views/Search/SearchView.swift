@@ -128,6 +128,7 @@ var body: some View {
                         }
                     }
             }
+            .tint(settings.accentColorChoice.swiftUIColor)
         }
         .onChange(of: navigationService.pendingSearchTag) { _, newTag in
             if let tagToSearch = newTag, !tagToSearch.isEmpty {
@@ -608,3 +609,4 @@ private func clearSearchHistory() {
 }
 }
 // --- END OF COMPLETE FILE ---
+

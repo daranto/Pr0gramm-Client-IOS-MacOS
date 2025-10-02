@@ -62,6 +62,7 @@ struct UserProfileCommentsView: View {
             LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID) // commentID übergeben
                 .environmentObject(settings)
                 .environmentObject(authService)
+                .tint(settings.accentColorChoice.swiftUIColor)
         }
         // --- END MODIFICATION ---
         .overlay {
@@ -369,3 +370,4 @@ struct UserProfileCommentsView: View {
     return PreviewWrapper()
 }
 // --- END OF COMPLETE FILE ---
+

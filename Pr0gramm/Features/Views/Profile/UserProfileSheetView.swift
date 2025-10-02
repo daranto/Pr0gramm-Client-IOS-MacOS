@@ -149,6 +149,7 @@ struct UserProfileSheetView: View {
                         .environmentObject(settings)
                         .environmentObject(authService)
                     }
+                    .tint(settings.accentColorChoice.swiftUIColor)
                 }
             }
             .sheet(isPresented: $showAllUploadsSheet) {
@@ -159,6 +160,7 @@ struct UserProfileSheetView: View {
                         .environmentObject(playerManager)
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllUploadsSheet = false } } }
                 }
+                .tint(settings.accentColorChoice.swiftUIColor)
             }
             .sheet(isPresented: $showAllCommentsSheet) {
                 NavigationStack {
@@ -168,6 +170,7 @@ struct UserProfileSheetView: View {
                         .environmentObject(playerManager)
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllCommentsSheet = false } } }
                 }
+                .tint(settings.accentColorChoice.swiftUIColor)
             }
             .sheet(isPresented: $showConversationSheet) {
                 NavigationStack {
@@ -181,11 +184,13 @@ struct UserProfileSheetView: View {
                             }
                         }
                 }
+                .tint(settings.accentColorChoice.swiftUIColor)
             }
             .sheet(item: $previewLinkTargetFromComment) { target in
                  LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
                      .environmentObject(settings)
                      .environmentObject(authService)
+                     .tint(settings.accentColorChoice.swiftUIColor)
             }
         }
         .tint(settings.accentColorChoice.swiftUIColor)
@@ -596,5 +601,4 @@ struct UserProfileSheetView: View {
     private func formatDateGerman(date: Date) -> String { germanDateFormatter.string(from: date) }
 }
 // --- END OF COMPLETE FILE ---
-
 

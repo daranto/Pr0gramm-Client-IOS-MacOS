@@ -1081,7 +1081,7 @@ struct LinkedItemPreviewWrapperView: View {
                 #endif
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } } }
         }
-        .tint(.accentColor)
+        .tint(settings.accentColorChoice.swiftUIColor)
     }
 }
 
@@ -1147,5 +1147,6 @@ struct LinkedItemPreviewWrapperView: View {
     return PreviewWrapper()
 }
 // --- END OF COMPLETE FILE ---
+
 
 
