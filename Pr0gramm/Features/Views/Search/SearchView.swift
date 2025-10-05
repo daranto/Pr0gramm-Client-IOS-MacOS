@@ -2,6 +2,7 @@
 // --- START OF COMPLETE FILE ---
 import SwiftUI
 import os
+import Kingfisher
 // Wrapper struct for identifiable search history items
 struct SearchHistoryItem: Identifiable, Hashable {
 let id = UUID()
@@ -42,6 +43,7 @@ private static let maxSearchHistoryCount = 10
 
 @State private var loadMoreTask: Task<Void, Never>? = nil
 private let loadMoreDebounceTime: Duration = .milliseconds(500)
+private let preloadRowsAhead: Int = 5
 
 private let apiService = APIService()
 private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "SearchView")
@@ -369,8 +371,33 @@ private var searchHistoryView: some View {
 private var searchResultsGrid: some View {
     ScrollView {
         LazyVGrid(columns: gridColumns, spacing: 3) {
-            ForEach(items) { item in
-                NavigationLink(value: item) { FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id)) }.buttonStyle(.plain)
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                NavigationLink(value: item) {
+                    FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id))
+                }
+                .buttonStyle(.plain)
+                .onAppear {
+                    // Prefetch thumbnails for the next rows when we reach the beginning of a row
+                    if gridColumns.count > 0, index % gridColumns.count == 0 {
+                        let nextPrefetchCount = gridColumns.count * 2 // prefetch two rows ahead
+                        let start = min(index + gridColumns.count, items.count)
+                        let end = min(start + nextPrefetchCount, items.count)
+                        if start < end {
+                            let urls: [URL] = items[start..<end].compactMap { $0.thumbnailUrl }
+                            if !urls.isEmpty {
+                                let prefetcher = ImagePrefetcher(urls: urls)
+                                prefetcher.start()
+                            }
+                        }
+                    }
+
+                    // Trigger early load more when reaching a threshold several rows before the end
+                    let offset = max(1, gridColumns.count) * preloadRowsAhead
+                    let thresholdIndex = max(0, items.count - offset)
+                    if index >= thresholdIndex && canLoadMore && !isLoadingMore && !isLoading {
+                        Task { await triggerLoadMoreWithDebounce() }
+                    }
+                }
             }
             if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
                 Color.clear.frame(height: 1).onAppear {
@@ -609,4 +636,3 @@ private func clearSearchHistory() {
 }
 }
 // --- END OF COMPLETE FILE ---
-
