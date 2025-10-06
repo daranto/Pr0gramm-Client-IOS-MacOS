@@ -1,12 +1,40 @@
-// Pr0gramm/Pr0gramm/Features/Views/Profile/CollectionItemsView.swift
-// --- START OF COMPLETE FILE ---
-
 import SwiftUI
 import os
 import Kingfisher
 
-/// Displays the items within a specific user collection in a grid.
-/// Handles loading, pagination, filtering (based on global settings), and navigation.
+struct CollectionItemThumbnail: View, Equatable {
+    let item: Item
+    let isSeen: Bool
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CollectionItemThumbnail")
+
+    static func == (lhs: CollectionItemThumbnail, rhs: CollectionItemThumbnail) -> Bool {
+        return lhs.item.id == rhs.item.id && lhs.isSeen == rhs.isSeen
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            KFImage(item.thumbnailUrl)
+                .placeholder { Rectangle().fill(Material.ultraThin).overlay(ProgressView()) }
+                .onFailure { error in CollectionItemThumbnail.logger.error("KFImage fail \(item.id): \(error.localizedDescription)") }
+                .cancelOnDisappear(true)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .aspectRatio(1.0, contentMode: .fit)
+                .background(Material.ultraThin)
+                .cornerRadius(5)
+                .clipped()
+            
+            if isSeen {
+                Image(systemName: "checkmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, Color.accentColor)
+                    .font(.system(size: 18))
+                    .padding(4)
+            }
+        }
+    }
+}
+
 struct CollectionItemsView: View {
     let collection: ApiCollection
     let username: String
@@ -212,14 +240,12 @@ struct CollectionItemsView: View {
             LazyVGrid(columns: gridColumns, spacing: 3) {
                  ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                      NavigationLink(value: item) {
-                         // value ist Item, wird von ProfileView gehandhabt
-                         FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id))
+                         CollectionItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id))
                      }
                      .buttonStyle(.plain)
                      .onAppear {
-                         // Prefetch thumbnails for the next rows when we reach the beginning of a row
                          if gridColumns.count > 0, index % gridColumns.count == 0 {
-                             let nextPrefetchCount = gridColumns.count * 2 // prefetch two rows ahead
+                             let nextPrefetchCount = gridColumns.count * 2
                              let start = min(index + gridColumns.count, items.count)
                              let end = min(start + nextPrefetchCount, items.count)
                              if start < end {
@@ -231,7 +257,6 @@ struct CollectionItemsView: View {
                              }
                          }
 
-                         // Trigger early load more when reaching a threshold several rows before the end
                          let offset = max(1, gridColumns.count) * preloadRowsAhead
                          let thresholdIndex = max(0, items.count - offset)
                          if index >= thresholdIndex && canLoadMore && !isLoadingMore && !isLoading {
@@ -306,7 +331,6 @@ struct CollectionItemsView: View {
         hasAttemptedSearchSinceAppear = true
     }
 
-    // MARK: - Data Loading Methods
     @MainActor
     func refreshItems() async {
         CollectionItemsView.logger.info("Refreshing items for collection: '\(collection.name)' (Keyword: \(collection.keyword ?? "N/A")) by user: \(username), search: '\(currentSearchTagForAPI ?? "nil")'")
@@ -501,79 +525,3 @@ struct CollectionItemsView: View {
         }
     }
 }
-
-// MARK: - Previews
-#Preview("Collection With Items") {
-    struct Previewer: View {
-        @StateObject private var settings = AppSettings()
-        @StateObject private var authService: AuthService
-
-        let sampleCollection: ApiCollection
-        let sampleItems: [Item]
-        let username: String
-
-        init() {
-            let tempSettings = AppSettings()
-            _settings = StateObject(wrappedValue: tempSettings)
-            _authService = StateObject(wrappedValue: AuthService(appSettings: tempSettings))
-
-            self.sampleCollection = ApiCollection(id: 102, name: "Lustige Katzen Videos", keyword: "katzen", isPublic: 0, isDefault: 0, itemCount: 45)
-            self.sampleItems = [
-                Item(id: 1, promoted: nil, userId: 1, down: 0, up: 10, created: 1, image: "cat1.jpg", thumb: "cat1_thumb.jpg", fullsize: nil, preview: nil, width: 100, height: 100, audio: false, source: nil, flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, subtitles: nil, favorited: nil),
-                Item(id: 2, promoted: nil, userId: 1, down: 0, up: 10, created: 1, image: "cat2.mp4", thumb: "cat2_thumb.jpg", fullsize: nil, preview: nil, width: 100, height: 100, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: nil, variants: nil, subtitles: nil, favorited: nil)
-            ]
-            self.username = "Daranto"
-            
-            authService.isLoggedIn = true
-            authService.currentUser = UserInfo(id:1, name: username, registered: 1, score: 1, mark:1, badges: [])
-        }
-
-        var body: some View {
-            NavigationStack {
-                CollectionItemsView(collection: sampleCollection, username: username, initialItemsForPreview: sampleItems)
-                    .environmentObject(settings)
-                    .environmentObject(authService)
-            }
-        }
-    }
-    return Previewer()
-}
-
-#Preview("Empty Collection - No Filter Active") {
-    struct Previewer: View {
-        @StateObject private var settings = AppSettings()
-        @StateObject private var authService: AuthService
-        let emptyCollection: ApiCollection
-        let username: String
-
-        init() {
-            let tempSettings = AppSettings()
-            tempSettings.showSFW = false
-            tempSettings.showNSFW = false
-            tempSettings.showNSFL = false
-            tempSettings.showNSFP = false
-            tempSettings.showPOL = false
-
-            _settings = StateObject(wrappedValue: tempSettings)
-            _authService = StateObject(wrappedValue: AuthService(appSettings: tempSettings))
-            
-            self.emptyCollection = ApiCollection(id: 103, name: "Leere Sammlung", keyword: "empty", isPublic: 0, isDefault: 0, itemCount: 10)
-            self.username = "Daranto"
-
-            authService.isLoggedIn = true
-            authService.currentUser = UserInfo(id:1, name: username, registered: 1, score: 1, mark:1, badges: [])
-        }
-        
-        var body: some View {
-            NavigationStack {
-                CollectionItemsView(collection: emptyCollection, username: username, initialItemsForPreview: [])
-                    .environmentObject(settings)
-                    .environmentObject(authService)
-            }
-        }
-    }
-    return Previewer()
-}
-// --- END OF COMPLETE FILE ---
-
-

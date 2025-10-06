@@ -1,12 +1,41 @@
-// Pr0gramm/Pr0gramm/Features/Views/Profile/FavoritesView.swift
-// --- START OF COMPLETE FILE ---
-
 import SwiftUI
 import os
 import Kingfisher
 
-/// Displays the user's favorited items in a grid.
-/// Requires the user to be logged in. Handles loading, pagination, filtering, and navigation.
+struct FavoritesItemThumbnail: View, Equatable {
+    let item: Item
+    let isSeen: Bool
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "FavoritesItemThumbnail")
+
+    static func == (lhs: FavoritesItemThumbnail, rhs: FavoritesItemThumbnail) -> Bool {
+        return lhs.item.id == rhs.item.id && lhs.isSeen == rhs.isSeen
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            KFImage(item.thumbnailUrl)
+                .placeholder { Rectangle().fill(Material.ultraThin).overlay(ProgressView()) }
+                .onFailure { error in FavoritesItemThumbnail.logger.error("KFImage fail \(item.id): \(error.localizedDescription)") }
+                .cancelOnDisappear(true)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .aspectRatio(1.0, contentMode: .fit)
+                .background(Material.ultraThin)
+                .cornerRadius(5)
+                .clipped()
+            
+            if isSeen {
+                Image(systemName: "checkmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, Color.accentColor)
+                    .font(.system(size: 18))
+                    .padding(4)
+            }
+        }
+    }
+}
+
+
 struct FavoritesView: View {
 
     @EnvironmentObject var settings: AppSettings
@@ -31,13 +60,11 @@ struct FavoritesView: View {
     
     @State private var needsDataRefresh = true
 
-    // --- NEW: State für Suche ---
     @State private var searchText = ""
-    @State private var currentSearchTagForAPI: String? = nil // Für API-Calls und Cache-Key
+    @State private var currentSearchTagForAPI: String? = nil
     @State private var searchDebounceTimer: Timer? = nil
-    private let searchDebounceInterval: TimeInterval = 0.75 // Sekunden
-    @State private var hasAttemptedSearchSinceAppear = false // Trackt, ob eine Suche (auch erfolglos) gemacht wurde
-    // --- END NEW ---
+    private let searchDebounceInterval: TimeInterval = 0.75
+    @State private var hasAttemptedSearchSinceAppear = false
 
 
     private let apiService = APIService()
@@ -56,7 +83,7 @@ struct FavoritesView: View {
     private var favoritesCacheKey: String? {
         guard let username = authService.currentUser?.name.lowercased(),
               let collectionId = settings.selectedCollectionIdForFavorites else { return nil }
-        let selectedCollectionCache = authService.userCollections.first { $0.id == collectionId } // Umbenannt, um Konflikt zu vermeiden
+        let selectedCollectionCache = authService.userCollections.first { $0.id == collectionId }
         
         var baseKeyPart: String
         if let keyword = selectedCollectionCache?.keyword {
@@ -257,10 +284,8 @@ struct FavoritesView: View {
     private func handleCollectionChange() async {
         FavoritesView.logger.info("FavoritesView: selectedCollectionIdForFavorites changed. Setting needsDataRefresh to true.")
         needsDataRefresh = true
-        // --- MODIFIED: Suche zurücksetzen, wenn Sammlung wechselt ---
         currentSearchTagForAPI = nil
         searchText = ""
-        // --- END MODIFICATION ---
         if navigationService.selectedTab == .favorites {
             FavoritesView.logger.info("Collection ID changed while Favorites tab is active. Calling performActualDataRefresh.")
             await performActualDataRefresh()
@@ -293,9 +318,7 @@ struct FavoritesView: View {
                     ContentUnavailableView {
                         Label("Keine Ergebnisse", systemImage: "magnifyingglass")
                     } description: {
-                        // --- MODIFIED: Verwende currentSearchTagForAPI für die Meldung ---
                         Text("Keine Favoriten für den Tag '\(currentSearchTagForAPI!)' gefunden (oder sie passen nicht zu deinen globalen Filtern).")
-                        // --- END MODIFICATION ---
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -321,16 +344,15 @@ struct FavoritesView: View {
             LazyVGrid(columns: gridColumns, spacing: 3) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     NavigationLink(value: item) {
-                        FeedItemThumbnail(
+                        FavoritesItemThumbnail(
                             item: item,
                             isSeen: settings.seenItemIDs.contains(item.id)
                         )
                     }
                     .buttonStyle(.plain)
                     .onAppear {
-                        // Prefetch thumbnails for the next rows when we reach the beginning of a row
                         if gridColumns.count > 0, index % gridColumns.count == 0 {
-                            let nextPrefetchCount = gridColumns.count * 2 // prefetch two rows ahead
+                            let nextPrefetchCount = gridColumns.count * 2
                             let start = min(index + gridColumns.count, items.count)
                             let end = min(start + nextPrefetchCount, items.count)
                             if start < end {
@@ -342,7 +364,6 @@ struct FavoritesView: View {
                             }
                         }
 
-                        // Trigger early load more when reaching a threshold several rows before the end
                         let offset = max(1, gridColumns.count) * preloadRowsAhead
                         let thresholdIndex = max(0, items.count - offset)
                         if index >= thresholdIndex && canLoadMore && !isLoadingMore && !isLoading {
@@ -481,7 +502,7 @@ struct FavoritesView: View {
             return
         }
         guard let selectedCollectionID = settings.selectedCollectionIdForFavorites,
-              let selectedCollectionInstance = authService.userCollections.first(where: { $0.id == selectedCollectionID }), // Umbenannt um Namenskonflikt zu vermeiden
+              let selectedCollectionInstance = authService.userCollections.first(where: { $0.id == selectedCollectionID }),
               let collectionKeyword = selectedCollectionInstance.keyword else {
             FavoritesView.logger.warning("Cannot refresh favorites: No collection selected in AppSettings or keyword missing for ID \(settings.selectedCollectionIdForFavorites ?? -1).")
             self.items = []; self.errorMessage = nil; self.isLoading = false; self.canLoadMore = false; self.isLoadingMore = false; self.showNoFilterMessage = false; self.showNoCollectionSelectedMessage = true
@@ -510,9 +531,9 @@ struct FavoritesView: View {
                 FavoritesView.logger.info("Finished favorites refresh process.")
             }
         }
-        canLoadMore = true; isLoadingMore = false;
+        canLoadMore = true; isLoadingMore = false; var initialItemsFromCache: [Item]? = nil
 
-        if items.isEmpty {
+        if self.items.isEmpty {
              if let cached = await settings.loadItemsFromCache(forKey: cacheKey), !cached.isEmpty {
                  self.items = cached.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
                  FavoritesView.logger.info("Found \(self.items.count) favorite items in cache initially for collection '\(collectionKeyword)', search: '\(currentSearchTagForAPI ?? "nil")'.")
@@ -531,16 +552,13 @@ struct FavoritesView: View {
                 tags: currentSearchTagForAPI
             )
             let fetchedItemsFromAPI = apiResponse.items
-            // --- MODIFIED: Korrekter Variablenname für Log ---
             FavoritesView.logger.info("API fetch completed: \(fetchedItemsFromAPI.count) fresh favorites for collection '\(collectionKeyword)', search: '\(currentSearchTagForAPI ?? "nil")'.");
-            // --- END MODIFICATION ---
             guard !Task.isCancelled else { FavoritesView.logger.info("Refresh task cancelled."); return }
 
             let contentChanged = items.map { $0.id }.elementsEqual(fetchedItemsFromAPI.map { $0.id }) == false
 
             self.items = fetchedItemsFromAPI.map { var mutableItem = $0; mutableItem.favorited = true; return mutableItem }
             
-            // --- MODIFIED: Korrekter Variablenname für Log ---
             if fetchedItemsFromAPI.isEmpty && currentApiFlags != 0 && (currentSearchTagForAPI == nil || currentSearchTagForAPI!.isEmpty) {
                  self.showNoFilterMessage = true
                  FavoritesView.logger.info("API returned no items for collection '\(collectionKeyword)' with active global filters (no search term). Setting showNoFilterMessage.")
@@ -549,7 +567,6 @@ struct FavoritesView: View {
             } else {
                  self.showNoFilterMessage = false
             }
-            // --- END MODIFICATION ---
             
             if fetchedItemsFromAPI.isEmpty {
                 self.canLoadMore = false
@@ -597,7 +614,7 @@ struct FavoritesView: View {
         
         guard authService.isLoggedIn, let username = authService.currentUser?.name else { return }
         guard let selectedCollectionID = settings.selectedCollectionIdForFavorites,
-              let selectedCollectionInstance = authService.userCollections.first(where: { $0.id == selectedCollectionID }), // Umbenannt
+              let selectedCollectionInstance = authService.userCollections.first(where: { $0.id == selectedCollectionID }),
               let collectionKeyword = selectedCollectionInstance.keyword else {
             FavoritesView.logger.warning("Cannot load more favorites: No collection selected or keyword missing.")
             self.canLoadMore = false
@@ -667,52 +684,3 @@ struct FavoritesView: View {
         }
     }
 }
-
-// Previews
-#Preview("Logged In - Collection Selected") {
-    let previewSettings = AppSettings()
-    previewSettings.selectedCollectionIdForFavorites = 101
-    let previewAuthService = AuthService(appSettings: previewSettings)
-    let previewNavigationService = NavigationService()
-    previewAuthService.isLoggedIn = true
-    let sampleCollections = [
-        ApiCollection(id: 101, name: "Meine Favoriten", keyword: "favoriten", isPublic: 0, isDefault: 1, itemCount: 123),
-        ApiCollection(id: 102, name: "Lustige Katzen", keyword: "katzen", isPublic: 0, isDefault: 0, itemCount: 45)
-    ]
-    previewAuthService.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2, badges: [], collections: sampleCollections)
-    #if DEBUG
-    previewAuthService.setUserCollectionsForPreview(sampleCollections)
-    #endif
-    previewAuthService.favoritedItemIDs = [2, 4]
-
-    return FavoritesView()
-        .environmentObject(previewSettings)
-        .environmentObject(previewAuthService)
-        .environmentObject(previewNavigationService)
-}
-
-#Preview("Logged In - No Collection Selected") {
-    let previewSettings = AppSettings()
-    previewSettings.selectedCollectionIdForFavorites = nil
-    let previewAuthService = AuthService(appSettings: previewSettings)
-    let previewNavigationService = NavigationService()
-    previewAuthService.isLoggedIn = true
-    previewAuthService.currentUser = UserInfo(id: 123, name: "TestUser", registered: 1, score: 100, mark: 2, badges: [])
-    #if DEBUG
-    previewAuthService.setUserCollectionsForPreview([])
-    #endif
-
-    return FavoritesView()
-        .environmentObject(previewSettings)
-        .environmentObject(previewAuthService)
-        .environmentObject(previewNavigationService)
-}
-
-#Preview("Logged Out") {
-    FavoritesView()
-        .environmentObject(AppSettings())
-        .environmentObject(AuthService(appSettings: AppSettings()))
-        .environmentObject(NavigationService())
-}
-// --- END OF COMPLETE FILE ---
-

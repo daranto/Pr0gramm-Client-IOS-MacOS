@@ -1,14 +1,42 @@
-// Pr0gramm/Pr0gramm/Features/Views/Profile/UserUploadsView.swift
-// --- START OF COMPLETE FILE ---
-
 import SwiftUI
 import os
 import Kingfisher
 
-/// Displays the items uploaded by a specific user in a grid.
-/// Handles loading, pagination, filtering (based on global settings), and navigation.
+struct UserUploadsItemThumbnail: View, Equatable {
+    let item: Item
+    let isSeen: Bool
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserUploadsItemThumbnail")
+
+    static func == (lhs: UserUploadsItemThumbnail, rhs: UserUploadsItemThumbnail) -> Bool {
+        return lhs.item.id == rhs.item.id && lhs.isSeen == rhs.isSeen
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            KFImage(item.thumbnailUrl)
+                .placeholder { Rectangle().fill(Material.ultraThin).overlay(ProgressView()) }
+                .onFailure { error in UserUploadsItemThumbnail.logger.error("KFImage fail \(item.id): \(error.localizedDescription)") }
+                .cancelOnDisappear(true)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .aspectRatio(1.0, contentMode: .fit)
+                .background(Material.ultraThin)
+                .cornerRadius(5)
+                .clipped()
+            
+            if isSeen {
+                Image(systemName: "checkmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, Color.accentColor)
+                    .font(.system(size: 18))
+                    .padding(4)
+            }
+        }
+    }
+}
+
 struct UserUploadsView: View {
-    let username: String // Username whose uploads to display
+    let username: String
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
@@ -30,6 +58,8 @@ struct UserUploadsView: View {
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserUploadsView")
+    
+    private let preloadRowsAhead: Int = 5
 
     private var gridColumns: [GridItem] {
             let isMac = ProcessInfo.processInfo.isiOSAppOnMac
@@ -62,7 +92,6 @@ struct UserUploadsView: View {
                 searchDebounceTimer?.invalidate()
                 triggerPrimaryLoadTask { await performSearchLogic(isInitialSearch: true) }
             }
-            // --- MODIFICATION: Hinzugefügt ---
             .navigationDestination(for: Item.self) { destinationItem in
                 if let index = items.firstIndex(where: { $0.id == destinationItem.id }) {
                      PagedDetailView(
@@ -71,8 +100,8 @@ struct UserUploadsView: View {
                          playerManager: playerManager,
                          loadMoreAction: { Task { await loadMoreUploads() } }
                      )
-                     .environmentObject(settings) // AppSettings weitergeben
-                     .environmentObject(authService) // AuthService weitergeben
+                     .environmentObject(settings)
+                     .environmentObject(authService)
                  } else {
                      Text("Fehler: Item \(destinationItem.id) nicht in den Uploads gefunden.")
                          .onAppear {
@@ -80,7 +109,6 @@ struct UserUploadsView: View {
                          }
                  }
             }
-            // --- END MODIFICATION ---
         .onChange(of: searchText) { oldValue, newValue in
             UserUploadsView.logger.info("Search text for user '\(username)' changed from '\(oldValue)' to '\(newValue)'")
             searchDebounceTimer?.invalidate()
@@ -178,10 +206,31 @@ struct UserUploadsView: View {
     private var scrollViewContent: some View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 3) {
-                 ForEach(items) { item in
+                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                      NavigationLink(value: item) {
-                         FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id))
-                     }.buttonStyle(.plain)
+                         UserUploadsItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id))
+                     }
+                     .buttonStyle(.plain)
+                     .onAppear {
+                        if gridColumns.count > 0, index % gridColumns.count == 0 {
+                            let nextPrefetchCount = gridColumns.count * 2
+                            let start = min(index + gridColumns.count, items.count)
+                            let end = min(start + nextPrefetchCount, items.count)
+                            if start < end {
+                                let urls: [URL] = items[start..<end].compactMap { $0.thumbnailUrl }
+                                if !urls.isEmpty {
+                                    let prefetcher = ImagePrefetcher(urls: urls)
+                                    prefetcher.start()
+                                }
+                            }
+                        }
+
+                        let offset = max(1, gridColumns.count) * preloadRowsAhead
+                        let thresholdIndex = max(0, items.count - offset)
+                        if index >= thresholdIndex && canLoadMore && !isLoadingMore && !isLoading {
+                            Task { await loadMoreUploads() }
+                        }
+                    }
                  }
                  if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
                      Color.clear.frame(height: 1).onAppear { UserUploadsView.logger.info("Uploads for \(username): End trigger appeared."); Task { await loadMoreUploads() } }
@@ -392,13 +441,3 @@ struct UserUploadsView: View {
         }
     }
 }
-
-// MARK: - Previews
-#Preview {
-    let previewSettings = AppSettings(); let previewAuthService = AuthService(appSettings: previewSettings); previewAuthService.isLoggedIn = true; previewAuthService.currentUser = UserInfo(id: 123, name: "PreviewUser", registered: 1, score: 100, mark: 2, badges: []);
-    let playerManager = VideoPlayerManager()
-    playerManager.configure(settings: previewSettings)
-    
-    return NavigationStack { UserUploadsView(username: "PreviewUser").environmentObject(previewSettings).environmentObject(previewAuthService).environmentObject(playerManager) }
-}
-// --- END OF COMPLETE FILE ---
