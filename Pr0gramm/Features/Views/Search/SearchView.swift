@@ -2,6 +2,113 @@ import SwiftUI
 import os
 import Kingfisher
 
+// MARK: - Search History Components
+struct SearchHistoryView: View {
+    let searchHistory: [String]
+    let onSelectTerm: (String) -> Void
+    let onDeleteTerm: (String) -> Void
+    let onClearAll: () -> Void
+    
+    var body: some View {
+        if !searchHistory.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                // Header
+                HStack {
+                    Text("Zuletzt gesucht")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(action: onClearAll) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12, weight: .medium))
+                            Text("Alle löschen")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.red.opacity(0.1))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+                
+                // History Items - Show all entries
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(searchHistory.enumerated()), id: \.element) { index, term in
+                        SearchHistoryRow(
+                            term: term,
+                            onSelect: { onSelectTerm(term) },
+                            onDelete: { onDeleteTerm(term) }
+                        )
+                        
+                        if index < searchHistory.count - 1 {
+                            Divider()
+                                .padding(.leading, 48)
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+}
+
+struct SearchHistoryRow: View {
+    let term: String
+    let onSelect: () -> Void
+    let onDelete: () -> Void
+    
+    @State private var isHovered = false
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "clock")
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(.tertiary)
+                .frame(width: 20)
+            
+            Text(term)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            
+            Spacer()
+            
+            Button {
+                onDelete()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 20, height: 20)
+                    .background(.red.opacity(isHovered ? 1.0 : 0.8))
+                    .clipShape(Circle())
+                    .scaleEffect(isHovered ? 1.1 : 1.0)
+            }
+            .buttonStyle(.plain)
+            .opacity(isHovered ? 1.0 : 0.6)
+            .animation(.easeInOut(duration: 0.2), value: isHovered)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        .background(isHovered ? .gray.opacity(0.05) : .clear)
+        .onTapGesture {
+            onSelect()
+        }
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
+    }
+}
+
 struct SystemBlurView: UIViewRepresentable {
     let style: UIBlurEffect.Style
     
@@ -75,13 +182,15 @@ struct SearchView: View {
     @State private var searchText = ""
     @State private var currentSearchTagForAPI: String? = nil
     @State private var hasAttemptedSearchSinceAppear = false
-    @State private var pendingSearchTerm: String? = nil
 
     @State private var searchHistory: [String] = []
-    private static let searchHistoryKey = "searchHistory_v1"
-    private static let maxSearchHistoryCount = 100
+    @State private var isSearchActive = true
 
     @State private var minBenisFilter: Int = 0
+    @State private var scrollResetCounter: Int = 0
+
+    private static let searchHistoryKey = "searchHistory_v1"
+    private static let maxSearchHistoryCount = 100
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "SearchView")
@@ -148,113 +257,75 @@ struct SearchView: View {
                 .navigationBarTitleDisplayMode(.large)
                 #endif
                 .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Tags suchen…")
+                .onChange(of: searchText) { _, newValue in  // ✅ Aktualisiert
+                    // Wenn der Benutzer anfängt zu tippen, Verlauf wieder anzeigen
+                    if !isSearchActive {
+                        isSearchActive = true
+                    }
+                    // Wenn das Suchfeld geleert wird, alles zurücksetzen (inkl. Benis-Filter)
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        currentSearchTagForAPI = nil
+                        minBenisFilter = 0
+                        items = []
+                        errorMessage = nil
+                        canLoadMore = false
+                        isLoadingMore = false
+                        isLoading = false
+                        hasAttemptedSearchSinceAppear = false
+                    }
+                }
                 .onSubmit(of: .search) {
                     SearchView.logger.info("Search submitted with: \(searchText)")
                     let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    isSearchActive = false
+                    
                     if !trimmed.isEmpty { addTermToSearchHistory(trimmed) }
+                    dismissSearch()
+                    #if os(iOS)
+                    dismissKeyboard()
+                    #endif
                     Task { await performSearchLogic(isInitialSearch: true) }
                 }
                 .searchSuggestions {
-                    if !searchHistory.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            // Header
-                            Text("Zuletzt gesucht")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 8)
-
-                            // Rows
-                            ForEach(searchHistory, id: \.self) { term in
-                                Button {
-                                    let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    searchText = trimmed
-                                    addTermToSearchHistory(trimmed)
-                                    dismissSearch()
-                                    pendingSearchTerm = trimmed
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "magnifyingglass")
-                                            .foregroundStyle(.secondary)
-                                        Text(term)
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(1)
-                                            .truncationMode(.tail)
+                    if isSearchActive {
+                        SearchHistoryView(
+                            searchHistory: searchHistory,
+                            onSelectTerm: { term in
+                                let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+                                Task.detached {
+                                    await MainActor.run {
+                                        searchText = trimmed
+                                        isSearchActive = false
+                                        addTermToSearchHistory(trimmed)
+                                        dismissSearch()
+                                        dismissKeyboard()
                                     }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.vertical, 6)
-                                    .padding(.horizontal, 8)
+                                    try? await Task.sleep(nanoseconds: 150_000_000)
+                                    await performSearchLogic(isInitialSearch: true)
                                 }
-                                .buttonStyle(.plain)
+                            },
+                            onDeleteTerm: { term in
+                                deleteTermFromSearchHistory(term)
+                            },
+                            onClearAll: {
+                                clearSearchHistory()
                             }
-
-                            // Footer action (less prominent)
-                            Divider()
-                                .padding(.horizontal, 8)
-                            HStack {
-                                Spacer()
-                                Button(role: .destructive) {
-                                    clearSearchHistory()
-                                } label: {
-                                    Label("Alle löschen", systemImage: "trash")
-                                        .font(.body.weight(.semibold))
-                                        .padding(.vertical, 8)
-                                        .padding(.horizontal, 12)
-                                }
-                                .buttonStyle(.bordered)
-                                .tint(.red)
-                                Spacer()
-                            }
-                            .padding(.vertical, 4)
-                        }
+                        )
                     }
                 }
-                .onChange(of: pendingSearchTerm) { _, newValue in
-                    guard let term = newValue else { return }
-                    Task {
-                        // Give the system a brief moment to dismiss the search UI/keyboard
-                        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
-                        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
-                        await MainActor.run { searchText = trimmed }
-                        await performSearchLogic(isInitialSearch: true)
-                        await MainActor.run { pendingSearchTerm = nil }
-                    }
-                }
-        }
-        .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
-            Button("OK") { errorMessage = nil }
-        } message: { Text(errorMessage ?? "Unbekannter Fehler") }
-        .sheet(isPresented: $showingFilterSheet) {
-            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
-                .environmentObject(settings)
-                .environmentObject(authService)
-        }
-        .sheet(item: $helpPostPreviewTarget) { target in
-            NavigationStack {
-                LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
-                    .environmentObject(settings)
-                    .environmentObject(authService)
-                    .navigationTitle("Suchhilfe")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Schließen") { helpPostPreviewTarget = nil }
-                        }
-                    }
-            }
-            .tint(settings.accentColorChoice.swiftUIColor)
         }
         .onAppear {
             loadSearchHistory()
             playerManager.configure(settings: settings)
             hasAttemptedSearchSinceAppear = false
+            isSearchActive = true
         }
         .onChange(of: settings.showSFW) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showNSFW) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showNSFL) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showPOL) { _, _ in handleApiFlagsChange() }
-        .onChange(of: minBenisFilter) { _, _ in 
-            Task { await performSearchLogic(isInitialSearch: true) }
-        }
     }
 
     private func handleApiFlagsChange() {
@@ -285,82 +356,106 @@ struct SearchView: View {
     @ViewBuilder
     private var searchContentView: some View {
         ZStack(alignment: .top) {
-            // Main content area (full screen)
-            Group {
-                if isLoading && items.isEmpty {
-                    ProgressView("Suche läuft…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = errorMessage, items.isEmpty {
-                    VStack {
-                        Text("Fehler: \(error)").foregroundColor(.red)
-                        Button("Erneut versuchen") { Task { await performSearchLogic(isInitialSearch: true) } }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if items.isEmpty && !isLoading && (currentSearchTagForAPI?.isEmpty ?? true) && !hasAttemptedSearchSinceAppear {
-                    searchEmptyStateView
-                } else if items.isEmpty && !isLoading && errorMessage == nil {
-                    ContentUnavailableView {
-                        Label("Keine Ergebnisse", systemImage: "magnifyingglass")
-                    } description: {
-                        Text("Keine Posts für den Suchbegriff gefunden.")
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    scrollViewContentWithTopPadding
-                }
-            }
-            
-            // Benis Filter Slider - floating overlay at the top
-            VStack {
-                benisFilterSlider
-                Spacer()
-            }
+            scrollViewContent
         }
     }
 
+    @ViewBuilder
     private var benisFilterSlider: some View {
-        HStack(spacing: 12) {
-            Text("Benis:")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            
-            Slider(
-                value: Binding(
-                    get: { Double(minBenisFilter) },
-                    set: { minBenisFilter = Int($0.rounded()) }
-                ),
-                in: 0...5000,
-                step: 100
-            ) {
-                Text("Benis Filter")
-            }
-            .accentColor(.accentColor)
-            
-            Text("\(minBenisFilter)")
-                .font(.caption)
-                .foregroundStyle(.primary)
-                .frame(minWidth: 40, alignment: .trailing)
-            
-            if minBenisFilter > 0 {
-                Button {
-                    minBenisFilter = 0
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.secondary, .quaternary)
+        if #available(iOS 26.0, *) {
+            HStack(spacing: 12) {
+                Text("Benis:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                
+                Slider(
+                    value: Binding(
+                        get: { Double(minBenisFilter) },
+                        set: { minBenisFilter = Int($0.rounded()) }
+                    ),
+                    in: 0...5000,
+                    step: 100,
+                    onEditingChanged: { editing in
+                        if !editing {
+                            Task { await performSearchLogic(isInitialSearch: true) }
+                        }
+                    }
+                ) {
+                    Text("Benis Filter")
                 }
-                .buttonStyle(.plain)
+                .accentColor(.accentColor)
+                
+                Text("\(minBenisFilter)")
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .frame(minWidth: 40, alignment: .trailing)
+                
+                if minBenisFilter > 0 {
+                    Button {
+                        minBenisFilter = 0
+                        Task { await performSearchLogic(isInitialSearch: true) }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.secondary, .quaternary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .glassEffect(.regular.interactive(), in: .capsule)
+            .shadow(color: .black.opacity(0.06), radius: 5, x: 0, y: 1)
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+        } else {
+            HStack(spacing: 12) {
+                Text("Benis:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                
+                Slider(
+                    value: Binding(
+                        get: { Double(minBenisFilter) },
+                        set: { minBenisFilter = Int($0.rounded()) }
+                    ),
+                    in: 0...5000,
+                    step: 100,
+                    onEditingChanged: { editing in
+                        if !editing {
+                            Task { await performSearchLogic(isInitialSearch: true) }
+                        }
+                    }
+                ) {
+                    Text("Benis Filter")
+                }
+                .accentColor(.accentColor)
+                
+                Text("\(minBenisFilter)")
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .frame(minWidth: 40, alignment: .trailing)
+                
+                if minBenisFilter > 0 {
+                    Button {
+                        minBenisFilter = 0
+                        Task { await performSearchLogic(isInitialSearch: true) }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.secondary, .quaternary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .shadow(color: .black.opacity(0.06), radius: 5, x: 0, y: 1)
+            .padding(.horizontal)
+            .padding(.bottom, 8)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            SystemBlurView(style: .systemUltraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-        )
-        .padding(.horizontal)
-        .padding(.bottom, 8)
     }
 
     private var searchEmptyStateView: some View {
@@ -379,99 +474,75 @@ struct SearchView: View {
 
     private var scrollViewContent: some View {
         ScrollView {
-            LazyVGrid(columns: gridColumns, spacing: 3) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    NavigationLink(value: item) {
-                        SearchItemThumbnail(
-                            item: item,
-                            isSeen: settings.seenItemIDs.contains(item.id)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .onAppear {
-                        if gridColumns.count > 0, index % gridColumns.count == 0 {
-                            let nextPrefetchCount = gridColumns.count * 2
-                            let start = min(index + gridColumns.count, items.count)
-                            let end = min(start + nextPrefetchCount, items.count)
-                            if start < end {
-                                let urls: [URL] = items[start..<end].compactMap { $0.thumbnailUrl }
-                                if !urls.isEmpty {
-                                    let prefetcher = ImagePrefetcher(urls: urls)
-                                    prefetcher.start()
+            LazyVStack(pinnedViews: [.sectionHeaders]) {
+                Section {
+                    if isLoading && items.isEmpty {
+                        ProgressView("Suche läuft…")
+                            .frame(maxWidth: .infinity, minHeight: 300)
+                    } else if let error = errorMessage, items.isEmpty {
+                        VStack {
+                            Text("Fehler: \(error)").foregroundColor(.red)
+                            Button("Erneut versuchen") { Task { await performSearchLogic(isInitialSearch: true) } }
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 300)
+                    } else if items.isEmpty && !isLoading && (currentSearchTagForAPI?.isEmpty ?? true) && !hasAttemptedSearchSinceAppear {
+                        searchEmptyStateView
+                    } else if items.isEmpty && !isLoading && errorMessage == nil {
+                        ContentUnavailableView {
+                            Label("Keine Ergebnisse", systemImage: "magnifyingglass")
+                        } description: {
+                            Text("Keine Posts für den Suchbegriff gefunden.")
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 300)
+                    } else {
+                        LazyVGrid(columns: gridColumns, spacing: 3) {
+                            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                                NavigationLink(value: item) {
+                                    SearchItemThumbnail(
+                                        item: item,
+                                        isSeen: settings.seenItemIDs.contains(item.id)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .onAppear {
+                                    if gridColumns.count > 0, index % gridColumns.count == 0 {
+                                        let nextPrefetchCount = gridColumns.count * 2
+                                        let start = min(index + gridColumns.count, items.count)
+                                        let end = min(start + nextPrefetchCount, items.count)
+                                        if start < end {
+                                            let urls: [URL] = items[start..<end].compactMap { $0.thumbnailUrl }
+                                            if !urls.isEmpty {
+                                                let prefetcher = ImagePrefetcher(urls: urls)
+                                                prefetcher.start()
+                                            }
+                                        }
+                                    }
+
+                                    let offset = max(1, gridColumns.count) * preloadRowsAhead
+                                    let thresholdIndex = max(0, items.count - offset)
+                                    if index >= thresholdIndex && canLoadMore && !isLoadingMore && !isLoading {
+                                        Task { await loadMoreSearch() }
+                                    }
                                 }
                             }
-                        }
-
-                        let offset = max(1, gridColumns.count) * preloadRowsAhead
-                        let thresholdIndex = max(0, items.count - offset)
-                        if index >= thresholdIndex && canLoadMore && !isLoadingMore && !isLoading {
-                            Task { await loadMoreSearch() }
-                        }
-                    }
-                }
-                if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
-                    Color.clear.frame(height: 1)
-                        .onAppear {
-                            Task { await loadMoreSearch() }
-                        }
-                }
-                if isLoadingMore { ProgressView("Lade mehr...").padding().gridCellColumns(gridColumns.count) }
-            }
-            .padding(.horizontal, 5)
-            .padding(.bottom)
-        }
-        .refreshable {
-            await performSearchLogic(isInitialSearch: true)
-        }
-    }
-
-    private var scrollViewContentWithTopPadding: some View {
-        ScrollView {
-            LazyVGrid(columns: gridColumns, spacing: 3) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    NavigationLink(value: item) {
-                        SearchItemThumbnail(
-                            item: item,
-                            isSeen: settings.seenItemIDs.contains(item.id)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .onAppear {
-                        if gridColumns.count > 0, index % gridColumns.count == 0 {
-                            let nextPrefetchCount = gridColumns.count * 2
-                            let start = min(index + gridColumns.count, items.count)
-                            let end = min(start + nextPrefetchCount, items.count)
-                            if start < end {
-                                let urls: [URL] = items[start..<end].compactMap { $0.thumbnailUrl }
-                                if !urls.isEmpty {
-                                    let prefetcher = ImagePrefetcher(urls: urls)
-                                    prefetcher.start()
-                                }
+                            if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
+                                Color.clear.frame(height: 1)
+                                    .onAppear {
+                                        Task { await loadMoreSearch() }
+                                    }
                             }
+                            if isLoadingMore { ProgressView("Lade mehr...").padding().gridCellColumns(gridColumns.count) }
                         }
-
-                        let offset = max(1, gridColumns.count) * preloadRowsAhead
-                        let thresholdIndex = max(0, items.count - offset)
-                        if index >= thresholdIndex && canLoadMore && !isLoadingMore && !isLoading {
-                            Task { await loadMoreSearch() }
-                        }
+                        .padding(.horizontal, 5)
+                        .padding(.bottom)
                     }
+                } header: {
+                    benisFilterSlider
                 }
-                if canLoadMore && !isLoading && !isLoadingMore && !items.isEmpty {
-                    Color.clear.frame(height: 1)
-                        .onAppear {
-                            Task { await loadMoreSearch() }
-                        }
-                }
-                if isLoadingMore { ProgressView("Lade mehr...").padding().gridCellColumns(gridColumns.count) }
             }
-            .padding(.horizontal, 5)
-            .padding(.top, 80) // Add top padding to account for the floating slider
-            .padding(.bottom)
         }
-        .refreshable {
-            await performSearchLogic(isInitialSearch: true)
-        }
+        .id(scrollResetCounter)
     }
 
     @MainActor
@@ -483,18 +554,20 @@ struct SearchView: View {
         let hasSearchTerm = !trimmedSearchText.isEmpty || (currentSearchTagForAPI != nil && !currentSearchTagForAPI!.isEmpty)
         
         if !hasSearchTerm && !hasBenisFilter {
-            if !hasAttemptedSearchSinceAppear { hasAttemptedSearchSinceAppear = true }
-            if items.isEmpty { return }
-            // If user cleared text and benis filter and we had items, reset to empty results
+            // Reset to initial state: show the hint "Suche nach Tags oder verwende den Benis-Filter"
+            currentSearchTagForAPI = nil
             items = []
             errorMessage = nil
             canLoadMore = false
             isLoadingMore = false
+            isLoading = false
+            hasAttemptedSearchSinceAppear = false
             return
         }
 
         currentSearchTagForAPI = trimmedSearchText.isEmpty ? nil : trimmedSearchText
         SearchView.logger.info("performSearchLogic: isInitial=\(isInitialSearch). API Tag: '\(currentSearchTagForAPI ?? "nil")', Benis: \(minBenisFilter)")
+        if isInitialSearch { scrollResetCounter += 1 }
         await refreshSearch()
         hasAttemptedSearchSinceAppear = true
     }
@@ -654,6 +727,12 @@ struct SearchView: View {
         }
     }
 
+#if os(iOS)
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+#endif
+
     private func loadSearchHistory() {
         let saved = UserDefaults.standard.stringArray(forKey: Self.searchHistoryKey) ?? []
         self.searchHistory = saved
@@ -674,6 +753,12 @@ struct SearchView: View {
         searchHistory = updated
         saveSearchHistory()
         SearchView.logger.info("Added term to search history: '\(term)'. Count: \(searchHistory.count)")
+    }
+    
+    private func deleteTermFromSearchHistory(_ term: String) {
+        searchHistory.removeAll { $0.caseInsensitiveCompare(term) == .orderedSame }
+        saveSearchHistory()
+        SearchView.logger.info("Deleted term from search history: '\(term)'. Count: \(searchHistory.count)")
     }
 
     private func clearSearchHistory() {
