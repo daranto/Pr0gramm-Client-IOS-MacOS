@@ -32,35 +32,46 @@ struct MainView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Group { // Main Content Area
-                switch selectedTab {
-                case .feed:
-                    if shouldShowPr0Tok {
-                        UnlimitedStyleFeedView()
-                            .forceRotation(orientation: .portrait)
-                    } else {
-                        FeedView(popToRootTrigger: feedPopToRootTrigger)
+            ZStack {
+                // Keep SearchView alive in the hierarchy so its state persists across tab switches
+                SearchView()
+                    .forceRotation(orientation: .all)
+                    .opacity(selectedTab == .search ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .search)
+
+                // Other tabs are instantiated on demand and hidden when Search is active
+                Group {
+                    switch selectedTab {
+                    case .feed:
+                        if shouldShowPr0Tok {
+                            UnlimitedStyleFeedView()
+                                .forceRotation(orientation: .portrait)
+                        } else {
+                            FeedView(popToRootTrigger: feedPopToRootTrigger)
+                                .forceRotation(orientation: .all)
+                        }
+                    case .favorites:
+                        FavoritesView()
                             .forceRotation(orientation: .all)
+                    case .inbox:
+                        InboxView()
+                            .forceRotation(orientation: .all)
+                    case .profile:
+                        ProfileView()
+                            .forceRotation(orientation: .all)
+                    case .settings:
+                        SettingsView()
+                            .forceRotation(orientation: .all)
+                    case .calendar:
+                        CalendarView()
+                            .forceRotation(orientation: .all)
+                    case .search:
+                        // When Search is active, render an empty view here; real SearchView is above.
+                        Color.clear
                     }
-                case .favorites:
-                    FavoritesView()
-                        .forceRotation(orientation: .all)
-                case .search:
-                    SearchView()
-                        .forceRotation(orientation: .all)
-                case .inbox:
-                    InboxView()
-                        .forceRotation(orientation: .all)
-                case .profile:
-                    ProfileView()
-                        .forceRotation(orientation: .all)
-                case .settings:
-                    SettingsView()
-                        .forceRotation(orientation: .all)
-                case .calendar:
-                    CalendarView()
-                        .forceRotation(orientation: .all)
                 }
+                .opacity(selectedTab == .search ? 0 : 1)
+                .allowsHitTesting(selectedTab != .search)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -189,3 +200,4 @@ struct TabBarButtonLabel: View {
         .environmentObject(appOrientationManager)
 }
 // --- END OF COMPLETE FILE ---
+

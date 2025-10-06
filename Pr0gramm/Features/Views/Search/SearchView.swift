@@ -185,6 +185,7 @@ struct SearchView: View {
 
     @State private var searchHistory: [String] = []
     @State private var isSearchActive = true
+    @State private var wasPlayingBeforeTabSwitch = false
 
     @State private var minBenisFilter: Int = 0
     @State private var scrollResetCounter: Int = 0
@@ -326,6 +327,29 @@ struct SearchView: View {
         .onChange(of: settings.showNSFW) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showNSFL) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showPOL) { _, _ in handleApiFlagsChange() }
+        .task(id: navigationService.selectedTab) {
+            let newTab = navigationService.selectedTab
+            if newTab == .search {
+                if wasPlayingBeforeTabSwitch {
+                    // Small delay to ensure Search is fully active
+                    try? await Task.sleep(for: .milliseconds(150))
+                    if playerManager.player?.timeControlStatus != .playing {
+                        playerManager.player?.play()
+                        SearchView.logger.info("Resumed player after returning to Search tab.")
+                    }
+                    wasPlayingBeforeTabSwitch = false
+                }
+            } else {
+                if let player = playerManager.player, player.timeControlStatus == .playing {
+                    player.pause()
+                    wasPlayingBeforeTabSwitch = true
+                    SearchView.logger.info("Paused player because user switched away from Search tab.")
+                } else {
+                    // Keep previous intent to resume; do NOT reset the flag here when hopping between other tabs
+                    SearchView.logger.debug("Search not active and player not playing; preserving wasPlayingBeforeTabSwitch=\(wasPlayingBeforeTabSwitch).")
+                }
+            }
+        }
     }
 
     private func handleApiFlagsChange() {
