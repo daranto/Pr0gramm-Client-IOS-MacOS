@@ -270,7 +270,11 @@ struct FavoritesView: View {
     }
     
     private func handleApiFlagsChange() {
-        FavoritesView.logger.info("FavoritesView: Relevant global filter flag changed. Not auto-reloading (user can pull to refresh).")
+        FavoritesView.logger.info("FavoritesView: Relevant global filter flag changed. Auto-reloading favorites...")
+        // Only reload if we have items loaded (avoid unnecessary API calls on initial load)
+        if !items.isEmpty && authService.isLoggedIn && settings.selectedCollectionIdForFavorites != nil {
+            Task { await performFavoritesLogic(isInitialLoad: true) }
+        }
     }
 
     @ViewBuilder
