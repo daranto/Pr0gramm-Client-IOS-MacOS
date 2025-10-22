@@ -39,7 +39,13 @@ struct MainView: View {
                     .opacity(selectedTab == .search ? 1 : 0)
                     .allowsHitTesting(selectedTab == .search)
 
-                // Other tabs are instantiated on demand and hidden when Search is active
+                // Keep FavoritesView alive in the hierarchy so its state persists across tab switches
+                FavoritesView()
+                    .forceRotation(orientation: .all)
+                    .opacity(selectedTab == .favorites ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .favorites)
+
+                // Other tabs are instantiated on demand and hidden when Search or Favorites are active
                 Group {
                     switch selectedTab {
                     case .feed:
@@ -50,9 +56,6 @@ struct MainView: View {
                             FeedView(popToRootTrigger: feedPopToRootTrigger)
                                 .forceRotation(orientation: .all)
                         }
-                    case .favorites:
-                        FavoritesView()
-                            .forceRotation(orientation: .all)
                     case .inbox:
                         InboxView()
                             .forceRotation(orientation: .all)
@@ -68,10 +71,13 @@ struct MainView: View {
                     case .search:
                         // When Search is active, render an empty view here; real SearchView is above.
                         Color.clear
+                    case .favorites:
+                        // When Favorites is active, render an empty view here; real FavoritesView is above.
+                        Color.clear
                     }
                 }
-                .opacity(selectedTab == .search ? 0 : 1)
-                .allowsHitTesting(selectedTab != .search)
+                .opacity(selectedTab == .search || selectedTab == .favorites ? 0 : 1)
+                .allowsHitTesting(selectedTab != .search && selectedTab != .favorites)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
