@@ -79,10 +79,21 @@ struct FeedView: View {
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            VStack(spacing: 0) {
-                headerControls
+            ZStack {
+                // Basis-Content der den ganzen Screen füllt
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 
+                // Eigentlicher Content
                 feedContentView
+                
+                // Header-Bar als fixiertes Overlay oben
+                VStack {
+                    headerControls
+                        .ignoresSafeArea(edges: .horizontal)
+                    Spacer()
+                }
             }
             .sheet(isPresented: $showingFilterSheet) {
                  FilterView(relevantFeedTypeForFilterBehavior: settings.feedType, hideFeedOptions: true, showHideSeenItemsToggle: true)
@@ -131,26 +142,57 @@ struct FeedView: View {
     
     // MARK: - View Components
 
+    @ViewBuilder
     private var headerControls: some View {
-        HStack(spacing: 10) {
-            Picker("Feed Typ", selection: $settings.feedType) {
-                ForEach(FeedType.allCases) { type in
-                    Text(type.displayName).tag(type)
+        if #available(iOS 26.0, *) {
+            // Liquid Glass Design für iOS 26+
+            HStack(spacing: 8) {
+                GlassEffectContainer(spacing: 8.0) {
+                    Picker("Feed Typ", selection: $settings.feedType) {
+                        ForEach(FeedType.allCases) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 10))
+                    
+                    // Filter Button mit Liquid Glass Hintergrund
+                    Button { showingFilterSheet = true } label: {
+                        Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                    }
+                    .labelStyle(.iconOnly)
+                    .font(.title2)
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .glassEffect(.regular.interactive(), in: .circle)
                 }
             }
-            .pickerStyle(.segmented)
-
-            Button { showingFilterSheet = true } label: {
-                Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        } else {
+            // Elegantes Design für iOS < 26
+            HStack(spacing: 8) {
+                Picker("Feed Typ", selection: $settings.feedType) {
+                    ForEach(FeedType.allCases) { type in
+                        Text(type.displayName).tag(type)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                
+                // Filter Button mit Material Hintergrund
+                Button { showingFilterSheet = true } label: {
+                    Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .labelStyle(.iconOnly)
+                .font(.title2)
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .background(.regularMaterial, in: Circle())
             }
-            .labelStyle(.iconOnly)
-            .padding(.vertical, 4)
-            .padding(.horizontal, 6)
-            .background(Color(uiColor: .systemGray5))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
     }
 
     @ViewBuilder private var feedContentView: some View {
@@ -213,6 +255,7 @@ struct FeedView: View {
                 }
             }
             .padding(.horizontal, 5)
+            .padding(.top, 68) // Angepasst für schlankere Bar
             .padding(.bottom)
         }
         .refreshable { await refreshItems() }
