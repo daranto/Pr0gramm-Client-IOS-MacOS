@@ -169,7 +169,7 @@ struct UnlimitedFeedItemView: View {
                             Self.logger.debug("UnlimitedFeedItemView: Item \(item.id) became active. Player exists. Requesting play.")
                             playerManager.requestPlay(for: item.id)
                         } else {
-                            playerManager.setupPlayerIfNeeded(for: item, isFullscreen: false)
+                            playerManager.setupPlayerIfNeeded(for: item, isFullscreen: false, isSheetPlayer: false)
                             Self.logger.debug("UnlimitedFeedItemView: Item \(item.id) became active. Player setup initiated (shouldAutoplayWhenReady will be handled).")
                              Task {
                                  try? await Task.sleep(for: .milliseconds(50))

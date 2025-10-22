@@ -289,9 +289,14 @@ struct PagedDetailView: View {
         } else {
             wasPlayingBeforeAnySheet = false
         }
+        // Preserve the player state for sheets
+        playerManager.preservePlayerForSheet()
     }
 
     private func resumePlayerIfNeeded() {
+        // Restore the player from sheet context
+        playerManager.restorePlayerFromSheet()
+        
         if wasPlayingBeforeAnySheet {
             if selectedIndex >= 0 && selectedIndex < items.count && items[selectedIndex].isVideo && items[selectedIndex].id == playerManager.playerItemID {
                 if !isFullscreen {
@@ -587,7 +592,7 @@ struct PagedDetailView: View {
         
         if selectedIndex >= 0 && selectedIndex < items.count {
             let initialItem = items[selectedIndex]
-            playerManager.setupPlayerIfNeeded(for: initialItem, isFullscreen: self.isFullscreen)
+            playerManager.setupPlayerIfNeeded(for: initialItem, isFullscreen: self.isFullscreen, isSheetPlayer: self.isPresentedInSheet)
             previouslySelectedItemForMarking = initialItem
             PagedDetailView.logger.debug("Initial item \(initialItem.id) set for potential marking on disappear. isFullscreen: \(self.isFullscreen). Current targetCommentID: \(self.currentItemTargetCommentID ?? -1)")
             Task {
@@ -628,7 +633,7 @@ struct PagedDetailView: View {
         }
         let newItem = items[newValue]
         PagedDetailView.logger.debug("Immediate actions for index change to \(newValue). Setting up player.")
-        playerManager.setupPlayerIfNeeded(for: newItem, isFullscreen: self.isFullscreen)
+        playerManager.setupPlayerIfNeeded(for: newItem, isFullscreen: self.isFullscreen, isSheetPlayer: self.isPresentedInSheet)
         
         isTogglingFavorite = false
         imagePrefetcher.stop()

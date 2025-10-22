@@ -22,6 +22,12 @@ class VideoPlayerManager: ObservableObject {
     @Published private(set) var currentSubtitleText: String? = nil
     @Published private(set) var subtitleError: String? = nil
     
+    // MARK: - Sheet Player Preservation
+    private var preservedPlayer: AVPlayer? = nil
+    private var preservedPlayerItemID: Int? = nil
+    private var preservedCurrentItem: Item? = nil
+    private var isSheetPlayerActive: Bool = false
+    
     // MARK: - Published Error/Retry State
     @Published private(set) var playerError: String? = nil
     @Published private(set) var showRetryButton: Bool = false
@@ -60,6 +66,56 @@ class VideoPlayerManager: ObservableObject {
         self.settings = settings
         VideoPlayerManager.logger.debug("VideoPlayerManager configured with AppSettings.")
     }
+    
+    /// Preserves the current player state before a sheet is presented
+    @MainActor
+    func preservePlayerForSheet() {
+        guard !isSheetPlayerActive else {
+            VideoPlayerManager.logger.debug("[Manager] Sheet player already active, not preserving again.")
+            return
+        }
+        
+        if let currentPlayer = self.player, let currentItemID = self.playerItemID {
+            preservedPlayer = currentPlayer
+            preservedPlayerItemID = currentItemID
+            preservedCurrentItem = self.currentItem
+            isSheetPlayerActive = true
+            
+            VideoPlayerManager.logger.debug("[Manager] Preserved player for item \(currentItemID) before sheet presentation.")
+        }
+    }
+    
+    /// Restores the preserved player state after a sheet is dismissed
+    @MainActor
+    func restorePlayerFromSheet() {
+        guard isSheetPlayerActive else {
+            VideoPlayerManager.logger.debug("[Manager] No sheet player was active, nothing to restore.")
+            return
+        }
+        
+        // Clean up the current sheet player
+        cleanupPlayer()
+        
+        // Restore the preserved player
+        if let preserved = preservedPlayer, let preservedID = preservedPlayerItemID {
+            self.player = preserved
+            self.playerItemID = preservedID
+            self.currentItem = preservedCurrentItem
+            
+            // Re-setup observers for the restored player
+            if let restoredItem = preservedCurrentItem {
+                setupObservers(for: preserved, item: restoredItem)
+            }
+            
+            VideoPlayerManager.logger.debug("[Manager] Restored preserved player for item \(preservedID) after sheet dismissal.")
+        }
+        
+        // Clear preserved state
+        preservedPlayer = nil
+        preservedPlayerItemID = nil
+        preservedCurrentItem = nil
+        isSheetPlayerActive = false
+    }
 
     @MainActor
     func requestPlay(for itemID: Int) {
@@ -86,17 +142,24 @@ class VideoPlayerManager: ObservableObject {
     /// Cleans up any previously active player. Reads transientSessionMuteState first, then isVideoMuted.
     /// Also fetches and parses subtitles based on AppSettings.subtitleActivationMode.
     @MainActor
-    func setupPlayerIfNeeded(for item: Item, isFullscreen: Bool, forceReload: Bool = false) {
+    func setupPlayerIfNeeded(for item: Item, isFullscreen: Bool, forceReload: Bool = false, isSheetPlayer: Bool = false) {
         guard let settings = self.settings else {
             VideoPlayerManager.logger.error("[Manager] Cannot setup player: AppSettings not configured.")
             return
+        }
+        
+        // If this is a sheet player and we don't have a preserved player yet, preserve the current one
+        if isSheetPlayer && !isSheetPlayerActive {
+            preservePlayerForSheet()
         }
         
         if playerItemID != item.id || forceReload {
             self.retryCount = 0
             self.playerError = nil
             self.showRetryButton = false
-            self.currentItem = nil
+            if !isSheetPlayer {
+                self.currentItem = nil
+            }
         }
 
         self.subtitleCues = []
@@ -111,7 +174,13 @@ class VideoPlayerManager: ObservableObject {
         guard item.isVideo else {
             if player != nil {
                 VideoPlayerManager.logger.debug("[Manager] New item \(item.id) is not video. Cleaning up existing player (if any).")
-                cleanupPlayer()
+                if isSheetPlayer {
+                    // For sheet players, don't clean up the main player
+                    self.player = nil
+                    self.playerItemID = nil
+                } else {
+                    cleanupPlayer()
+                }
             } else {
                 VideoPlayerManager.logger.trace("[Manager] New item \(item.id) is not video. No existing player to clean up.")
             }
@@ -142,8 +211,14 @@ class VideoPlayerManager: ObservableObject {
         }
 
         // Setup für einen neuen Player
-        cleanupPlayer()
-        VideoPlayerManager.logger.debug("[Manager] Setting up NEW player for video item \(item.id)... IsFullscreen: \(isFullscreen)")
+        if !isSheetPlayer {
+            cleanupPlayer()
+        } else {
+            // For sheet players, only clean up the current sheet player
+            removeObservers()
+            self.player?.pause()
+        }
+        VideoPlayerManager.logger.debug("[Manager] Setting up NEW player for video item \(item.id)... IsFullscreen: \(isFullscreen), IsSheetPlayer: \(isSheetPlayer)")
 
         guard let url = item.imageUrl else {
             VideoPlayerManager.logger.error("[Manager] Cannot setup player for item \(item.id): Invalid URL.")
@@ -162,7 +237,9 @@ class VideoPlayerManager: ObservableObject {
 
         self.player = newPlayer
         self.playerItemID = item.id
-        self.currentItem = item
+        if !isSheetPlayer {
+            self.currentItem = item
+        }
 
         setupObservers(for: newPlayer, item: item)
 
@@ -304,7 +381,7 @@ class VideoPlayerManager: ObservableObject {
                     player.replaceCurrentItem(with: newItem)
                     setupObservers(for: player, item: failedItem)
                 } else {
-                    setupPlayerIfNeeded(for: failedItem, isFullscreen: false, forceReload: true)
+                    setupPlayerIfNeeded(for: failedItem, isFullscreen: false, forceReload: true, isSheetPlayer: isSheetPlayerActive)
                 }
             }
         } else {
@@ -322,7 +399,7 @@ class VideoPlayerManager: ObservableObject {
             return
         }
         VideoPlayerManager.logger.info("Force retry triggered by user for item \(itemToRetry.id).")
-        self.setupPlayerIfNeeded(for: itemToRetry, isFullscreen: false, forceReload: true)
+        self.setupPlayerIfNeeded(for: itemToRetry, isFullscreen: false, forceReload: true, isSheetPlayer: isSheetPlayerActive)
     }
 
     @MainActor

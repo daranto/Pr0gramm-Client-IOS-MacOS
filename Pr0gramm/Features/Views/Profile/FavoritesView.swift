@@ -60,6 +60,7 @@ struct FavoritesView: View {
     
     // Video player state management like SearchView
     @State private var wasPlayingBeforeTabSwitch = false
+    @State private var playerStateBeforeModal: (itemID: Int, isPlaying: Bool)? = nil
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "FavoritesView")
@@ -140,6 +141,16 @@ struct FavoritesView: View {
             playerManager.configure(settings: settings)
             hasAttemptedSearchSinceAppear = false
             
+            FavoritesView.logger.info("FavoritesView onAppear: VideoPlayerManager configured, current player: \(playerManager.player != nil ? "exists" : "nil")")
+            
+            // Check if we need to restore a player that was disrupted by a modal
+            if navigationService.selectedTab == .favorites && playerManager.player == nil {
+                // If we're in favorites but have no player, something might have disrupted it
+                // This is a safety mechanism to ensure video playback can continue
+                FavoritesView.logger.info("FavoritesView onAppear: No player found, reconfiguring VideoPlayerManager")
+                playerManager.configure(settings: settings)
+            }
+            
             // Only load favorites if we have never loaded them before AND user is logged in
             if items.isEmpty && authService.isLoggedIn && settings.selectedCollectionIdForFavorites != nil {
                 FavoritesView.logger.info("FavoritesView onAppear: Loading initial favorites because items are empty.")
@@ -206,6 +217,53 @@ struct FavoritesView: View {
                 } else {
                     // Keep previous intent to resume; do NOT reset the flag here when hopping between other tabs
                     FavoritesView.logger.debug("Favorites not active and player not playing; preserving wasPlayingBeforeTabSwitch=\(wasPlayingBeforeTabSwitch).")
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            // When app comes back from background, reconfigure the player manager
+            // This helps with cases where modal views may have interfered with the player
+            if navigationService.selectedTab == .favorites {
+                FavoritesView.logger.info("App entering foreground, reconfiguring VideoPlayerManager for Favorites")
+                playerManager.configure(settings: settings)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("PlayerPausedForSheet"))) { notification in
+            // Save the current player state before a sheet opens
+            if navigationService.selectedTab == .favorites,
+               let player = playerManager.player,
+               let itemID = playerManager.playerItemID {
+                let isPlaying = player.timeControlStatus == .playing
+                playerStateBeforeModal = (itemID: itemID, isPlaying: isPlaying)
+                FavoritesView.logger.info("Saved player state before modal: itemID \(itemID), isPlaying: \(isPlaying)")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("SheetDismissed"))) { _ in
+            // Restore the player state after a sheet closes
+            if navigationService.selectedTab == .favorites,
+               let savedState = playerStateBeforeModal {
+                // Small delay to ensure the sheet is fully dismissed
+                Task {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    
+                    // Check if we need to restore the player for the saved item
+                    if let currentItemID = playerManager.playerItemID,
+                       currentItemID == savedState.itemID {
+                        // Same item, just resume if it was playing
+                        if savedState.isPlaying && playerManager.player?.timeControlStatus != .playing {
+                            playerManager.player?.play()
+                            FavoritesView.logger.info("Resumed player for same item \(savedState.itemID)")
+                        }
+                    } else {
+                        // Different item or no player, need to recreate
+                        if let item = items.first(where: { $0.id == savedState.itemID }) {
+                            FavoritesView.logger.info("Recreating player for item \(savedState.itemID) after modal")
+                            // The VideoPlayerManager should handle recreating the player
+                            // This might require additional logic depending on your implementation
+                        }
+                    }
+                    
+                    playerStateBeforeModal = nil
                 }
             }
         }

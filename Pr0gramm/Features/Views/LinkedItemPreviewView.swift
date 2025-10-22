@@ -91,7 +91,8 @@ struct LinkedItemPreviewView: View {
                 PagedDetailViewWrapperForItem(
                     item: item,
                     playerManager: playerManager,
-                    targetCommentID: self.targetCommentID // Pass it here
+                    targetCommentID: self.targetCommentID, // Pass it here
+                    isPresentedInSheet: true // Mark as sheet player
                 )
                 // --- END MODIFICATION ---
             } else {

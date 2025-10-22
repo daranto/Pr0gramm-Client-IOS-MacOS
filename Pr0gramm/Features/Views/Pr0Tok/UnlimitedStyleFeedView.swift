@@ -377,7 +377,7 @@ struct UnlimitedStyleFeedView: View {
         self.isCurrentlyInSystemFullscreen = false
         if self.wasPlayingBeforeFullscreen {
             if let activeItem = self.currentActiveItem, activeItem.isVideo { // Sicherer Zugriff
-                playerManager.setupPlayerIfNeeded(for: activeItem, isFullscreen: false)
+                playerManager.setupPlayerIfNeeded(for: activeItem, isFullscreen: false, isSheetPlayer: false)
                 Task {
                     try? await Task.sleep(for: .milliseconds(100))
                     if playerManager.playerItemID == activeItem.id && playerManager.player?.timeControlStatus != .playing {
@@ -627,7 +627,7 @@ struct UnlimitedStyleFeedView: View {
                         }
                         
                         if currentItemFromScroll.id != dummyStartItemID && !isCurrentlyInSystemFullscreen {
-                            playerManager.setupPlayerIfNeeded(for: currentItemFromScroll, isFullscreen: false)
+                            playerManager.setupPlayerIfNeeded(for: currentItemFromScroll, isFullscreen: false, isSheetPlayer: false)
                             
                             if currentItemFromScroll.isVideo && activeItemID == currentItemFromScroll.id {
                                 if previousActiveItemID != currentItemFromScroll.id || playerManager.player?.timeControlStatus != .playing {
