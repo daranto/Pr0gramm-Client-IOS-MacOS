@@ -158,7 +158,7 @@ struct UserProfileSheetView: View {
                         .environmentObject(settings)
                         .environmentObject(authService)
                         .environmentObject(playerManager)
-                        .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllUploadsSheet = false } } }
+                        .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Fertig"){ showAllUploadsSheet = false } } }
                 }
                 .tint(settings.accentColorChoice.swiftUIColor)
             }
@@ -168,7 +168,7 @@ struct UserProfileSheetView: View {
                         .environmentObject(settings)
                         .environmentObject(authService)
                         .environmentObject(playerManager)
-                        .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Schließen"){ showAllCommentsSheet = false } } }
+                        .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Fertig"){ showAllCommentsSheet = false } } }
                 }
                 .tint(settings.accentColorChoice.swiftUIColor)
             }
@@ -180,7 +180,7 @@ struct UserProfileSheetView: View {
                         .environmentObject(playerManager)
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
-                                Button("Schließen") { showConversationSheet = false }
+                                Button("Fertig") { showConversationSheet = false }
                             }
                         }
                 }

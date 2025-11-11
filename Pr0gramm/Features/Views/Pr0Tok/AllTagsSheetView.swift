@@ -97,7 +97,7 @@ struct AllTagsSheetView: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Schließen") {
+                    Button("Fertig") {
                         dismiss()
                     }
                 }

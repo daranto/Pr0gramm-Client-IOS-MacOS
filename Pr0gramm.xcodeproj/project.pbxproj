@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0070BE932DBB8D6500949D28 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = 0070BE922DBB8D6500949D28 /* Kingfisher */; };
+		00784D4B2EC3BF360050187C /* DISMISS_BUTTON_GUIDE.md in Resources */ = {isa = PBXBuildFile; fileRef = 00784D4A2EC3BF350050187C /* DISMISS_BUTTON_GUIDE.md */; };
 		00F25C632DDA2E2600635841 /* Pr0grammRedirector.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 00F25C4B2DDA2E2600635841 /* Pr0grammRedirector.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -37,6 +38,7 @@
 
 /* Begin PBXFileReference section */
 		005113402DB5899600C48DF1 /* Pr0gramm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pr0gramm.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		00784D4A2EC3BF350050187C /* DISMISS_BUTTON_GUIDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = DISMISS_BUTTON_GUIDE.md; sourceTree = "<group>"; };
 		00D0B9EB2DE74ACA007E8D23 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		00D0B9ED2DE74ACA007E8D23 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		00F25C4B2DDA2E2600635841 /* Pr0grammRedirector.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = Pr0grammRedirector.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -108,6 +110,7 @@
 				00F25C4C2DDA2E2600635841 /* Pr0grammRedirector */,
 				00D0B9EA2DE74ACA007E8D23 /* Frameworks */,
 				005113412DB5899600C48DF1 /* Products */,
+				00784D4A2EC3BF350050187C /* DISMISS_BUTTON_GUIDE.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -225,6 +228,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				00784D4B2EC3BF360050187C /* DISMISS_BUTTON_GUIDE.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
