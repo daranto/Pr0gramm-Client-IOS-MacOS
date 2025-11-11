@@ -88,6 +88,11 @@ struct FavoritesView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             favoritesContentView
+                .safeAreaInset(edge: .bottom) {
+                    // Create invisible spacer that matches tab bar height
+                    Color.clear
+                        .frame(height: calculateTabBarHeight())
+                }
                 .navigationDestination(for: Item.self) { destinationItem in
                     if let index = items.firstIndex(where: { $0.id == destinationItem.id }) {
                         PagedDetailView(
@@ -612,5 +617,13 @@ struct FavoritesView: View {
             }
             self.canLoadMore = false
         }
+    }
+    
+    // Calculate tab bar height to match MainView
+    private func calculateTabBarHeight() -> CGFloat {
+        let verticalPadding: CGFloat = 32 // 16 top + 16 bottom
+        let buttonHeight: CGFloat = 40
+        let bottomMargin: CGFloat = UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8
+        return verticalPadding + buttonHeight + bottomMargin
     }
 }

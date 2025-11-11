@@ -139,6 +139,11 @@ struct InboxView: View {
                 
                 contentView
             }
+            .safeAreaInset(edge: .bottom) {
+                // Create invisible spacer that matches tab bar height
+                Color.clear
+                    .frame(height: 32 + 40 + (UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8))
+            }
             .navigationTitle("Nachrichten")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

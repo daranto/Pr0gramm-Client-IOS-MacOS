@@ -251,6 +251,11 @@ struct SettingsView: View {
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
             }
+            .safeAreaInset(edge: .bottom) {
+                // Create invisible spacer that matches tab bar height
+                Color.clear
+                    .frame(height: 32 + 40 + (UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8))
+            }
             .navigationTitle("Einstellungen")
             .alert("Gesehene Posts zurücksetzen?", isPresented: $showingClearSeenItemsAlert) {
                 Button("Abbrechen", role: .cancel) { }

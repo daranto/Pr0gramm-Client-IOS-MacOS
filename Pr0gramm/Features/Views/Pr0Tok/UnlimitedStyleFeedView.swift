@@ -654,7 +654,11 @@ struct UnlimitedStyleFeedView: View {
                     }
                 }
             }
-            .ignoresSafeArea(edges: .bottom)
+            .safeAreaInset(edge: .bottom) {
+                // Spacer für die native TabView Tab-Bar
+                Color.clear
+                    .frame(height: 0) // iOS fügt automatisch den korrekten Safe Area ein
+            }
         }
     }
 

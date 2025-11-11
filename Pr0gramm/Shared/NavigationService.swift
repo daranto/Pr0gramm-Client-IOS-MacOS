@@ -6,7 +6,14 @@ import Combine
 class NavigationService: ObservableObject {
 
     /// The currently active main tab (e.g., Feed, Search). Views observe this to switch content.
-    @Published var selectedTab: Tab = .feed // Default to the feed tab on launch
+    @Published var selectedTab: Tab = .feed {
+        willSet {
+            print("🔔 NavigationService.selectedTab WILL CHANGE from \(selectedTab) to \(newValue)")
+        }
+        didSet {
+            print("🔔 NavigationService.selectedTab DID CHANGE to \(selectedTab) (was: \(oldValue))")
+        }
+    }
 
     /// Holds a tag string requested for search, typically set when a tag is tapped in the detail view.
     /// The `SearchView` observes this property to automatically initiate a search when the tag is set and the Search tab becomes active.

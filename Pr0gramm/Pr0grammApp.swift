@@ -154,12 +154,13 @@ struct Pr0grammApp: App {
 struct AppRootView: View {
     @EnvironmentObject var appSettings: AppSettings
     @EnvironmentObject var authService: AuthService
+    @EnvironmentObject var navigationService: NavigationService
     @EnvironmentObject var scenePhaseObserver: ScenePhaseObserver
     @EnvironmentObject var appOrientationManager: AppOrientationManager
     @Environment(\.scenePhase) var scenePhase
 
     var body: some View {
-        MainView()
+        MainView(navigationService: navigationService)
             .accentColor(appSettings.accentColorChoice.swiftUIColor)
             .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
             .task {

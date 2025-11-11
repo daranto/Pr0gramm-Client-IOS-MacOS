@@ -9,18 +9,41 @@ enum Tab: Int, CaseIterable, Identifiable {
     var id: Int { self.rawValue }
 }
 
-/// The root view of the application, containing the main content area and the tab bar.
+// Extension to get safe area insets
+extension UIApplication {
+    var keyWindow: UIWindow? {
+        connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?
+            .windows
+            .first { $0.isKeyWindow }
+    }
+    
+    var safeAreaInsets: UIEdgeInsets {
+        keyWindow?.safeAreaInsets ?? .zero
+    }
+}
+
+// MARK: - Tab Bar Padding Helper
+extension View {
+    /// Adds appropriate bottom padding to account for the floating tab bar
+    func tabBarPadding() -> some View {
+        // Calculate total tab bar height: vertical padding (32) + content height (40) + bottom margin
+        let tabBarTotalHeight: CGFloat = 32 + 40 + (UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8)
+        return self.padding(.bottom, tabBarTotalHeight + 16) // Extra 16pt for comfortable scrolling
+    }
+}
+
+/// The root view of the application, containing the main content area and the modern Liquid Glass tab bar.
 /// It observes `NavigationService` to switch between different content views (Feed, Favorites, etc.).
 struct MainView: View {
-    @EnvironmentObject var navigationService: NavigationService
+    @ObservedObject var navigationService: NavigationService
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
     // AppOrientationManager wird nicht mehr direkt hier benötigt, aber dieAppDelegate-Logik greift global.
 
     @State private var feedPopToRootTrigger = UUID()
-
-    private var selectedTab: Tab { navigationService.selectedTab }
-
+    @State private var selectedTab: Tab = .feed
     // --- MODIFIED: Bestimmen, ob Pr0Tok angezeigt werden soll ---
     private var shouldShowPr0Tok: Bool {
         // Pr0Tok anzeigen, wenn:
@@ -31,157 +54,90 @@ struct MainView: View {
     // --- END MODIFICATION ---
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                // Keep SearchView alive in the hierarchy so its state persists across tab switches
-                SearchView()
+        TabView(selection: $selectedTab) {
+            if shouldShowPr0Tok {
+                UnlimitedStyleFeedView()
+                    .forceRotation(orientation: .portrait)
+                    .tabItem { Label("Feed", systemImage: "square.grid.2x2.fill") }
+                    .tag(Tab.feed)
+            } else {
+                FeedView(popToRootTrigger: feedPopToRootTrigger)
                     .forceRotation(orientation: .all)
-                    .opacity(selectedTab == .search ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .search)
-
-                // Keep FavoritesView alive in the hierarchy so its state persists across tab switches
+                    .tabItem { Label(settings.feedType.displayName, systemImage: "square.grid.2x2.fill") }
+                    .tag(Tab.feed)
+            }
+            
+            if authService.isLoggedIn {
                 FavoritesView()
                     .forceRotation(orientation: .all)
-                    .opacity(selectedTab == .favorites ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .favorites)
-
-                // Other tabs are instantiated on demand and hidden when Search or Favorites are active
-                Group {
-                    switch selectedTab {
-                    case .feed:
-                        if shouldShowPr0Tok {
-                            UnlimitedStyleFeedView()
-                                .forceRotation(orientation: .portrait)
-                        } else {
-                            FeedView(popToRootTrigger: feedPopToRootTrigger)
-                                .forceRotation(orientation: .all)
-                        }
-                    case .inbox:
-                        InboxView()
-                            .forceRotation(orientation: .all)
-                    case .profile:
-                        ProfileView()
-                            .forceRotation(orientation: .all)
-                    case .settings:
-                        SettingsView()
-                            .forceRotation(orientation: .all)
-                    case .calendar:
-                        CalendarView()
-                            .forceRotation(orientation: .all)
-                    case .search:
-                        // When Search is active, render an empty view here; real SearchView is above.
-                        Color.clear
-                    case .favorites:
-                        // When Favorites is active, render an empty view here; real FavoritesView is above.
-                        Color.clear
-                    }
-                }
-                .opacity(selectedTab == .search || selectedTab == .favorites ? 0 : 1)
-                .allowsHitTesting(selectedTab != .search && selectedTab != .favorites)
+                    .tabItem { Label("Favoriten", systemImage: "heart.fill") }
+                    .tag(Tab.favorites)
+                    .badge(0)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            Divider()
-
-            tabBarHStack
-                .background { Rectangle().fill(.bar).ignoresSafeArea(edges: .bottom) }
-
+            
+            SearchView()
+                .forceRotation(orientation: .all)
+                .tabItem { Label("Suche", systemImage: "magnifyingglass") }
+                .tag(Tab.search)
+            
+            if authService.isLoggedIn {
+                InboxView()
+                    .forceRotation(orientation: .all)
+                    .tabItem { Label("Nachrichten", systemImage: "envelope.fill") }
+                    .tag(Tab.inbox)
+                    .badge(authService.unreadInboxTotal)
+            }
+            
+            CalendarView()
+                .forceRotation(orientation: .all)
+                .tabItem { Label("Kalender", systemImage: "calendar") }
+                .tag(Tab.calendar)
+            
+            ProfileView()
+                .forceRotation(orientation: .all)
+                .tabItem { Label("Profil", systemImage: "person.crop.circle") }
+                .tag(Tab.profile)
+            
+            SettingsView()
+                .forceRotation(orientation: .all)
+                .tabItem { Label("Einstellungen", systemImage: "gearshape.fill") }
+                .tag(Tab.settings)
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
-    }
-
-    private var tabBarHStack: some View {
-        HStack(spacing: 0) {
-            ForEach(Tab.allCases.sorted(by: { $0.rawValue < $1.rawValue })) { tab in
-                 if (tab == .favorites || tab == .inbox) && !authService.isLoggedIn { /* Skip */ }
-                 else {
-                     Button { handleTap(on: tab) } label: {
-                         TabBarButtonLabel(
-                             iconName: iconName(for: tab),
-                             isSelected: selectedTab == tab,
-                             tab: tab,
-                             badgeCount: tab == .inbox ? authService.unreadInboxTotal : 0
-                         )
-                         .accessibilityLabel(label(for: tab))
-                     }
-                     .buttonStyle(.plain)
-                     .frame(minWidth: 40, maxWidth: .infinity)
-                 }
+        .accentColor(settings.accentColorChoice.swiftUIColor)
+        .onAppear {
+            // Customize tab bar appearance for compact display of all 7 tabs
+            let appearance = UITabBarAppearance()
+            appearance.configureWithDefaultBackground()
+            
+            // Compact font for tab items to fit more tabs
+            let itemAppearance = UITabBarItemAppearance()
+            itemAppearance.normal.titleTextAttributes = [.font: UIFont.systemFont(ofSize: 9, weight: .medium)]
+            itemAppearance.selected.titleTextAttributes = [.font: UIFont.systemFont(ofSize: 9, weight: .semibold)]
+            
+            appearance.stackedLayoutAppearance = itemAppearance
+            appearance.inlineLayoutAppearance = itemAppearance
+            appearance.compactInlineLayoutAppearance = itemAppearance
+            
+            // Force all tabs to be visible
+            UITabBar.appearance().itemSpacing = 0
+            UITabBar.appearance().itemPositioning = .fill
+            
+            UITabBar.appearance().standardAppearance = appearance
+            if #available(iOS 15.0, *) {
+                UITabBar.appearance().scrollEdgeAppearance = appearance
             }
         }
-        .padding(.horizontal)
-        .padding(.top, 5)
-        .padding(.bottom, 4)
-    }
-
-
-    private func handleTap(on tab: Tab) {
-        if tab == .feed && selectedTab == .feed && !shouldShowPr0Tok {
-            print("Feed tab tapped again (Grid View or iPad/Mac). Triggering pop to root.");
-            feedPopToRootTrigger = UUID()
-        } else {
-            navigationService.selectedTab = tab;
-            if navigationService.pendingSearchTag != nil && tab != .search {
-                print("Clearing pending search tag due to manual tab navigation.");
+        .onReceive(navigationService.$selectedTab) { newTab in
+            if selectedTab != newTab {
+                selectedTab = newTab
+            }
+        }
+        .onChange(of: selectedTab) { _, newValue in
+            if navigationService.selectedTab != newValue {
+                navigationService.selectedTab = newValue
+            }
+            if navigationService.pendingSearchTag != nil && newValue != .search {
                 navigationService.pendingSearchTag = nil
-            }
-        }
-    }
-
-    private func iconName(for tab: Tab) -> String {
-        switch tab {
-        case .feed: return "square.grid.2x2.fill"
-        case .favorites: return "heart.fill"
-        case .search: return "magnifyingglass"
-        case .inbox: return "envelope.fill"
-        case .profile: return "person.crop.circle"
-        case .settings: return "gearshape.fill"
-        case .calendar: return "calendar"
-        }
-    }
-
-    private func label(for tab: Tab) -> String {
-        switch tab {
-        case .feed: return settings.feedType.displayName
-        case .favorites: return "Favoriten"
-        case .search: return "Suche"
-        case .inbox: return "Nachrichten"
-        case .profile: return "Profil"
-        case .settings: return "Einstellungen"
-        case .calendar: return "Kalender"
-        }
-    }
-}
-
-
-struct TabBarButtonLabel: View {
-    let iconName: String
-    let isSelected: Bool
-    let tab: Tab
-    let badgeCount: Int
-
-    private let badgeMinWidth: CGFloat = 18
-    private let badgeHeight: CGFloat = 18
-    private let badgeHorizontalPadding: CGFloat = 5
-
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Image(systemName: iconName)
-                .font(UIConstants.titleFont)
-                .symbolVariant(isSelected ? .fill : .none)
-                .padding(.vertical, 6)
-                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-
-            if badgeCount > 0 {
-                Text(badgeCount > 99 ? "99+" : "\(badgeCount)")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, badgeHorizontalPadding)
-                    .frame(minWidth: badgeMinWidth, idealHeight: badgeHeight)
-                    .background(Color.red)
-                    .clipShape(Capsule())
-                    .offset(x: 12, y: -5)
             }
         }
     }
@@ -195,15 +151,10 @@ struct TabBarButtonLabel: View {
 
     authService.isLoggedIn = true
     authService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
-    
-    // settings.enableUnlimitedStyleFeed = true
 
-
-    return MainView()
+    return MainView(navigationService: navigationService)
         .environmentObject(settings)
         .environmentObject(authService)
-        .environmentObject(navigationService)
         .environmentObject(appOrientationManager)
 }
 // --- END OF COMPLETE FILE ---
-
