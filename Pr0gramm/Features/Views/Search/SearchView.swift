@@ -250,7 +250,7 @@ struct SearchView: View {
                                 Image(systemName: "questionmark.circle")
                             }
                         }
-                        .disabled(isLoading || isLoadingMore || isLoadingHelpPost)
+                        .disabled(isLoadingHelpPost)
                     }
                     ToolbarItem(placement: .primaryAction) {
                         Button { showingFilterSheet = true } label: {
@@ -321,6 +321,16 @@ struct SearchView: View {
                         )
                     }
                 }
+        }
+        .sheet(isPresented: $showingFilterSheet) {
+            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
+                .environmentObject(settings)
+                .environmentObject(authService)
+        }
+        .sheet(item: $helpPostPreviewTarget) { targetWrapper in
+            LinkedItemPreviewWrapperView(itemID: targetWrapper.itemID, targetCommentID: targetWrapper.commentID)
+                .environmentObject(settings)
+                .environmentObject(authService)
         }
         .onAppear {
             loadSearchHistory()
