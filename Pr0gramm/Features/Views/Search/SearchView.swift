@@ -370,6 +370,26 @@ struct SearchView: View {
     private func handleApiFlagsChange() {
         SearchView.logger.info("SearchView: Relevant global filter flag changed. Not auto-triggering search (awaiting explicit submit).")
     }
+    
+    /// Sanitizes search terms by escaping special characters that could cause API errors
+    private func sanitizeSearchTerm(_ term: String) -> String {
+        // The pr0gramm API uses certain characters as special search operators:
+        // "!" = search operator prefix
+        // ":" = used for special filters (e.g., "s:1000" for benis filter)
+        // "|" = OR operator
+        
+        // If the term contains special characters, wrap it in quotes to search literally
+        // This tells the API to treat these characters as part of the search term, not operators
+        let specialCharacters = CharacterSet(charactersIn: "!:|")
+        
+        if term.rangeOfCharacter(from: specialCharacters) != nil {
+            // Wrap in quotes and escape any existing quotes
+            let escapedTerm = term.replacingOccurrences(of: "\"", with: "\\\"")
+            return "\"\(escapedTerm)\""
+        }
+        
+        return term.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     @MainActor
     private func loadAndShowHelpPost() async {
@@ -625,7 +645,11 @@ struct SearchView: View {
         var tagComponents: [String] = []
         
         if let searchTerm = effectiveSearchTerm, !searchTerm.isEmpty {
-            tagComponents.append(searchTerm)
+            // Sanitize the search term to remove special characters that cause API errors
+            let sanitized = sanitizeSearchTerm(searchTerm)
+            if !sanitized.isEmpty {
+                tagComponents.append(sanitized)
+            }
         }
         
         if hasBenisFilter {
@@ -701,7 +725,11 @@ struct SearchView: View {
         var tagComponents: [String] = []
         
         if let searchTerm = effectiveSearchTerm, !searchTerm.isEmpty {
-            tagComponents.append(searchTerm)
+            // Sanitize the search term to remove special characters that cause API errors
+            let sanitized = sanitizeSearchTerm(searchTerm)
+            if !sanitized.isEmpty {
+                tagComponents.append(sanitized)
+            }
         }
         
         if hasBenisFilter {
