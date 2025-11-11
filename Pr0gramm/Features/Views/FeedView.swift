@@ -145,7 +145,7 @@ struct FeedView: View {
     @ViewBuilder
     private var headerControls: some View {
         if #available(iOS 26.0, *) {
-            // Liquid Glass Design für iOS 26+ - mit runderen Ecken
+            // Liquid Glass Design für iOS 26+ - mit vergrößertem Rahmen und runderen Ecken
             HStack(spacing: 8) {
                 Picker("Feed Typ", selection: $settings.feedType) {
                     ForEach(FeedType.allCases) { type in
@@ -153,7 +153,9 @@ struct FeedView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .glassEffect(.regular, in: .rect(cornerRadius: 18))
                 
                 // Filter Button mit Liquid Glass Hintergrund
                 Button { showingFilterSheet = true } label: {
@@ -168,7 +170,7 @@ struct FeedView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         } else {
-            // Elegantes Design für iOS < 26 - mit runderen Ecken
+            // Elegantes Design für iOS < 26 - mit vergrößertem Rahmen und runderen Ecken
             HStack(spacing: 8) {
                 Picker("Feed Typ", selection: $settings.feedType) {
                     ForEach(FeedType.allCases) { type in
@@ -176,7 +178,9 @@ struct FeedView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
                 
                 // Filter Button mit Material Hintergrund
                 Button { showingFilterSheet = true } label: {
