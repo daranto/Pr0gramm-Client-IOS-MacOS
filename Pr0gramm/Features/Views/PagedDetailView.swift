@@ -1084,7 +1084,6 @@ struct LinkedItemPreviewWrapperView: View {
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } } }
         }
         .tint(settings.accentColorChoice.swiftUIColor)
     }
