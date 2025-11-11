@@ -5,6 +5,7 @@ import SwiftUI
 import os
 
 struct CalendarView: View {
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var authService: AuthService
     
@@ -30,13 +31,15 @@ struct CalendarView: View {
                     eventList
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                // Create invisible spacer that matches tab bar height
-                Color.clear
-                    .frame(height: 32 + 40 + (UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8))
-            }
             .navigationTitle("Events")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Fertig") {
+                        dismiss()
+                    }
+                }
+            }
             .task {
                 await loadEvents()
             }

@@ -12,7 +12,6 @@ enum ProfileNavigationTarget: Hashable {
     case userProfileComments(username: String) // Wieder hinzugefügt
     case postDetail(item: Item, targetCommentID: Int?)
     case userFollowList(username: String)
-    case calendar
     case inbox
 }
 
@@ -21,6 +20,8 @@ struct ProfileView: View {
     @EnvironmentObject var authService: AuthService
     @EnvironmentObject var settings: AppSettings
     @State private var showingLoginSheet = false
+    @State private var showingCalendar = false
+    @State private var showingInbox = false
     @State private var navigationPath = NavigationPath()
 
     @StateObject private var playerManager = VideoPlayerManager()
@@ -49,10 +50,69 @@ struct ProfileView: View {
                     .frame(height: 32 + 40 + (UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8))
             }
             .navigationTitle(navigationTitleText)
+            .toolbar {
+                if authService.isLoggedIn {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            showingInbox = true
+                        } label: {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: "envelope")
+                                    .foregroundColor(.accentColor)
+                                    .imageScale(.large)
+                                
+                                if authService.unreadInboxTotal > 0 {
+                                    Circle()
+                                        .fill(Color.red)
+                                        .frame(width: 8, height: 8)
+                                        .offset(x: 6, y: -6)
+                                }
+                            }
+                            .frame(width: 36, height: 44)
+                            .contentShape(Rectangle())
+                        }
+                    }
+                    
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button {
+                            showingCalendar = true
+                        } label: {
+                            Image(systemName: "calendar")
+                                .foregroundColor(.accentColor)
+                                .imageScale(.large)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                    }
+                }
+            }
             .sheet(isPresented: $showingLoginSheet) {
                 LoginView()
                     .environmentObject(authService)
                     .environmentObject(settings)
+            }
+            .sheet(isPresented: $showingCalendar) {
+                CalendarView()
+                    .environmentObject(authService)
+                    .environmentObject(settings)
+            }
+            .sheet(isPresented: $showingInbox) {
+                NavigationStack {
+                    InboxContentOnlyView()
+                        .environmentObject(settings)
+                        .environmentObject(authService)
+                        .environmentObject(playerManager)
+                        .environmentObject(navigationService)
+                        .navigationTitle("Nachrichten")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button("Fertig") {
+                                    showingInbox = false
+                                }
+                            }
+                        }
+                }
             }
             .overlay {
                  if authService.isLoading {
@@ -84,9 +144,6 @@ struct ProfileView: View {
                      )
                  case .userFollowList(let username):
                      UserFollowListView(username: username)
-                        .environmentObject(playerManager)
-                 case .calendar:
-                     CalendarView()
                         .environmentObject(playerManager)
                  case .inbox:
                      InboxContentOnlyView()
@@ -125,90 +182,100 @@ struct ProfileView: View {
         Section("Benutzerinformationen") {
             if let user = authService.currentUser {
                 HStack {
-                    Text("Rang")
-                        .font(UIConstants.bodyFont)
+                    Label {
+                        Text("Rang")
+                            .font(UIConstants.bodyFont)
+                    } icon: {
+                        Image(systemName: "star.fill")
+                            .foregroundColor(.orange)
+                    }
                     Spacer()
                     UserMarkView(markValue: user.mark)
                 }
                 HStack {
-                    Text("Benis")
-                        .font(UIConstants.bodyFont)
+                    Label {
+                        Text("Benis")
+                            .font(UIConstants.bodyFont)
+                    } icon: {
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                            .foregroundColor(.green)
+                    }
                     Spacer()
                     Text("\(user.score)")
                         .font(UIConstants.bodyFont)
                         .foregroundColor(.secondary)
                 }
                 HStack {
-                    Text("Registriert seit")
-                        .font(UIConstants.bodyFont)
+                    Label {
+                        Text("Registriert seit")
+                            .font(UIConstants.bodyFont)
+                    } icon: {
+                        Image(systemName: "calendar.badge.clock")
+                            .foregroundColor(.blue)
+                    }
                     Spacer()
                     Text(formatDateGerman(date: Date(timeIntervalSince1970: TimeInterval(user.registered))))
                         .font(UIConstants.bodyFont)
                         .foregroundColor(.secondary)
                 }
 
-                NavigationLink(value: ProfileNavigationTarget.inbox) {
-                    HStack {
-                        Text("Meine Nachrichten")
+                NavigationLink(value: ProfileNavigationTarget.uploads(username: user.name)) {
+                    Label {
+                        Text("Meine Uploads")
                             .font(UIConstants.bodyFont)
-                        Spacer()
-                        if authService.unreadInboxTotal > 0 {
-                            Text("\(authService.unreadInboxTotal)")
-                                .font(.caption.weight(.bold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.red)
-                                .clipShape(Capsule())
-                        }
+                    } icon: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .foregroundColor(.purple)
                     }
                 }
 
-                NavigationLink(value: ProfileNavigationTarget.uploads(username: user.name)) {
-                    Text("Meine Uploads")
-                        .font(UIConstants.bodyFont)
-                }
-
                 NavigationLink(value: ProfileNavigationTarget.userProfileComments(username: user.name)) {
-                    Text("Meine Kommentare")
-                        .font(UIConstants.bodyFont)
+                    Label {
+                        Text("Meine Kommentare")
+                            .font(UIConstants.bodyFont)
+                    } icon: {
+                        Image(systemName: "text.bubble.fill")
+                            .foregroundColor(.blue)
+                    }
                 }
                 
                 NavigationLink(value: ProfileNavigationTarget.userFollowList(username: user.name)) {
-                    Text("Meine Stelzes (\(authService.followedUsers.count))")
-                        .font(UIConstants.bodyFont)
+                    Label {
+                        Text("Meine Stelzes (\(authService.followedUsers.count))")
+                            .font(UIConstants.bodyFont)
+                    } icon: {
+                        Image(systemName: "person.2.fill")
+                            .foregroundColor(.pink)
+                    }
                 }
 
 
                 if !authService.userCollections.isEmpty {
                     NavigationLink(value: ProfileNavigationTarget.allCollections(username: user.name)) {
-                        Text("Meine Sammlungen (\(authService.userCollections.count))")
-                            .font(UIConstants.bodyFont)
+                        Label {
+                            Text("Meine Sammlungen (\(authService.userCollections.count))")
+                                .font(UIConstants.bodyFont)
+                        } icon: {
+                            Image(systemName: "folder.fill")
+                                .foregroundColor(.orange)
+                        }
                     }
                 }
 
                 NavigationLink(value: ProfileNavigationTarget.favoritedComments(username: user.name)) {
-                     Text("Favorisierte Kommentare")
-                         .font(UIConstants.bodyFont)
+                    Label {
+                        Text("Favorisierte Kommentare")
+                            .font(UIConstants.bodyFont)
+                    } icon: {
+                        Image(systemName: "heart.fill")
+                            .foregroundColor(.red)
+                    }
                  }
 
             } else {
                 HStack { Spacer(); ProgressView(); Text("Lade Profildaten...")
                         .font(UIConstants.footnoteFont)
                         .foregroundColor(.secondary); Spacer() }.listRowSeparator(.hidden)
-            }
-        }
-        .headerProminence(.increased)
-
-        Section("Tools") {
-            NavigationLink(value: ProfileNavigationTarget.calendar) {
-                HStack {
-                    Image(systemName: "calendar")
-                        .foregroundColor(.accentColor)
-                        .frame(width: 24)
-                    Text("Kalender")
-                        .font(UIConstants.bodyFont)
-                }
             }
         }
         .headerProminence(.increased)
