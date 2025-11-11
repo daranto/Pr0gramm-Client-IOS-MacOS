@@ -126,28 +126,81 @@ struct InboxView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Picker("Nachrichten Typ", selection: $selectedMessageType) {
-                    ForEach(InboxViewMessageType.allCases) { type in
-                        Text(type.displayNameForPicker(authService: authService))
-                            .tag(type)
-                    }
+            inboxContent
+            .navigationDestination(item: $itemNavigationValue) { navValue in
+                 PagedDetailViewWrapperForItem(
+                     item: navValue.item,
+                     playerManager: playerManager,
+                     targetCommentID: navValue.targetCommentID
+                 )
+                 .environmentObject(settings)
+                 .environmentObject(authService)
+            }
+            .navigationDestination(item: $profileNavigationValue) { navValue in
+                 UserProfileSheetView(username: navValue.username)
+                      .environmentObject(settings)
+                      .environmentObject(authService)
+                      .environmentObject(playerManager)
+            }
+            .navigationDestination(item: $conversationNavigationValue) { navValue in
+                ConversationDetailView(partnerUsername: navValue.conversationPartnerName)
+                    .environmentObject(settings)
+                    .environmentObject(authService)
+                    .environmentObject(playerManager)
+            }
+            .sheet(item: $previewLinkTargetFromMessage) { target in
+                NavigationStack {
+                    LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
+                        .navigationTitle("Vorschau")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Fertig") {
+                                    previewLinkTargetFromMessage = nil
+                                }
+                            }
+                        }
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                
-                contentView
+                .environmentObject(settings)
+                .environmentObject(authService)
             }
-            .safeAreaInset(edge: .bottom) {
-                // Create invisible spacer that matches tab bar height
-                Color.clear
-                    .frame(height: 32 + 40 + (UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8))
+            .overlay {
+                if isLoadingNavigationTarget {
+                    ProgressView("Lade Post \(navigationTargetId ?? 0)...")
+                        .padding().background(Material.regular).cornerRadius(10).shadow(radius: 5)
+                }
             }
-            .navigationTitle("Nachrichten")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .onDisappear {
+                currentRefreshTask?.cancel()
+                currentLoadMoreTask?.cancel()
+                InboxView.logger.debug("InboxView disappeared. Cancelled ongoing refresh/loadMore tasks.")
+            }
+        }
+    }
+    
+    var inboxContent: some View {
+        VStack(spacing: 0) {
+            Picker("Nachrichten Typ", selection: $selectedMessageType) {
+                ForEach(InboxViewMessageType.allCases) { type in
+                    Text(type.displayNameForPicker(authService: authService))
+                        .tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            
+            contentView
+        }
+        .safeAreaInset(edge: .bottom) {
+            // Create invisible spacer that matches tab bar height
+            Color.clear
+                .frame(height: 32 + 40 + (UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8))
+        }
+        .navigationTitle("Nachrichten")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
             .alert("Fehler", isPresented: .constant(alertErrorMessage != nil && !isLoading && !isLoadingConversations && !isCancellationError(alertErrorMessage))) {
                 Button("OK") { clearErrors() }
             } message: { Text(alertErrorMessage ?? "Unbekannter Fehler") }
@@ -198,55 +251,6 @@ struct InboxView: View {
                     // --- END MODIFICATION ---
                 }
             }
-            .navigationDestination(item: $itemNavigationValue) { navValue in
-                 PagedDetailViewWrapperForItem(
-                     item: navValue.item,
-                     playerManager: playerManager,
-                     targetCommentID: navValue.targetCommentID
-                 )
-                 .environmentObject(settings)
-                 .environmentObject(authService)
-            }
-            .navigationDestination(item: $profileNavigationValue) { navValue in
-                 UserProfileSheetView(username: navValue.username)
-                      .environmentObject(settings)
-                      .environmentObject(authService)
-                      .environmentObject(playerManager)
-            }
-            .navigationDestination(item: $conversationNavigationValue) { navValue in
-                ConversationDetailView(partnerUsername: navValue.conversationPartnerName)
-                    .environmentObject(settings)
-                    .environmentObject(authService)
-                    .environmentObject(playerManager)
-            }
-            .sheet(item: $previewLinkTargetFromMessage) { target in
-                NavigationStack {
-                    LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
-                        .navigationTitle("Vorschau")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Fertig") {
-                                    previewLinkTargetFromMessage = nil
-                                }
-                            }
-                        }
-                }
-                .environmentObject(settings)
-                .environmentObject(authService)
-            }
-            .overlay {
-                if isLoadingNavigationTarget {
-                    ProgressView("Lade Post \(navigationTargetId ?? 0)...")
-                        .padding().background(Material.regular).cornerRadius(10).shadow(radius: 5)
-                }
-            }
-            .onDisappear {
-                currentRefreshTask?.cancel()
-                currentLoadMoreTask?.cancel()
-                InboxView.logger.debug("InboxView disappeared. Cancelled ongoing refresh/loadMore tasks.")
-            }
-        }
     }
         
     private func isCancellationError(_ message: String?) -> Bool {
@@ -750,6 +754,167 @@ struct InboxView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - InboxContentOnlyView for use within other NavigationStacks
+/// A wrapper that displays inbox content without its own NavigationStack
+struct InboxContentOnlyView: View {
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var authService: AuthService
+    @EnvironmentObject var navigationService: NavigationService
+    @StateObject private var playerManager = VideoPlayerManager()
+    
+    @State var messages: [InboxMessage] = []
+    @State private var errorMessage: String?
+    @State private var isLoading = false
+    @State private var canLoadMore = true
+    @State private var isLoadingMore = false
+    @State private var selectedMessageType: InboxViewMessageType = .comments
+    @State private var conversations: [InboxConversation] = []
+    @State private var isLoadingConversations = false
+    @State private var conversationsError: String? = nil
+    @State private var currentRefreshTask: Task<Void, Never>? = nil
+    @State private var currentLoadMoreTask: Task<Void, Never>? = nil
+    
+    // Navigation states
+    @State private var selectedConversationPartner: String? = nil
+    
+    private let apiService = APIService()
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Nachrichten Typ", selection: $selectedMessageType) {
+                ForEach(InboxViewMessageType.allCases) { type in
+                    Text(type.displayNameForPicker(authService: authService))
+                        .tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            
+            contentView
+        }
+        .navigationTitle("Nachrichten")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            playerManager.configure(settings: settings)
+            await refreshCurrentTabData()
+        }
+        .onChange(of: selectedMessageType) { _, newType in
+            Task {
+                currentRefreshTask?.cancel()
+                currentLoadMoreTask?.cancel()
+                messages = []
+                conversations = []
+                await refreshCurrentTabData()
+            }
+        }
+        .navigationDestination(item: $selectedConversationPartner) { partnerUsername in
+            ConversationDetailView(partnerUsername: partnerUsername)
+                .environmentObject(settings)
+                .environmentObject(authService)
+                .environmentObject(playerManager)
+        }
+    }
+    
+    @ViewBuilder private var contentView: some View {
+        if isLoading && messages.isEmpty && conversations.isEmpty {
+            ProgressView("Lade Nachrichten...")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if selectedMessageType == .privateMessages {
+            List {
+                if conversations.isEmpty {
+                    Text("Keine Konversationen vorhanden.")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding()
+                } else {
+                    ForEach(conversations, id: \.name) { conversation in
+                        Button {
+                            selectedConversationPartner = conversation.name
+                        } label: {
+                            InboxConversationRow(conversation: conversation)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .refreshable {
+                await refreshCurrentTabData()
+            }
+        } else {
+            List {
+                if messages.isEmpty && !isLoading {
+                    Text("Keine Nachrichten vorhanden.")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding()
+                } else {
+                    ForEach(messages) { message in
+                        InboxMessageRow(message: message)
+                    }
+                }
+                
+                if isLoadingMore {
+                    HStack { Spacer(); ProgressView("Lade mehr..."); Spacer() }
+                }
+            }
+            .listStyle(.plain)
+            .refreshable {
+                await refreshCurrentTabData()
+            }
+        }
+    }
+    
+    private func refreshCurrentTabData() async {
+        currentRefreshTask?.cancel()
+        currentLoadMoreTask?.cancel()
+
+        guard authService.isLoggedIn else {
+            messages = []
+            conversations = []
+            return
+        }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            if selectedMessageType == .privateMessages {
+                let response = try await apiService.fetchInboxConversations()
+                conversations = response.conversations.sorted { $0.lastMessage > $1.lastMessage }
+            } else {
+                let response: InboxResponse
+                switch selectedMessageType {
+                case .comments:
+                    response = try await apiService.fetchInboxCommentsApi(older: nil)
+                case .stelzes:
+                    response = try await apiService.fetchInboxFollowsApi(older: nil)
+                case .notifications:
+                    response = try await apiService.fetchInboxNotificationsApi(older: nil)
+                default:
+                    return
+                }
+                messages = response.messages.sorted { $0.created > $1.created }
+                canLoadMore = !response.atEnd
+            }
+            
+            // Update unread counts after loading messages
+            await updateCountsAfterViewingType(selectedMessageType)
+            
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+    
+    private func updateCountsAfterViewingType(_ viewedType: InboxViewMessageType) async {
+        // Der Server markiert beim Abrufen als gelesen. Ein erneuter fetchUnreadCounts holt den neuesten Stand.
+        await authService.fetchUnreadCounts()
+        // Den BackgroundManager informieren, damit der Badge und der interne Zähler korrekt sind.
+        await BackgroundNotificationManager.shared.appDidBecomeActiveOrInboxViewed(currentTotalUnread: authService.unreadInboxTotal)
     }
 }
 

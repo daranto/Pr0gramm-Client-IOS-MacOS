@@ -5,7 +5,7 @@ import SwiftUI
 
 /// Represents the main tabs of the application.
 enum Tab: Int, CaseIterable, Identifiable {
-    case feed = 0, favorites = 1, search = 2, inbox = 3, calendar = 4, profile = 5, settings = 6
+    case feed = 0, favorites = 1, search = 2, inbox = 3, profile = 4, settings = 5
     var id: Int { self.rawValue }
 }
 
@@ -80,23 +80,11 @@ struct MainView: View {
                 .tabItem { Label("Suche", systemImage: "magnifyingglass") }
                 .tag(Tab.search)
             
-            if authService.isLoggedIn {
-                InboxView()
-                    .forceRotation(orientation: .all)
-                    .tabItem { Label("Nachrichten", systemImage: "envelope.fill") }
-                    .tag(Tab.inbox)
-                    .badge(authService.unreadInboxTotal)
-            }
-            
-            CalendarView()
-                .forceRotation(orientation: .all)
-                .tabItem { Label("Kalender", systemImage: "calendar") }
-                .tag(Tab.calendar)
-            
             ProfileView()
                 .forceRotation(orientation: .all)
                 .tabItem { Label("Profil", systemImage: "person.crop.circle") }
                 .tag(Tab.profile)
+                .badge(authService.isLoggedIn && authService.unreadInboxTotal > 0 ? authService.unreadInboxTotal : 0)
             
             SettingsView()
                 .forceRotation(orientation: .all)
@@ -105,14 +93,14 @@ struct MainView: View {
         }
         .accentColor(settings.accentColorChoice.swiftUIColor)
         .onAppear {
-            // Customize tab bar appearance for compact display of all 7 tabs
+            // Customize tab bar appearance for compact display of all tabs
             let appearance = UITabBarAppearance()
             appearance.configureWithDefaultBackground()
             
-            // Compact font for tab items to fit more tabs
+            // Font for tab items
             let itemAppearance = UITabBarItemAppearance()
-            itemAppearance.normal.titleTextAttributes = [.font: UIFont.systemFont(ofSize: 9, weight: .medium)]
-            itemAppearance.selected.titleTextAttributes = [.font: UIFont.systemFont(ofSize: 9, weight: .semibold)]
+            itemAppearance.normal.titleTextAttributes = [.font: UIFont.systemFont(ofSize: 10, weight: .medium)]
+            itemAppearance.selected.titleTextAttributes = [.font: UIFont.systemFont(ofSize: 10, weight: .semibold)]
             
             appearance.stackedLayoutAppearance = itemAppearance
             appearance.inlineLayoutAppearance = itemAppearance

@@ -12,6 +12,8 @@ enum ProfileNavigationTarget: Hashable {
     case userProfileComments(username: String) // Wieder hinzugefügt
     case postDetail(item: Item, targetCommentID: Int?)
     case userFollowList(username: String)
+    case calendar
+    case inbox
 }
 
 /// Displays the user's profile information when logged in, or prompts for login otherwise.
@@ -22,6 +24,7 @@ struct ProfileView: View {
     @State private var navigationPath = NavigationPath()
 
     @StateObject private var playerManager = VideoPlayerManager()
+    @StateObject private var navigationService = NavigationService()
 
     private let germanDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -82,6 +85,15 @@ struct ProfileView: View {
                  case .userFollowList(let username):
                      UserFollowListView(username: username)
                         .environmentObject(playerManager)
+                 case .calendar:
+                     CalendarView()
+                        .environmentObject(playerManager)
+                 case .inbox:
+                     InboxContentOnlyView()
+                        .environmentObject(settings)
+                        .environmentObject(authService)
+                        .environmentObject(playerManager)
+                        .environmentObject(navigationService)
                  }
             }
             // --- MODIFICATION: Entfernt von hier ---
@@ -135,6 +147,23 @@ struct ProfileView: View {
                         .foregroundColor(.secondary)
                 }
 
+                NavigationLink(value: ProfileNavigationTarget.inbox) {
+                    HStack {
+                        Text("Meine Nachrichten")
+                            .font(UIConstants.bodyFont)
+                        Spacer()
+                        if authService.unreadInboxTotal > 0 {
+                            Text("\(authService.unreadInboxTotal)")
+                                .font(.caption.weight(.bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.red)
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+
                 NavigationLink(value: ProfileNavigationTarget.uploads(username: user.name)) {
                     Text("Meine Uploads")
                         .font(UIConstants.bodyFont)
@@ -167,6 +196,19 @@ struct ProfileView: View {
                 HStack { Spacer(); ProgressView(); Text("Lade Profildaten...")
                         .font(UIConstants.footnoteFont)
                         .foregroundColor(.secondary); Spacer() }.listRowSeparator(.hidden)
+            }
+        }
+        .headerProminence(.increased)
+
+        Section("Tools") {
+            NavigationLink(value: ProfileNavigationTarget.calendar) {
+                HStack {
+                    Image(systemName: "calendar")
+                        .foregroundColor(.accentColor)
+                        .frame(width: 24)
+                    Text("Kalender")
+                        .font(UIConstants.bodyFont)
+                }
             }
         }
         .headerProminence(.increased)
