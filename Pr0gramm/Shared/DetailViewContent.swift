@@ -268,11 +268,11 @@ struct DetailViewContent: View {
             .buttonStyle(.plain)
             .disabled(!authService.isLoggedIn)
 
-            Text("\(benis)")
+            Text(formatBenisCount(benis))
                 .font(.title.weight(.bold))
                 .foregroundColor(.primary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .fixedSize(horizontal: true, vertical: false)
 
             Button(action: upvoteAction) {
                 Image(systemName: currentVote == 1 ? "plus.circle.fill" : "plus.circle")
@@ -283,6 +283,25 @@ struct DetailViewContent: View {
             }
             .buttonStyle(.plain)
             .disabled(!authService.isLoggedIn)
+        }
+    }
+    
+    private func formatBenisCount(_ count: Int) -> String {
+        let absCount = abs(count)
+        
+        if absCount >= 10000 {
+            // Für Zahlen >= 10000: zeige mit "k" (z.B. 10.5k, 123k)
+            let thousands = Double(count) / 1000.0
+            if absCount >= 100000 {
+                // Ab 100k keine Dezimalstelle (z.B. 123k)
+                return String(format: "%.0fk", thousands)
+            } else {
+                // 10k-99k mit einer Dezimalstelle (z.B. 10.5k)
+                return String(format: "%.1fk", thousands)
+            }
+        } else {
+            // Für Zahlen < 10000: volle Zahl anzeigen
+            return "\(count)"
         }
     }
 
