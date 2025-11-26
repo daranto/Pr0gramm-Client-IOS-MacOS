@@ -580,6 +580,11 @@ struct DetailViewContent: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .safeAreaInset(edge: .bottom) {
+            // Create invisible spacer that matches tab bar height (for iPad with tab bar)
+            Color.clear
+                .frame(height: 32 + 40 + (UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8))
+        }
     }
     
     @ViewBuilder
@@ -600,6 +605,11 @@ struct DetailViewContent: View {
                     } else {
                         loginHintView()
                     }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    // Create invisible spacer that matches tab bar height
+                    Color.clear
+                        .frame(height: 32 + 40 + (UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8))
                 }
             }
             .onChange(of: infoLoadingStatus) { _, newStatus in

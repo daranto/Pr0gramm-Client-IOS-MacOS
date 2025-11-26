@@ -341,6 +341,9 @@ struct PagedDetailView: View {
                  }
              }
         }
+        .toolbarBackground(Material.bar, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .ignoresSafeArea(.container, edges: .bottom)
         .onChange(of: selectedIndex) { oldValue, newValue in
             if oldValue >= 0 && oldValue < items.count {
                 let previousItem = items[oldValue]

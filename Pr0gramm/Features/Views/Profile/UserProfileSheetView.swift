@@ -91,6 +91,8 @@ struct UserProfileSheetView: View {
                     Button("Fertig") { dismiss() }
                 }
             }
+            .toolbarBackground(Material.bar, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .onAppear {
                 guard !didLoad else { return }
                 didLoad = true
@@ -159,6 +161,8 @@ struct UserProfileSheetView: View {
                         .environmentObject(authService)
                         .environmentObject(playerManager)
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Fertig"){ showAllUploadsSheet = false } } }
+                        .toolbarBackground(Material.bar, for: .navigationBar)
+                        .toolbarBackground(.visible, for: .navigationBar)
                 }
                 .tint(settings.accentColorChoice.swiftUIColor)
             }
@@ -169,6 +173,8 @@ struct UserProfileSheetView: View {
                         .environmentObject(authService)
                         .environmentObject(playerManager)
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Fertig"){ showAllCommentsSheet = false } } }
+                        .toolbarBackground(Material.bar, for: .navigationBar)
+                        .toolbarBackground(.visible, for: .navigationBar)
                 }
                 .tint(settings.accentColorChoice.swiftUIColor)
             }
@@ -183,6 +189,8 @@ struct UserProfileSheetView: View {
                                 Button("Fertig") { showConversationSheet = false }
                             }
                         }
+                        .toolbarBackground(Material.bar, for: .navigationBar)
+                        .toolbarBackground(.visible, for: .navigationBar)
                 }
                 .tint(settings.accentColorChoice.swiftUIColor)
             }

@@ -160,6 +160,8 @@ struct InboxView: View {
                                 }
                             }
                         }
+                        .toolbarBackground(Material.bar, for: .navigationBar)
+                        .toolbarBackground(.visible, for: .navigationBar)
                 }
                 .environmentObject(settings)
                 .environmentObject(authService)
@@ -850,6 +852,8 @@ struct InboxContentOnlyView: View {
                             }
                         }
                     }
+                    .toolbarBackground(Material.bar, for: .navigationBar)
+                    .toolbarBackground(.visible, for: .navigationBar)
             }
             .environmentObject(settings)
             .environmentObject(authService)

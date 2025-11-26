@@ -420,7 +420,8 @@ struct ConversationDetailView: View {
             .padding(.top, 8)
             .padding(.bottom, bottomPaddingForInput)
         }
-        .background(.thinMaterial)
+        // --- ÄNDERUNG: Material.bar statt .thinMaterial für konsistentes Liquid Glass Design ---
+        .background(Material.bar)
     }
 
     private func clearErrors() {
