@@ -282,6 +282,7 @@ struct DonationProgressView: View {
     @State private var displayYear: Int = Calendar.current.component(.year, from: Date())
     @State private var isDonationTextExpanded = false
     let goalUSD: Double = 100.0
+    @Environment(\.openURL) var openURL
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "App", category: "DonationProgressView")
 
@@ -333,10 +334,7 @@ struct DonationProgressView: View {
                     .foregroundColor(.secondary)
                 Spacer()
                 if let coffeeURL = URL(string: "https://buymeacoffee.com/daranto") {
-                    Button(action: {
-                        Self.logger.debug("Refresh button tapped. Forcing fetch.")
-                        refreshIfNeeded(force: true)
-                    }) {
+                    Button(action: { openURL(coffeeURL) }) {
                         Label("Buy Me a Coffee", systemImage: "cup.and.saucer")
                             .font(UIConstants.captionFont)
                     }
@@ -366,7 +364,7 @@ struct DonationProgressView: View {
                     .font(UIConstants.subheadlineFont)
                     .bold()
                 Spacer()
-                Text(String(format: "%.2f / %.0f USD", amount, goalUSD))
+                Text(String(format: "%d / %d USD", Int(amount), Int(goalUSD)))
                     .font(UIConstants.subheadlineFont)
                     .foregroundColor(.secondary)
             }
