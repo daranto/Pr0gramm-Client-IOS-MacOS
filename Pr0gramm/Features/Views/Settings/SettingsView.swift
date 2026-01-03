@@ -322,8 +322,14 @@ struct DonationProgressView: View {
     }
 
     var body: some View {
-        let amount = amountUSD ?? 0
-        let ratio = goalUSD > 0 ? amount / goalUSD : 0
+        let hasError = (error != nil)
+        let amount = amountUSD
+        let ratio: Double
+        if let amount {
+            ratio = goalUSD > 0 ? amount / goalUSD : 0
+        } else {
+            ratio = 0
+        }
         let progressValue = min(max(ratio, 0), 1)
         let displayPercent = Int(round(ratio * 100))
 
@@ -333,52 +339,80 @@ struct DonationProgressView: View {
                     .font(UIConstants.captionFont)
                     .foregroundColor(.secondary)
                 Spacer()
-                if let coffeeURL = URL(string: "https://buymeacoffee.com/daranto") {
-                    Button(action: { openURL(coffeeURL) }) {
-                        Label("Buy Me a Coffee", systemImage: "cup.and.saucer")
+                if hasError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text("Spendenstatus aktuell nicht abrufbar. Bitte später erneut probieren.")
                             .font(UIConstants.captionFont)
+                            .foregroundColor(.red)
+                        Button(action: {
+                            Self.logger.debug("Refresh button tapped. Forcing fetch.")
+                            refreshIfNeeded(force: true)
+                        }) {
+                            Image(systemName: "arrow.clockwise")
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(isLoading)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Spendenstatus aktuell nicht abrufbar. Bitte später erneut probieren.")
+                } else {
+                    if let coffeeURL = URL(string: "https://buymeacoffee.com/daranto") {
+                        Button(action: { openURL(coffeeURL) }) {
+                            Label("Buy Me a Coffee", systemImage: "cup.and.saucer")
+                                .font(UIConstants.captionFont)
+                        }
+                        .buttonStyle(.borderless)
+                        .tint(.accentColor)
+                    }
+                }
+            }
+
+            if !hasError {
+                HStack(alignment: .center, spacing: 8) {
+                    ProgressView(value: progressValue)
+                        .tint((amount ?? 0) >= goalUSD ? .green : .accentColor)
+                        .accessibilityLabel("Spendenfortschritt")
+                        .accessibilityValue("\(displayPercent) Prozent")
+                    Button(action: {
+                        Self.logger.debug("Refresh button tapped. Forcing fetch.")
+                        refreshIfNeeded(force: true)
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
-                    .tint(.accentColor)
+                    .disabled(isLoading)
                 }
             }
 
-            HStack(alignment: .center, spacing: 8) {
-                ProgressView(value: progressValue)
-                    .tint(amount >= goalUSD ? .green : .accentColor)
-                    .accessibilityLabel("Spendenfortschritt")
-                    .accessibilityValue("\(displayPercent) Prozent")
-                Button(action: {
-                    Self.logger.debug("Refresh button tapped. Forcing fetch.")
-                    refreshIfNeeded(force: true)
-                }) {
-                    Image(systemName: "arrow.clockwise")
-                        .contentShape(Rectangle())
+            if !hasError {
+                HStack {
+                    Text("\(displayPercent)%")
+                        .font(UIConstants.subheadlineFont)
+                        .bold()
+                    Spacer()
+                    let shownAmount = Int(amount ?? 0)
+                    Text(String(format: "%d / %d USD", shownAmount, Int(goalUSD)))
+                        .font(UIConstants.subheadlineFont)
+                        .foregroundColor(.secondary)
                 }
-                .buttonStyle(.borderless)
-                .disabled(isLoading)
             }
 
-            HStack {
-                Text("\(displayPercent)%")
-                    .font(UIConstants.subheadlineFont)
-                    .bold()
-                Spacer()
-                Text(String(format: "%d / %d USD", Int(amount), Int(goalUSD)))
-                    .font(UIConstants.subheadlineFont)
-                    .foregroundColor(.secondary)
-            }
-
-            DisclosureGroup(isExpanded: $isDonationTextExpanded) {
-                Text("Damit die App weiter angeboten werden kann, fallen jedes Jahr 100 USD fürs Apple Developer Program an. Ohne die Mitgliedschaft sind keine Updates mehr möglich – und die App verschwindet aus TestFlight. Mit deiner Spende deckst du diese Kosten und hältst die App am Leben.")
-                    .font(UIConstants.captionFont)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 4)
-                    .transition(.identity)
-            } label: {
-                Text("Danke für eure Unterstützung!")
-                    .font(UIConstants.captionFont)
-                    .foregroundColor(.secondary)
+            if !hasError {
+                DisclosureGroup(isExpanded: $isDonationTextExpanded) {
+                    Text("Damit die App weiter angeboten werden kann, fallen jedes Jahr 100 USD fürs Apple Developer Program an. Ohne die Mitgliedschaft sind keine Updates mehr möglich – und die App verschwindet aus TestFlight. Mit deiner Spende deckst du diese Kosten und hältst die App am Leben.")
+                        .font(UIConstants.captionFont)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 4)
+                        .transition(.identity)
+                } label: {
+                    Text("Danke für eure Unterstützung!")
+                        .font(UIConstants.captionFont)
+                        .foregroundColor(.secondary)
+                }
             }
         }
         .animation(nil, value: isDonationTextExpanded)
@@ -396,6 +430,7 @@ struct DonationProgressView: View {
                     if let cached = Self.cachedAmountUSD {
                         Self.logger.debug("Manual refresh throttled. Using cached amount: \(cached, privacy: .public)")
                         self.amountUSD = cached
+                        self.error = nil
                     } else {
                         Self.logger.debug("Manual refresh throttled but no cache available. Proceeding to fetch.")
                         fetchLatest()
@@ -416,6 +451,7 @@ struct DonationProgressView: View {
             if delta < autoInterval {
                 Self.logger.debug("Auto refresh within interval. Using cached amount: \(cached, privacy: .public)")
                 self.amountUSD = cached
+                self.error = nil
                 return
             }
         }
@@ -428,7 +464,7 @@ struct DonationProgressView: View {
         error = nil
         Task {
             do {
-                guard let url = URL(string: "https://bmac.xn--gnn-sna.eu/") else {
+                guard let url = URL(string: "https://bmac.xn--gnn-sna.eu/bmac/total") else {
                     throw URLError(.badURL)
                 }
                 Self.logger.debug("Starting fetch from URL: \(url.absoluteString, privacy: .public)")
@@ -467,7 +503,14 @@ struct DonationProgressView: View {
             } catch {
                 Self.logger.error("Fetch failed: \(String(describing: error), privacy: .public)")
                 await MainActor.run {
-                    self.error = error.localizedDescription
+                    if (self.amountUSD == nil) {
+                        // Keep amount as nil to indicate no data
+                    }
+                    if (error as? URLError)?.code == .notConnectedToInternet || (error as? URLError)?.code == .timedOut {
+                        self.error = "Spendenstatus aktuell nicht abrufbar. Bitte später erneut probieren."
+                    } else {
+                        self.error = error.localizedDescription
+                    }
                     self.isLoading = false
                 }
             }
