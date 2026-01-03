@@ -131,6 +131,9 @@ struct DetailViewContent: View {
     @State private var tagForSheetSearch: String? = nil
     @State private var wasPlayingBeforeAnySheet: Bool = false
     
+    // Feedback States
+    @State private var copyFeedbackMessage: String? = nil
+
     init(
         item: Item,
         keyboardActionHandler: KeyboardActionHandler,
@@ -746,62 +749,94 @@ struct DetailViewContent: View {
 
 
     var body: some View {
-        commentsWrapper
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            DetailViewContent.logger.debug("DetailViewContent for item \(item.id) appearing. TargetCommentID: \(targetCommentID ?? -1)")
-            didAttemptScrollToTarget = false
-        }
-        .onDisappear {
-            DetailViewContent.logger.debug("DetailViewContent for item \(item.id) disappearing.")
-        }
-        .confirmationDialog(
-            "Teilen & Kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
-        ) {
-            Button("Medium teilen/speichern") {
-                Task { await prepareAndShareMedia() }
+        ZStack {
+            commentsWrapper
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onAppear {
+                DetailViewContent.logger.debug("DetailViewContent for item \(item.id) appearing. TargetCommentID: \(targetCommentID ?? -1)")
+                didAttemptScrollToTarget = false
             }
-            Button("Post-Link (pr0gramm.com)") {
-                let urlString = "https://pr0gramm.com/new/\(item.id)"
-                UIPasteboard.general.string = urlString
-                DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)")
+            .onDisappear {
+                DetailViewContent.logger.debug("DetailViewContent for item \(item.id) disappearing.")
             }
-            Button("Direkter Medien-Link") {
-                if let urlString = item.imageUrl?.absoluteString {
+            .confirmationDialog(
+                "Teilen & Kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
+            ) {
+                Button("Medium teilen/speichern") {
+                    Task { await prepareAndShareMedia() }
+                }
+                Button("Post-Link (pr0gramm.com)") {
+                    let urlString = "https://pr0gramm.com/new/\(item.id)"
                     UIPasteboard.general.string = urlString
-                    DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)")
-                } else {
-                    DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)")
+                    DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)")
+                    triggerCopyFeedback(message: "Post-Link kopiert")
+                }
+                Button("Direkter Medien-Link") {
+                    if let urlString = item.imageUrl?.absoluteString {
+                        UIPasteboard.general.string = urlString
+                        DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)")
+                        triggerCopyFeedback(message: "Direkter Link kopiert")
+                    } else {
+                        DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)")
+                    }
+                }
+            } message: { Text("Wähle eine Aktion:") }
+            .sheet(item: $itemToShare, onDismiss: {
+                if let tempUrl = itemToShare?.temporaryFileUrlToDelete {
+                    deleteTemporaryFile(at: tempUrl)
+                }
+                resumePlayerIfNeeded()
+            }) { shareableItemWrapper in
+                ShareSheet(activityItems: shareableItemWrapper.itemsToShare)
+            }
+            .onChange(of: targetCommentID) { _, newTargetID in
+                DetailViewContent.logger.debug("targetCommentID in DetailViewContent changed to: \(newTargetID ?? -1). Resetting didAttemptScrollToTarget.")
+                didAttemptScrollToTarget = false
+            }
+            .onChange(of: authService.votedTagStates) { _, _ in
+                DetailViewContent.logger.trace("Detected change in authService.votedTagStates")
+            }
+            .sheet(isPresented: $showingAddTagSheet) {
+                addTagSheetContent()
+            }
+            .sheet(item: $tagForSheetSearch, onDismiss: resumePlayerIfNeeded) { tappedTagString in
+                 TagSearchViewWrapper(initialTag: tappedTagString, onNewTagSelected: { newTagFromSheet in
+                     DetailViewContent.logger.info("Received new tag '\(newTagFromSheet)' from TagSearchViewWrapper. Updating tagForSheetSearch.")
+                     pausePlayerForSheet()
+                     self.tagForSheetSearch = newTagFromSheet
+                 })
+                 .environmentObject(settings)
+                 .environmentObject(authService)
+             }
+            
+            // Visual Copy Feedback Overlay (Zentriert)
+            if let message = copyFeedbackMessage {
+                Text(message)
+                    .font(.subheadline.bold())
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(Capsule().fill(Color.black.opacity(0.85)).shadow(radius: 4))
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+                    .zIndex(100)
+            }
+        }
+    }
+    
+    private func triggerCopyFeedback(message: String) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            copyFeedbackMessage = message
+        }
+        
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation(.easeOut(duration: 0.3)) {
+                if copyFeedbackMessage == message {
+                    copyFeedbackMessage = nil
                 }
             }
-        } message: { Text("Wähle eine Aktion:") }
-        .sheet(item: $itemToShare, onDismiss: {
-            if let tempUrl = itemToShare?.temporaryFileUrlToDelete {
-                deleteTemporaryFile(at: tempUrl)
-            }
-            resumePlayerIfNeeded()
-        }) { shareableItemWrapper in
-            ShareSheet(activityItems: shareableItemWrapper.itemsToShare)
         }
-        .onChange(of: targetCommentID) { _, newTargetID in
-            DetailViewContent.logger.debug("targetCommentID in DetailViewContent changed to: \(newTargetID ?? -1). Resetting didAttemptScrollToTarget.")
-            didAttemptScrollToTarget = false
-        }
-        .onChange(of: authService.votedTagStates) { _, _ in
-            DetailViewContent.logger.trace("Detected change in authService.votedTagStates")
-        }
-        .sheet(isPresented: $showingAddTagSheet) {
-            addTagSheetContent()
-        }
-        .sheet(item: $tagForSheetSearch, onDismiss: resumePlayerIfNeeded) { tappedTagString in
-             TagSearchViewWrapper(initialTag: tappedTagString, onNewTagSelected: { newTagFromSheet in
-                 DetailViewContent.logger.info("Received new tag '\(newTagFromSheet)' from TagSearchViewWrapper. Updating tagForSheetSearch.")
-                 pausePlayerForSheet()
-                 self.tagForSheetSearch = newTagFromSheet
-             })
-             .environmentObject(settings)
-             .environmentObject(authService)
-         }
     }
     
     struct TagSearchViewWrapper: View {
