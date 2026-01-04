@@ -166,6 +166,7 @@ struct FeedView: View {
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44)
                 .glassEffect(.regular.interactive(), in: .circle)
+                .contentShape(Circle()) // KORREKTUR: Macht den gesamten Kreis klickbar
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -191,6 +192,7 @@ struct FeedView: View {
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44)
                 .background(.regularMaterial, in: Circle())
+                .contentShape(Circle()) // KORREKTUR: Macht den gesamten Kreis klickbar
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
