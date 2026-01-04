@@ -1,5 +1,4 @@
 // Pr0gramm/Pr0gramm/Features/Views/Pr0Tok/UnlimitedFeedItemView.swift
-// --- START OF COMPLETE FILE ---
 
 import SwiftUI
 import os
@@ -212,7 +211,10 @@ struct UnlimitedFeedItemView: View {
                     Text("@\(item.user)")
                         .font(.headline).bold()
                         .foregroundColor(.white)
-                        .background(Color.clear)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.4))
+                        .clipShape(Capsule())
                         .onTapGesture {
                             if !item.user.isEmpty {
                                 Self.logger.info("Username '\(item.user)' tapped. Calling onShowUserProfile.")
@@ -223,14 +225,14 @@ struct UnlimitedFeedItemView: View {
                     tagSection
                         .background(Color.clear)
                 }
-                .padding(.leading)
+                .padding(.leading, 12)
                 .background(Color.clear)
                 
                 Spacer(minLength: 0)
                     .allowsHitTesting(false)
                 
                 interactionButtons
-                    .padding(.trailing)
+                    .padding(.trailing, 4)
                     .background(Color.clear)
             }
             .padding(.bottom, bottomSafeAreaPadding + 10)
@@ -399,77 +401,94 @@ struct UnlimitedFeedItemView: View {
         if isDummyItem {
             EmptyView()
         } else {
-            VStack(spacing: 25) {
-                if !(authService.isVoting[item.id] ?? false) {
-                    Button(action: onUpvoteItem) {
-                        Image(systemName: itemData.currentVote == 1 ? "plus.circle.fill" : "plus.circle")
-                            .font(.title)
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(itemData.currentVote == 1 ? Color.white : Color.white,
-                                             itemData.currentVote == 1 ? Color.green : Color.white.opacity(0.7))
+            VStack(spacing: 20) {
+                // Vote Section
+                VStack(spacing: 12) {
+                    if !(authService.isVoting[item.id] ?? false) {
+                        Button(action: onUpvoteItem) {
+                            Image(systemName: itemData.currentVote == 1 ? "plus.circle.fill" : "plus.circle")
+                                .font(.title)
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(itemData.currentVote == 1 ? Color.white : Color.white,
+                                                 itemData.currentVote == 1 ? Color.green : Color.white.opacity(0.7))
+                        }
+                        .disabled(!authService.isLoggedIn || (authService.isVoting[item.id] ?? false))
+                    } else {
+                        ProgressView().tint(.white).scaleEffect(1.2)
+                            .frame(width: 28, height: 28)
                     }
-                    .disabled(!authService.isLoggedIn || (authService.isVoting[item.id] ?? false))
-                } else {
-                    ProgressView().tint(.white).scaleEffect(1.2)
-                        .frame(width: 28, height: 28)
-                }
 
-                Text("\(item.up - item.down)")
-                    .font(.callout.weight(.medium))
-                    .foregroundColor(.white)
-                    .shadow(radius: 1)
+                    Text("\(item.up - item.down)")
+                        .font(.callout.weight(.medium))
+                        .foregroundColor(.white)
+                        .shadow(radius: 1)
 
-                if !(authService.isVoting[item.id] ?? false) {
-                    Button(action: onDownvoteItem) {
-                        Image(systemName: itemData.currentVote == -1 ? "minus.circle.fill" : "minus.circle")
-                            .font(.title)
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(itemData.currentVote == -1 ? Color.white : Color.white,
-                                             itemData.currentVote == -1 ? Color.red : Color.white.opacity(0.7))
+                    if !(authService.isVoting[item.id] ?? false) {
+                        Button(action: onDownvoteItem) {
+                            Image(systemName: itemData.currentVote == -1 ? "minus.circle.fill" : "minus.circle")
+                                .font(.title)
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(itemData.currentVote == -1 ? Color.white : Color.white,
+                                                 itemData.currentVote == -1 ? Color.red : Color.white.opacity(0.7))
+                        }
+                        .disabled(!authService.isLoggedIn || (authService.isVoting[item.id] ?? false))
                     }
-                    .disabled(!authService.isLoggedIn || (authService.isVoting[item.id] ?? false))
-                } else {
-                    Spacer().frame(width: 28, height: 28)
                 }
+                .padding(.vertical, 10)
+                .padding(.horizontal, 6)
+                .background(Color.black.opacity(0.4))
+                .clipShape(Capsule())
 
+                // Favorite Button
                 Button {
                     onToggleFavorite()
                 } label: {
-                    if isProcessingFavorite {
-                        ProgressView().tint(.white).scaleEffect(1.2)
-                            .frame(width: 28, height: 28)
-                    } else {
-                        Image(systemName: itemData.isFavorited ? "heart.fill" : "heart")
-                            .font(.title)
-                            .foregroundColor(itemData.isFavorited ? .pink : .white)
+                    Group {
+                        if isProcessingFavorite {
+                            ProgressView().tint(.white).scaleEffect(1.2)
+                        } else {
+                            Image(systemName: itemData.isFavorited ? "heart.fill" : "heart")
+                                .font(.title)
+                                .foregroundColor(itemData.isFavorited ? .pink : .white)
+                        }
                     }
+                    .frame(width: 50, height: 50)
+                    .background(Color.black.opacity(0.4))
+                    .clipShape(Circle())
                 }
                 .disabled(isProcessingFavorite || !authService.isLoggedIn)
                 .highPriorityGesture(
                     LongPressGesture(minimumDuration: 0.5)
                         .onEnded { _ in
-                            Self.logger.debug("Long press detected on heart button for item \(item.id). Calling onShowCollectionSelection.")
                             if authService.isLoggedIn && !isProcessingFavorite {
-                                Self.logger.debug("Conditions met (isLoggedIn: \(authService.isLoggedIn), !isProcessingFavorite: \(!isProcessingFavorite)), actually calling onShowCollectionSelection.")
                                 onShowCollectionSelection()
-                            } else {
-                                Self.logger.debug("Conditions for onShowCollectionSelection NOT met. isLoggedIn: \(authService.isLoggedIn), isProcessingFavorite: \(isProcessingFavorite)")
                             }
                         }
                 )
                 
+                // Comments Button
                 Button {
-                    Self.logger.info("Kommentar-Button getippt für Item \(item.id)")
                     onWillPresentCommentSheet()
                     showingCommentsSheet = true
                 } label: {
-                    Image(systemName: "message").font(.title).foregroundColor(.white)
+                    Image(systemName: "message")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: 50, height: 50)
+                        .background(Color.black.opacity(0.4))
+                        .clipShape(Circle())
                 }
 
+                // Share Button
                 Button {
                     onShareTapped()
                 } label: {
-                    Image(systemName: "arrowshape.turn.up.right").font(.title).foregroundColor(.white)
+                    Image(systemName: "arrowshape.turn.up.right")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: 50, height: 50)
+                        .background(Color.black.opacity(0.4))
+                        .clipShape(Circle())
                 }
             }
             .background(Color.clear)
@@ -477,54 +496,3 @@ struct UnlimitedFeedItemView: View {
     }
 }
 
-#Preview {
-    let settings = AppSettings()
-    let authService = AuthService(appSettings: settings)
-    let navService = NavigationService()
-    settings.enableUnlimitedStyleFeed = true
-    
-    let dummyItem = Item(id: 1, promoted: nil, userId: 1, down: 10, up: 100, created: 0, image: "dummy.jpg", thumb: "dummy_thumb.jpg", fullsize: nil, preview: nil, width: 100, height: 100, audio: false, source: nil, flags: 1, user: "User", mark: 1, repost: false, variants: nil, subtitles: [ItemSubtitle(language: "de", path: "/some/path.vtt", label: "Deutsch", isDefault: true)])
-    let sampleItemData = UnlimitedFeedItemDataModel(
-        item: dummyItem,
-        displayedTags: [ItemTag(id: 1, confidence: 1, tag: "Tag1")],
-        totalTagCount: 1,
-        comments: [],
-        itemInfoStatus: .loaded,
-        isFavorited: false,
-        currentVote: 0
-    )
-    
-    let dummyKeyboardHandler = KeyboardActionHandler()
-    let previewPlayerManager = VideoPlayerManager()
-    previewPlayerManager.configure(settings: settings)
-
-    return UnlimitedFeedItemView(
-        itemData: sampleItemData,
-        playerManager: previewPlayerManager,
-        keyboardActionHandlerForVideo: dummyKeyboardHandler,
-        isActive: true,
-        isDummyItem: false,
-        onToggleShowAllTags: {},
-        onUpvoteTag: { _ in },
-        onDownvoteTag: { _ in },
-        onTagTapped: { _ in },
-        onRetryLoadDetails: {},
-        onShowAddTagSheet: {},
-        onShowFullscreenImage: { _ in },
-        onToggleFavorite: {},
-        onShowCollectionSelection: {},
-        onShareTapped: {},
-        isProcessingFavorite: false,
-        onShowUserProfile: { username in print("Preview: Show profile for \(username)")},
-        onWillBeginFullScreenPr0Tok: { print("Preview: Will begin fullscreen") },
-        onWillEndFullScreenPr0Tok: { print("Preview: Will end fullscreen") },
-        onUpvoteItem: { print("Preview: Upvote Item") },
-        onDownvoteItem: { print("Preview: Downvote Item") },
-        onWillPresentCommentSheet: { print("Preview: Will present comment sheet") },
-        onDidDismissCommentSheet: { print("Preview: Did dismiss comment sheet") }
-    )
-    .environmentObject(settings)
-    .environmentObject(authService)
-    .environmentObject(navService)
-}
-// --- END OF COMPLETE FILE ---
