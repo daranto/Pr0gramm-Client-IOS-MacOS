@@ -760,27 +760,27 @@ struct DetailViewContent: View {
                 DetailViewContent.logger.debug("DetailViewContent for item \(item.id) disappearing.")
             }
             .confirmationDialog(
-                "Teilen & Kopieren", isPresented: $showingShareOptions, titleVisibility: .visible
+                "Wähle eine Aktion:", isPresented: $showingShareOptions, titleVisibility: .visible
             ) {
                 Button("Medium teilen/speichern") {
                     Task { await prepareAndShareMedia() }
                 }
-                Button("Post-Link (pr0gramm.com)") {
+                Button("Post-URL") {
                     let urlString = "https://pr0gramm.com/new/\(item.id)"
                     UIPasteboard.general.string = urlString
                     DetailViewContent.logger.info("Copied Post-Link to clipboard: \(urlString)")
-                    triggerCopyFeedback(message: "Post-Link kopiert")
+                    triggerCopyFeedback(message: "Post-URL kopiert")
                 }
-                Button("Direkter Medien-Link") {
+                Button("Direkte Medien-URL") {
                     if let urlString = item.imageUrl?.absoluteString {
                         UIPasteboard.general.string = urlString
                         DetailViewContent.logger.info("Copied Media-Link to clipboard: \(urlString)")
-                        triggerCopyFeedback(message: "Direkter Link kopiert")
+                        triggerCopyFeedback(message: "Direkte Medien-URL kopiert")
                     } else {
                         DetailViewContent.logger.warning("Failed to copy Media-Link: URL was nil for item \(item.id)")
                     }
                 }
-            } message: { Text("Wähle eine Aktion:") }
+            }
             .sheet(item: $itemToShare, onDismiss: {
                 if let tempUrl = itemToShare?.temporaryFileUrlToDelete {
                     deleteTemporaryFile(at: tempUrl)

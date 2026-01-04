@@ -77,6 +77,8 @@ struct UnlimitedStyleFeedView: View {
     @State private var isCurrentlyInSystemFullscreen: Bool = false
     @State private var wasPlayingBeforeAppSheet: Bool = false
 
+    // Feedback States
+    @State private var copyFeedbackMessage: String? = nil
 
     private let dummyStartItemID = -1
     private func createDummyStartItem() -> Item {
@@ -100,7 +102,21 @@ struct UnlimitedStyleFeedView: View {
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            mainContentWithSheets // Ausgelagerter Inhalt
+            ZStack {
+                mainContentWithSheets // Ausgelagerter Inhalt
+                
+                // Visual Copy Feedback Overlay (Zentriert)
+                if let message = copyFeedbackMessage {
+                    Text(message)
+                        .font(.subheadline.bold())
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(Color.black.opacity(0.85)).shadow(radius: 4))
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                        .zIndex(100)
+                }
+            }
         }
         .onAppear {
             playerManager.configure(settings: settings)
@@ -351,9 +367,9 @@ struct UnlimitedStyleFeedView: View {
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
         .confirmationDialog( "Teilen & Kopieren", isPresented: $isShareConfirmationDialogPresented, presenting: itemIDForShareActions ) { itemIDForDialogActions in
             Button("Medium teilen/speichern") { Task { await prepareAndShareMedia(for: itemIDForDialogActions) } }
-            Button("Post-Link (pr0gramm.com)") { copyPostLink(for: itemIDForDialogActions) }
-            Button("Direkter Medien-Link") { copyMediaLink(for: itemIDForDialogActions) }
-        } message: { itemIDForDialogMessage in Text("Aktionen für Post #\(itemIDForDialogMessage):") }
+            Button("Post-URL") { copyPostLink(for: itemIDForDialogActions) }
+            Button("Direkte Medien-URL") { copyMediaLink(for: itemIDForDialogActions) }
+        } message: { _ in Text("Wähle eine Aktion:") }
         .onChange(of: isShareConfirmationDialogPresented) { _, newValue in
             if !newValue && itemToShareWrapper == nil {
                 resumePlayerAfterAppSheet(activeItem: currentActiveItem)
@@ -430,12 +446,6 @@ struct UnlimitedStyleFeedView: View {
         wasPlayingBeforeAppSheet = false
     }
     
-    // ... (Rest der Datei bleibt gleich: feedControls, feedContent, prepareItemDataModel, selectNext/PreviousItem, refreshItems, loadMoreItems, etc.) ...
-    // Es ist wichtig, dass alle Aufrufe von pausePlayerForAppSheet und resumePlayerAfterAppSheet
-    // jetzt das `currentActiveItem` übergeben:
-    // z.B. pausePlayerForAppSheet(activeItem: currentActiveItem)
-    // in den .onChange und .onDismiss Blöcken der Sheets.
-
     @ViewBuilder
     private var feedControls: some View {
         Picker("Feed Typ", selection: $settings.feedType) {
@@ -1313,7 +1323,8 @@ struct UnlimitedStyleFeedView: View {
     private func copyPostLink(for itemID: Int) {
         let urlString = "https://pr0gramm.com/new/\(itemID)"
         UIPasteboard.general.string = urlString
-        Self.logger.info("Copied Post-Link to clipboard: \(urlString)")
+        Self.logger.info("Copied Post-URL to clipboard: \(urlString)")
+        triggerCopyFeedback(message: "Post-URL kopiert")
     }
 
     private func copyMediaLink(for itemID: Int) {
@@ -1324,8 +1335,25 @@ struct UnlimitedStyleFeedView: View {
         if let urlString = item.imageUrl?.absoluteString {
             UIPasteboard.general.string = urlString
             Self.logger.info("Copied Media-Link to clipboard: \(urlString)")
+            triggerCopyFeedback(message: "Direkte Medien-URL kopiert")
         } else {
             Self.logger.warning("Failed to copy Media-Link: URL was nil for item \(itemID)")
+        }
+    }
+
+    private func triggerCopyFeedback(message: String) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            copyFeedbackMessage = message
+        }
+        
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation(.easeOut(duration: 0.3)) {
+                if copyFeedbackMessage == message {
+                    copyFeedbackMessage = nil
+                }
+            }
         }
     }
 
@@ -1347,12 +1375,12 @@ struct UnlimitedStyleFeedView: View {
 #Preview {
     let settings = AppSettings()
     let authService = AuthService(appSettings: settings)
-    let navService = NavigationService()
+    let navigationService = NavigationService()
     settings.enableUnlimitedStyleFeed = true
     
     return UnlimitedStyleFeedView()
         .environmentObject(settings)
         .environmentObject(authService)
-        .environmentObject(navService)
+        .environmentObject(navigationService)
 }
 // --- END OF COMPLETE FILE ---
