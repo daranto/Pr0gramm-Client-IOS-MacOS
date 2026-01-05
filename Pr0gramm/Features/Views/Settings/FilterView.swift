@@ -117,16 +117,25 @@ struct FilterView: View {
                 
                 // Neue Section für ausgeschlossene Tags
                 Section {
-                    ForEach($settings.excludedTags) { $tag in
+                    ForEach(Array(settings.excludedTags.enumerated()), id: \.element.id) { index, tag in
                         HStack {
-                            Toggle(isOn: $tag.isEnabled) {
+                            Toggle(isOn: Binding(
+                                get: { 
+                                    guard index < settings.excludedTags.count else { return false }
+                                    return settings.excludedTags[index].isEnabled 
+                                },
+                                set: { newValue in
+                                    guard index < settings.excludedTags.count else { return }
+                                    settings.excludedTags[index].isEnabled = newValue
+                                }
+                            )) {
                                 Text(tag.name)
                                     .font(UIConstants.bodyFont)
                             }
                             .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                             
                             Button(action: {
-                                settings.excludedTags.removeAll { $0.id == tag.id }
+                                removeExcludedTag(withId: tag.id)
                             }) {
                                 Image(systemName: "trash")
                                     .foregroundColor(.red)
@@ -134,6 +143,7 @@ struct FilterView: View {
                             .buttonStyle(.plain)
                         }
                     }
+                    .onDelete(perform: deleteExcludedTags)
                     
                     HStack {
                         TextField("Tag hinzufügen", text: $newExcludedTag)
@@ -179,8 +189,22 @@ struct FilterView: View {
             newExcludedTag = ""
             return
         }
-        settings.excludedTags.append(ExcludedTag(name: trimmedTag, isEnabled: true))
+        withAnimation {
+            settings.excludedTags.append(ExcludedTag(name: trimmedTag, isEnabled: true))
+        }
         newExcludedTag = ""
+    }
+    
+    private func removeExcludedTag(withId id: UUID) {
+        withAnimation {
+            settings.excludedTags.removeAll { $0.id == id }
+        }
+    }
+    
+    private func deleteExcludedTags(at offsets: IndexSet) {
+        withAnimation {
+            settings.excludedTags.remove(atOffsets: offsets)
+        }
     }
 }
 

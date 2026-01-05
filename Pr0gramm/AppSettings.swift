@@ -187,6 +187,7 @@ class AppSettings: ObservableObject {
     private static let accentColorChoiceKey = "accentColorChoice_v1"
     private static let localSeenItemsCacheKey = "seenItems_v1"
     private static let iCloudSeenItemsKey = "seenItemIDs_iCloud_v2"
+    private static let iCloudExcludedTagsKey = "excludedTags_iCloud_v1"
     private static let enableUnlimitedStyleFeedKey = "enableUnlimitedStyleFeed_v1"
     private static let enableBackgroundFetchForNotificationsKey = "enableBackgroundFetchForNotifications_v1"
     private static let backgroundFetchIntervalKey = "backgroundFetchInterval_v1"
@@ -353,12 +354,18 @@ class AppSettings: ObservableObject {
     }
     
     // Neue Einstellung für ausgeschlossene Tags
+    // Die iCloud ist die einzige "Source of Truth", UserDefaults ist nur ein lokaler Cache
     @Published var excludedTags: [ExcludedTag] {
         didSet {
+            Self.logger.info("Excluded tags changed to: \(self.excludedTags.map { "\($0.name)(\($0.isEnabled ? "on" : "off"))" })")
+            
+            // Lokaler Cache (nur als Backup, falls iCloud nicht verfügbar ist)
             if let encoded = try? JSONEncoder().encode(excludedTags) {
                 UserDefaults.standard.set(encoded, forKey: Self.excludedTagsKey)
-                Self.logger.info("Excluded tags changed to: \(self.excludedTags.map { "\($0.name)(\($0.isEnabled ? "on" : "off"))" })")
             }
+            
+            // iCloud ist die primäre Datenquelle - sofort synchronisieren
+            saveExcludedTagsToCloudSync()
         }
     }
 
@@ -531,13 +538,9 @@ class AppSettings: ObservableObject {
         self.backgroundFetchInterval = BackgroundFetchInterval(rawValue: initialRawFetchInterval) ?? .minutes60
         self.forcePhoneLayoutOnPadAndMac = UserDefaults.standard.bool(forKey: Self.forcePhoneLayoutOnPadAndMacKey)
         
-        // Load excluded tags
-        if let data = UserDefaults.standard.data(forKey: Self.excludedTagsKey),
-           let decoded = try? JSONDecoder().decode([ExcludedTag].self, from: data) {
-            self.excludedTags = decoded
-        } else {
-            self.excludedTags = []
-        }
+        // Load excluded tags - iCloud ist die primäre Datenquelle
+        // Wir laden NICHT von UserDefaults beim Start, sondern warten auf iCloud
+        self.excludedTags = []
         
         Self.logger.info("AppSettings initialized (Stage 2 Log):")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")
@@ -581,6 +584,7 @@ class AppSettings: ObservableObject {
         setupCloudKitKeyValueStoreObserver()
         Task {
             await loadSeenItemIDs()
+            await loadExcludedTagsFromCloud()
             await updateCacheSizes()
         }
     }
@@ -821,33 +825,144 @@ class AppSettings: ObservableObject {
     private func handleCloudKitStoreChange(notification: Notification, cloudStoreToUse: NSUbiquitousKeyValueStore) async {
         Self.logger.info("Received iCloud KVS didChangeExternallyNotification.")
         guard let userInfo = notification.userInfo, let changeReason = userInfo[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int else { Self.logger.warning("Could not get change reason from KVS notification."); return }
-        guard let changedKeys = userInfo[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String], changedKeys.contains(Self.iCloudSeenItemsKey) else { Self.logger.debug("KVS change notification did not contain our key (\(Self.iCloudSeenItemsKey)). Ignoring."); return }
-        Self.logger.info("Change detected for our key (\(Self.iCloudSeenItemsKey)) in iCloud KVS.")
+        guard let changedKeys = userInfo[NSUbiquitousKeyValueStoreChangedKeysKey] as? [String] else { Self.logger.debug("KVS change notification did not contain changedKeys. Ignoring."); return }
+        
+        let seenItemsChanged = changedKeys.contains(Self.iCloudSeenItemsKey)
+        let excludedTagsChanged = changedKeys.contains(Self.iCloudExcludedTagsKey)
+        
+        guard seenItemsChanged || excludedTagsChanged else { 
+            Self.logger.debug("KVS change notification did not contain our keys. Ignoring."); 
+            return 
+        }
+        
+        Self.logger.info("Change detected for our keys in iCloud KVS. SeenItems: \(seenItemsChanged), ExcludedTags: \(excludedTagsChanged)")
 
         switch changeReason {
         case NSUbiquitousKeyValueStoreServerChange, NSUbiquitousKeyValueStoreInitialSyncChange:
             Self.logger.debug("Change reason: ServerChange or InitialSyncChange.")
-            guard let cloudData = cloudStoreToUse.data(forKey: Self.iCloudSeenItemsKey) else {
-                Self.logger.warning("Our key (\(Self.iCloudSeenItemsKey)) was reportedly changed, but no data found in KVS. Possibly deleted externally?")
-                await MainActor.run { self.seenItemIDs = [] }
-                await self.cacheService.clearCache(forKey: Self.localSeenItemsCacheKey)
-                Self.logger.info("Cleared local seen items state because key was missing in iCloud after external change notification.")
-                return
-            }
-            do {
-                let incomingIDs = try JSONDecoder().decode(Set<Int>.self, from: cloudData); Self.logger.info("Successfully decoded \(incomingIDs.count) seen IDs from external iCloud KVS change.")
-                let localIDs = self.seenItemIDs; let mergedIDs = localIDs.union(incomingIDs)
-                if mergedIDs.count > localIDs.count || mergedIDs != localIDs {
-                    await MainActor.run { self.seenItemIDs = mergedIDs }
-                    Self.logger.info("Merged external seen IDs. New total: \(mergedIDs.count).")
-                    Task.detached(priority: .background) { await self.cacheService.saveSeenIDs(mergedIDs, forKey: Self.localSeenItemsCacheKey) }
-                } else {
-                    Self.logger.debug("Incoming seen IDs did not add new items or change the local set. No UI update needed.")
+            
+            // Handle seen items changes
+            if seenItemsChanged {
+                guard let cloudData = cloudStoreToUse.data(forKey: Self.iCloudSeenItemsKey) else {
+                    Self.logger.warning("Our key (\(Self.iCloudSeenItemsKey)) was reportedly changed, but no data found in KVS. Possibly deleted externally?")
+                    await MainActor.run { self.seenItemIDs = [] }
+                    await self.cacheService.clearCache(forKey: Self.localSeenItemsCacheKey)
+                    Self.logger.info("Cleared local seen items state because key was missing in iCloud after external change notification.")
+                    return
                 }
-            } catch { Self.logger.error("Failed to decode seen IDs from external iCloud KVS change data: \(error.localizedDescription)") }
-        case NSUbiquitousKeyValueStoreAccountChange: Self.logger.warning("iCloud account changed. Reloading seen items state."); await loadSeenItemIDs()
-        case NSUbiquitousKeyValueStoreQuotaViolationChange: Self.logger.error("iCloud KVS Quota Violation! Syncing might stop.")
-        default: Self.logger.warning("Unhandled iCloud KVS change reason: \(changeReason)"); break
+                do {
+                    let incomingIDs = try JSONDecoder().decode(Set<Int>.self, from: cloudData); Self.logger.info("Successfully decoded \(incomingIDs.count) seen IDs from external iCloud KVS change.")
+                    let localIDs = self.seenItemIDs; let mergedIDs = localIDs.union(incomingIDs)
+                    if mergedIDs.count > localIDs.count || mergedIDs != localIDs {
+                        await MainActor.run { self.seenItemIDs = mergedIDs }
+                        Self.logger.info("Merged external seen IDs. New total: \(mergedIDs.count).")
+                        Task.detached(priority: .background) { await self.cacheService.saveSeenIDs(mergedIDs, forKey: Self.localSeenItemsCacheKey) }
+                    } else {
+                        Self.logger.debug("Incoming seen IDs did not add new items or change the local set. No UI update needed.")
+                    }
+                } catch { Self.logger.error("Failed to decode seen IDs from external iCloud KVS change data: \(error.localizedDescription)") }
+            }
+            
+            // Handle excluded tags changes
+            if excludedTagsChanged {
+                guard let cloudData = cloudStoreToUse.data(forKey: Self.iCloudExcludedTagsKey) else {
+                    Self.logger.warning("Excluded tags key was changed but no data found in iCloud. Using empty array.")
+                    await MainActor.run { 
+                        self.excludedTags = [] 
+                    }
+                    UserDefaults.standard.removeObject(forKey: Self.excludedTagsKey)
+                    return
+                }
+                do {
+                    let incomingTags = try JSONDecoder().decode([ExcludedTag].self, from: cloudData)
+                    Self.logger.info("Received \(incomingTags.count) excluded tags from iCloud (external change).")
+                    
+                    // iCloud ist die Source of Truth - überschreibe lokale Daten komplett
+                    await MainActor.run { 
+                        self.excludedTags = incomingTags
+                    }
+                    
+                    // Cache lokal aktualisieren
+                    if let encoded = try? JSONEncoder().encode(incomingTags) {
+                        UserDefaults.standard.set(encoded, forKey: Self.excludedTagsKey)
+                    }
+                } catch { 
+                    Self.logger.error("Failed to decode excluded tags from iCloud: \(error.localizedDescription)") 
+                }
+            }
+            
+        case NSUbiquitousKeyValueStoreAccountChange: 
+            Self.logger.warning("iCloud account changed. Reloading seen items and excluded tags state.")
+            await loadSeenItemIDs()
+            await loadExcludedTagsFromCloud()
+        case NSUbiquitousKeyValueStoreQuotaViolationChange: 
+            Self.logger.error("iCloud KVS Quota Violation! Syncing might stop.")
+        default: 
+            Self.logger.warning("Unhandled iCloud KVS change reason: \(changeReason)"); 
+            break
+        }
+    }
+    
+    // Synchrone Version für didSet (läuft auf dem aktuellen Thread)
+    private func saveExcludedTagsToCloudSync() {
+        let tagsToSave = self.excludedTags
+        Self.logger.debug("Sync Save: Saving \(tagsToSave.count) excluded tags to iCloud KVS...")
+        do {
+            let data = try JSONEncoder().encode(tagsToSave)
+            self.cloudStore.set(data, forKey: Self.iCloudExcludedTagsKey)
+            let syncSuccess = self.cloudStore.synchronize()
+            Self.logger.info("Sync Save: Saved excluded tags to iCloud KVS. Synchronize requested: \(syncSuccess).")
+        } catch {
+            Self.logger.error("Sync Save: Failed to encode or save excluded tags to iCloud KVS: \(error.localizedDescription)")
+        }
+    }
+    
+    // Load excluded tags from iCloud - iCloud ist die einzige Source of Truth
+    private func loadExcludedTagsFromCloud() async {
+        Self.logger.debug("Loading excluded tags from iCloud (primary source)...")
+        
+        if let cloudData = cloudStore.data(forKey: Self.iCloudExcludedTagsKey) {
+            Self.logger.debug("Found data in iCloud KVS for excluded tags.")
+            do {
+                let decodedTags = try JSONDecoder().decode([ExcludedTag].self, from: cloudData)
+                
+                await MainActor.run { 
+                    self.excludedTags = decodedTags 
+                }
+                Self.logger.info("Successfully loaded \(decodedTags.count) excluded tags from iCloud KVS.")
+                
+                // Cache lokal aktualisieren
+                if let encoded = try? JSONEncoder().encode(decodedTags) {
+                    UserDefaults.standard.set(encoded, forKey: Self.excludedTagsKey)
+                }
+            } catch {
+                Self.logger.error("Failed to decode excluded tags from iCloud KVS: \(error.localizedDescription)")
+                // Fallback zu lokalem Cache nur bei Fehler
+                await loadExcludedTagsFromLocalCache()
+            }
+        } else {
+            Self.logger.info("No data in iCloud KVS for excluded tags.")
+            // Versuche lokalen Cache zu laden und zu iCloud hochzuladen
+            await loadExcludedTagsFromLocalCache()
+        }
+    }
+    
+    // Fallback: Lade von lokalem Cache (nur wenn iCloud nicht verfügbar ist)
+    private func loadExcludedTagsFromLocalCache() async {
+        if let data = UserDefaults.standard.data(forKey: Self.excludedTagsKey),
+           let decoded = try? JSONDecoder().decode([ExcludedTag].self, from: data) {
+            Self.logger.info("Loaded \(decoded.count) excluded tags from local cache (fallback).")
+            await MainActor.run { 
+                self.excludedTags = decoded 
+            }
+            // Sync zu iCloud
+            Self.logger.info("Syncing local cached tags up to iCloud...")
+            saveExcludedTagsToCloudSync()
+        } else {
+            Self.logger.info("No local cache available. Starting with empty excluded tags.")
+            await MainActor.run { 
+                self.excludedTags = [] 
+            }
         }
     }
 
