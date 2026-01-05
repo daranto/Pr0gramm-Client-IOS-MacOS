@@ -10,6 +10,20 @@ import SwiftUI // Needed for ColorScheme, Color
 import BackgroundTasks // Für BGTaskScheduler
 import UserNotifications // Für Berechtigungen und Badge
 
+// MARK: - Excluded Tag Model
+
+struct ExcludedTag: Codable, Identifiable, Equatable {
+    let id: UUID
+    var name: String
+    var isEnabled: Bool
+    
+    init(id: UUID = UUID(), name: String, isEnabled: Bool = true) {
+        self.id = id
+        self.name = name
+        self.isEnabled = isEnabled
+    }
+}
+
 enum BackgroundFetchInterval: Int, CaseIterable, Identifiable {
     case minutes30 = 1800 // 30 * 60
     case minutes60 = 3600 // 60 * 60
@@ -177,6 +191,7 @@ class AppSettings: ObservableObject {
     private static let enableBackgroundFetchForNotificationsKey = "enableBackgroundFetchForNotifications_v1"
     private static let backgroundFetchIntervalKey = "backgroundFetchInterval_v1"
     private static let forcePhoneLayoutOnPadAndMacKey = "forcePhoneLayoutOnPadAndMac_v1" // Neuer Key
+    private static let excludedTagsKey = "excludedTags_v1" // Neue Key für ausgeschlossene Tags
     private var keyValueStoreChangeObserver: NSObjectProtocol?
 
     @Published var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
@@ -336,6 +351,16 @@ class AppSettings: ObservableObject {
             }
         }
     }
+    
+    // Neue Einstellung für ausgeschlossene Tags
+    @Published var excludedTags: [ExcludedTag] {
+        didSet {
+            if let encoded = try? JSONEncoder().encode(excludedTags) {
+                UserDefaults.standard.set(encoded, forKey: Self.excludedTagsKey)
+                Self.logger.info("Excluded tags changed to: \(self.excludedTags.map { "\($0.name)(\($0.isEnabled ? "on" : "off"))" })")
+            }
+        }
+    }
 
 
     @Published var transientSessionMuteState: Bool? = nil
@@ -439,6 +464,15 @@ class AppSettings: ObservableObject {
     var apiShowJunk: Bool {
         return feedType == .junk
     }
+    
+    /// Gibt einen Tag-String für die API zurück, der alle ausgeschlossenen Tags im Format "! -tag1 -tag2" enthält.
+    /// Falls keine Tags ausgeschlossen sind, wird `nil` zurückgegeben.
+    var apiExcludedTagsString: String? {
+        let enabledTags = excludedTags.filter { $0.isEnabled }
+        guard !enabledTags.isEmpty else { return nil }
+        let tagString = enabledTags.map { "-\($0.name)" }.joined(separator: " ")
+        return "! \(tagString)"
+    }
 
     var hasActiveContentFilter: Bool {
         if isUserLoggedInForApiFlags {
@@ -496,6 +530,14 @@ class AppSettings: ObservableObject {
         let initialRawFetchInterval = UserDefaults.standard.integer(forKey: Self.backgroundFetchIntervalKey)
         self.backgroundFetchInterval = BackgroundFetchInterval(rawValue: initialRawFetchInterval) ?? .minutes60
         self.forcePhoneLayoutOnPadAndMac = UserDefaults.standard.bool(forKey: Self.forcePhoneLayoutOnPadAndMacKey)
+        
+        // Load excluded tags
+        if let data = UserDefaults.standard.data(forKey: Self.excludedTagsKey),
+           let decoded = try? JSONDecoder().decode([ExcludedTag].self, from: data) {
+            self.excludedTags = decoded
+        } else {
+            self.excludedTags = []
+        }
         
         Self.logger.info("AppSettings initialized (Stage 2 Log):")
         Self.logger.info("- isVideoMuted: \(self.isVideoMuted)")

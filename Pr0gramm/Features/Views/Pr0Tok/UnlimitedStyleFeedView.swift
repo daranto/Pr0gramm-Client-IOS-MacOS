@@ -137,7 +137,7 @@ struct UnlimitedStyleFeedView: View {
                  scrolledItemID = activeItemID ?? dummyStartItemID
             }
         }
-        .task(id: "\(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType.rawValue)-\(settings.hideSeenItems)") {
+        .task(id: "\(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType.rawValue)-\(settings.hideSeenItems)-\(settings.excludedTags.map { "\($0.id.uuidString):\($0.isEnabled)" }.joined())") {
             guard !isCurrentlyInSystemFullscreen else {
                 Self.logger.info("Task for parameter change skipped: Currently in system fullscreen.")
                 return
@@ -809,6 +809,7 @@ struct UnlimitedStyleFeedView: View {
                     let apiResponse = try await apiService.fetchItems(
                         flags: currentApiFlagsForThisRefresh,
                         promoted: settings.apiPromoted,
+                        tags: settings.apiExcludedTagsString,
                         olderThanId: currentOlderThanIdForRefreshLoop,
                         showJunkParameter: settings.apiShowJunk
                     )
@@ -839,6 +840,7 @@ struct UnlimitedStyleFeedView: View {
                 let apiResponse = try await apiService.fetchItems(
                     flags: currentApiFlagsForThisRefresh,
                     promoted: settings.apiPromoted,
+                    tags: settings.apiExcludedTagsString,
                     showJunkParameter: settings.apiShowJunk
                 )
                 allFetchedUnseenItems = apiResponse.items
@@ -942,6 +944,7 @@ struct UnlimitedStyleFeedView: View {
                 let apiResponse = try await apiService.fetchItems(
                     flags: settings.apiFlags,
                     promoted: settings.apiPromoted,
+                    tags: settings.apiExcludedTagsString,
                     olderThanId: currentOlderForLoop,
                     showJunkParameter: settings.apiShowJunk
                 )

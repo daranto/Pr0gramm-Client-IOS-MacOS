@@ -121,6 +121,7 @@ struct FeedView: View {
             // --- OPTIMIERUNG: `onChange`-Handler zusammengefasst ---
             .onChange(of: settings.apiFlags) { triggerRefreshTask() }
             .onChange(of: settings.hideSeenItems) { triggerRefreshTask() }
+            .onChange(of: settings.excludedTags) { triggerRefreshTask() }
             .task {
                  FeedView.logger.debug("FeedView task started.")
                  playerManager.configure(settings: settings)
@@ -374,6 +375,7 @@ struct FeedView: View {
                 
                 let apiResponse = try await apiService.fetchItems(
                     flags: settings.apiFlags, promoted: settings.apiPromoted,
+                    tags: settings.apiExcludedTagsString,
                     olderThanId: currentOlderForLoop, showJunkParameter: settings.apiShowJunk
                 )
 
@@ -395,6 +397,7 @@ struct FeedView: View {
         } else {
             let apiResponse = try await apiService.fetchItems(
                 flags: settings.apiFlags, promoted: settings.apiPromoted,
+                tags: settings.apiExcludedTagsString,
                 olderThanId: olderThanId, showJunkParameter: settings.apiShowJunk
             )
             let currentItemIDs = await MainActor.run { Set(self.items.map { $0.id }) }
