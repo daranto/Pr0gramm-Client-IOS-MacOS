@@ -15,6 +15,9 @@ fileprivate struct UnlimitedVotableTagView: View {
     let onTapTag: () -> Void
 
     @EnvironmentObject var authService: AuthService
+    @EnvironmentObject var settings: AppSettings
+    
+    @State private var showExcludeConfirmation = false
 
     private let characterLimit = 10
     private var displayText: String {
@@ -24,6 +27,10 @@ fileprivate struct UnlimitedVotableTagView: View {
         return tag.tag
     }
     private let tagVoteButtonFont: Font = .caption
+    
+    private var isTagAlreadyExcluded: Bool {
+        settings.excludedTags.contains { $0.name.lowercased() == tag.tag.lowercased() }
+    }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -44,7 +51,25 @@ fileprivate struct UnlimitedVotableTagView: View {
                 .padding(.vertical, 4)
                 .contentShape(Capsule())
                 .onTapGesture(perform: onTapTag)
-
+                .contextMenu {
+                    if isTagAlreadyExcluded {
+                        Button(action: {
+                            removeTagFromExcludedList()
+                        }) {
+                            Label("Tag wieder erlauben", systemImage: "checkmark.circle")
+                        }
+                    } else {
+                        Button(action: {
+                            showExcludeConfirmation = true
+                        }) {
+                            Label("Tag ausschließen", systemImage: "xmark.circle")
+                        }
+                    }
+                    
+                    Button(action: onTapTag) {
+                        Label("Tag suchen", systemImage: "magnifyingglass")
+                    }
+                }
 
             if authService.isLoggedIn {
                 Button(action: onUpvote) {
@@ -59,6 +84,37 @@ fileprivate struct UnlimitedVotableTagView: View {
         .padding(.horizontal, authService.isLoggedIn ? 6 : 0)
         .background(Color.black.opacity(0.4))
         .clipShape(Capsule())
+        .confirmationDialog(
+            "Tag '\(tag.tag)' ausschließen?",
+            isPresented: $showExcludeConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Ausschließen", role: .destructive) {
+                excludeTag()
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text("Posts mit diesem Tag werden nicht mehr im Feed angezeigt. Du kannst dies in den Filtereinstellungen rückgängig machen.")
+        }
+    }
+    
+    private func excludeTag() {
+        guard !isTagAlreadyExcluded else { return }
+        
+        withAnimation {
+            let newTag = ExcludedTag(name: tag.tag, isEnabled: true)
+            settings.excludedTags.append(newTag)
+        }
+        
+        Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UnlimitedFeedItemView").info("Tag '\(tag.tag)' wurde zur Ausschlussliste hinzugefügt.")
+    }
+    
+    private func removeTagFromExcludedList() {
+        withAnimation {
+            settings.excludedTags.removeAll { $0.name.lowercased() == tag.tag.lowercased() }
+        }
+        
+        Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UnlimitedFeedItemView").info("Tag '\(tag.tag)' wurde von der Ausschlussliste entfernt.")
     }
 }
 
