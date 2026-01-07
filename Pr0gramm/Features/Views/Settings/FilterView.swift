@@ -71,32 +71,26 @@ struct FilterView: View {
                     // Im Junk-Feed wird NSFP durch `settings.showNSFP` separat gesteuert, falls `settings.showSFW` aus ist.
                     // --- END MODIFICATION ---
 
-                    if authService.isLoggedIn && relevantFeedTypeForFilterBehavior != .junk {
+                    if authService.isLoggedIn {
+                        // Alle Filter für eingeloggte User anzeigen, unabhängig vom Feed-Typ
                         Toggle("NSFW (Not Safe for Work)", isOn: $settings.showNSFW)
                             .font(UIConstants.bodyFont)
                         Toggle("NSFL (Not Safe for Life)", isOn: $settings.showNSFL)
                              .font(UIConstants.bodyFont)
                         Toggle("POL (Politik)", isOn: $settings.showPOL)
                              .font(UIConstants.bodyFont)
-                    } else if !authService.isLoggedIn && relevantFeedTypeForFilterBehavior != .junk {
+                        
+                        // NSFP Toggle nur im Junk-Feed anzeigen
+                        if relevantFeedTypeForFilterBehavior == .junk {
+                            Toggle("NSFP (Not Safe for Public)", isOn: $settings.showNSFP)
+                                .font(UIConstants.bodyFont)
+                                .disabled(settings.showSFW) // NSFP nur wählbar, wenn SFW im Junk aus ist
+                        }
+                    } else {
+                        // Nachricht für nicht eingeloggte User
                         Text("Melde dich an, um NSFW/NSFL Filter anzupassen.")
                            .font(UIConstants.bodyFont)
                            .foregroundColor(.secondary)
-                    } else if authService.isLoggedIn && relevantFeedTypeForFilterBehavior == .junk {
-                        // Im Junk-Feed ist NSFP relevant, falls SFW aus ist.
-                        // Da wir den direkten Toggle entfernt haben, kann der User NSFP nur indirekt
-                        // über die Startfilter-Einstellung (falls vorhanden) oder den Standardwert beeinflussen.
-                        // Für die `FilterView` bedeutet das, dass der User hier nur SFW für den Junk-Feed ein/ausschalten kann.
-                        // Wenn SFW aus ist und showNSFP (intern) an, wird Junk-Feed NSFP zeigen.
-                        // Wenn SFW an ist, wird Junk-Feed SFW zeigen.
-                        // Dies ist eine Vereinfachung basierend auf der Anforderung, den NSFP-Toggle zu entfernen.
-                        // Wenn SFW im Junk-Feed aus ist, wird `settings.showNSFP` entscheiden, ob NSFP-Content (Flag 8) geladen wird.
-                        // Der User hat hier keinen direkten Einfluss mehr auf `settings.showNSFP` im Junk-Fall,
-                        // außer `settings.showSFW` zu toggeln, was dann `settings.showNSFP` für Junk nicht beeinflusst.
-                        // Diese Logik ist etwas implizit geworden.
-                         Toggle("NSFP (Not Safe for Public)", isOn: $settings.showNSFP)
-                            .font(UIConstants.bodyFont)
-                            .disabled(settings.showSFW) // NSFP nur wählbar, wenn SFW im Junk aus ist
                     }
 
                 } header: {
@@ -164,8 +158,13 @@ struct FilterView: View {
                 } header: {
                     Text("Tags ausschließen")
                 } footer: {
-                    Text("Aktivierte Tags werden aus dem Feed gefiltert. Deaktiviere Tags, um sie temporär zu erlauben.")
-                        .font(UIConstants.footnoteFont)
+                    if relevantFeedTypeForFilterBehavior == .junk {
+                        Text("Ausgeschlossene Tags gelten nur für 'Neu' und 'Beliebt', nicht für 'Müll'.")
+                            .font(UIConstants.footnoteFont)
+                    } else {
+                        Text("Aktivierte Tags werden aus dem Feed gefiltert. Deaktiviere Tags, um sie temporär zu erlauben.")
+                            .font(UIConstants.footnoteFont)
+                    }
                 }
                  .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
             }

@@ -657,8 +657,8 @@ struct SearchView: View {
         }
         
         if !tagComponents.isEmpty {
-            // Add the ! prefix and join with spaces
-            finalTags = "! " + tagComponents.joined(separator: " ")
+            // Join search terms with spaces (no ! prefix for normal search)
+            finalTags = tagComponents.joined(separator: " ")
         }
         
         // Allow search if we have content filters, search term, or benis filter
@@ -737,8 +737,8 @@ struct SearchView: View {
         }
         
         if !tagComponents.isEmpty {
-            // Add the ! prefix and join with spaces
-            finalTags = "! " + tagComponents.joined(separator: " ")
+            // Join search terms with spaces (no ! prefix for normal search)
+            finalTags = tagComponents.joined(separator: " ")
         }
         
         if currentApiFlags == 0 && (finalTags == nil || finalTags!.isEmpty) {

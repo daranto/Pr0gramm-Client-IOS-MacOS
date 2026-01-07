@@ -433,11 +433,16 @@ class AppSettings: ObservableObject {
             }
 
             if feedType == .junk {
+                // Im Junk-Feed werden alle Flags berücksichtigt
                 var flags = 0
                 if showSFW { flags |= 1 }
                 if showNSFP { flags |= 8 }
+                if showNSFW { flags |= 2 }
+                if showNSFL { flags |= 4 }
+                if showPOL { flags |= 16 }
                 return flags == 0 ? 1 : flags
             } else {
+                // In anderen Feeds wird NSFP automatisch mit SFW gekoppelt
                 var flags = 0
                 if showSFW {
                     flags |= 1
@@ -472,13 +477,22 @@ class AppSettings: ObservableObject {
         return feedType == .junk
     }
     
-    /// Gibt einen Tag-String für die API zurück, der alle ausgeschlossenen Tags im Format "! -tag1 -tag2" enthält.
-    /// Falls keine Tags ausgeschlossen sind, wird `nil` zurückgegeben.
+    /// Gibt einen Tag-String für die API zurück, der alle ausgeschlossenen Tags im Format "!++-tag1,+-tag2" enthält.
+    /// Falls keine Tags ausgeschlossen sind oder der aktuelle Feed-Typ "Müll" ist, wird `nil` zurückgegeben.
+    /// Leerzeichen in Tag-Namen werden durch "+-" ersetzt (z.B. "Wichteln 2025" wird zu "+-Wichteln+-2025").
+    /// Ausgeschlossene Tags gelten nur für "Neu" und "Beliebt", nicht für "Müll".
     var apiExcludedTagsString: String? {
+        // Im Müll-Feed werden keine Tags ausgeschlossen
+        guard feedType != .junk else { return nil }
+        
         let enabledTags = excludedTags.filter { $0.isEnabled }
         guard !enabledTags.isEmpty else { return nil }
-        let tagString = enabledTags.map { "-\($0.name)" }.joined(separator: " ")
-        return "! \(tagString)"
+        let tagString = enabledTags.map { tag in
+            // Leerzeichen in Tag-Namen durch "+-" ersetzen
+            let processedName = tag.name.replacingOccurrences(of: " ", with: "+-")
+            return "+-\(processedName)"
+        }.joined(separator: ",")
+        return "!\(tagString)"
     }
 
     var hasActiveContentFilter: Bool {

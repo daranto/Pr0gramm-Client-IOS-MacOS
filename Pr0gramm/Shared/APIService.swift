@@ -458,10 +458,10 @@ class APIService {
         queryItems.append(URLQueryItem(name: "flags", value: String(flags)))
         logDescriptionParts.append("flags=\(flags)")
 
-        if showJunkParameter {
-            queryItems.append(URLQueryItem(name: "show_junk", value: "1"))
-            logDescriptionParts.append("show_junk=1")
-        }
+        // show_junk wird immer mitgesendet: 1 für Junk-Feed, 0 für andere Feeds
+        let showJunkValue = showJunkParameter ? "1" : "0"
+        queryItems.append(URLQueryItem(name: "show_junk", value: showJunkValue))
+        logDescriptionParts.append("show_junk=\(showJunkValue)")
 
         if let name = collectionNameForUser {
             queryItems.append(URLQueryItem(name: "collection", value: name))
@@ -480,7 +480,7 @@ class APIService {
             logDescriptionParts.append("user=\(regularUser) (for uploads/feed)")
         }
 
-        if let promotedValue = promoted, collectionNameForUser == nil, !showJunkParameter {
+        if let promotedValue = promoted, collectionNameForUser == nil {
             queryItems.append(URLQueryItem(name: "promoted", value: String(promotedValue)))
             logDescriptionParts.append("promoted=\(promotedValue)")
         }
@@ -496,7 +496,17 @@ class APIService {
         
         urlComponents.queryItems = queryItems.removingDuplicatesByName()
         
-        guard let url = urlComponents.url else { throw URLError(.badURL) }
+        guard var url = urlComponents.url else { throw URLError(.badURL) }
+        
+        // Fix: URLComponents encoded Leerzeichen als %20, aber die pr0gramm API erwartet +
+        // Wir ersetzen %20 durch + im Query-String
+        if let urlString = url.absoluteString.components(separatedBy: "?").first,
+           let queryString = url.query {
+            let fixedQueryString = queryString.replacingOccurrences(of: "%20", with: "+")
+            if let fixedURL = URL(string: urlString + "?" + fixedQueryString) {
+                url = fixedURL
+            }
+        }
         
         let logDescription = logDescriptionParts.joined(separator: ", ")
         APIService.logger.info("Fetching items from \(endpoint) with params: [\(logDescription)] URL: \(url.absoluteString)")
