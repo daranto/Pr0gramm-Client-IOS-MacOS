@@ -14,14 +14,16 @@ struct FilterView: View {
     let relevantFeedTypeForFilterBehavior: FeedType?
     let hideFeedOptions: Bool
     let showHideSeenItemsToggle: Bool
+    let showExcludedTagsSection: Bool
     
     @State private var newExcludedTag: String = ""
 
 
-    init(relevantFeedTypeForFilterBehavior: FeedType?, hideFeedOptions: Bool = false, showHideSeenItemsToggle: Bool = true) {
+    init(relevantFeedTypeForFilterBehavior: FeedType?, hideFeedOptions: Bool = false, showHideSeenItemsToggle: Bool = true, showExcludedTagsSection: Bool = true) {
         self.relevantFeedTypeForFilterBehavior = relevantFeedTypeForFilterBehavior
         self.hideFeedOptions = hideFeedOptions
         self.showHideSeenItemsToggle = showHideSeenItemsToggle
+        self.showExcludedTagsSection = showExcludedTagsSection
     }
 
     var body: some View {
@@ -110,63 +112,65 @@ struct FilterView: View {
                  .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
                 
                 // Neue Section für ausgeschlossene Tags
-                Section {
-                    ForEach(Array(settings.excludedTags.enumerated()), id: \.element.id) { index, tag in
-                        HStack {
-                            Toggle(isOn: Binding(
-                                get: { 
-                                    guard index < settings.excludedTags.count else { return false }
-                                    return settings.excludedTags[index].isEnabled 
-                                },
-                                set: { newValue in
-                                    guard index < settings.excludedTags.count else { return }
-                                    settings.excludedTags[index].isEnabled = newValue
+                if showExcludedTagsSection {
+                    Section {
+                        ForEach(Array(settings.excludedTags.enumerated()), id: \.element.id) { index, tag in
+                            HStack {
+                                Toggle(isOn: Binding(
+                                    get: { 
+                                        guard index < settings.excludedTags.count else { return false }
+                                        return settings.excludedTags[index].isEnabled 
+                                    },
+                                    set: { newValue in
+                                        guard index < settings.excludedTags.count else { return }
+                                        settings.excludedTags[index].isEnabled = newValue
+                                    }
+                                )) {
+                                    Text(tag.name)
+                                        .font(UIConstants.bodyFont)
                                 }
-                            )) {
-                                Text(tag.name)
-                                    .font(UIConstants.bodyFont)
+                                .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                                
+                                Button(action: {
+                                    removeExcludedTag(withId: tag.id)
+                                }) {
+                                    Image(systemName: "trash")
+                                        .foregroundColor(.red)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                        }
+                        .onDelete(perform: deleteExcludedTags)
+                        
+                        HStack {
+                            TextField("Tag hinzufügen", text: $newExcludedTag)
+                                .font(UIConstants.bodyFont)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .onSubmit {
+                                    addExcludedTag()
+                                }
                             
-                            Button(action: {
-                                removeExcludedTag(withId: tag.id)
-                            }) {
-                                Image(systemName: "trash")
-                                    .foregroundColor(.red)
+                            Button(action: addExcludedTag) {
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundColor(settings.accentColorChoice.swiftUIColor)
                             }
                             .buttonStyle(.plain)
+                            .disabled(newExcludedTag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                    } header: {
+                        Text("Tags ausschließen")
+                    } footer: {
+                        if relevantFeedTypeForFilterBehavior == .junk {
+                            Text("Ausgeschlossene Tags gelten nur für 'Neu' und 'Beliebt', nicht für 'Müll'.")
+                                .font(UIConstants.footnoteFont)
+                        } else {
+                            Text("Aktivierte Tags werden aus dem Feed gefiltert. Deaktiviere Tags, um sie temporär zu erlauben.")
+                                .font(UIConstants.footnoteFont)
                         }
                     }
-                    .onDelete(perform: deleteExcludedTags)
-                    
-                    HStack {
-                        TextField("Tag hinzufügen", text: $newExcludedTag)
-                            .font(UIConstants.bodyFont)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .onSubmit {
-                                addExcludedTag()
-                            }
-                        
-                        Button(action: addExcludedTag) {
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundColor(settings.accentColorChoice.swiftUIColor)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(newExcludedTag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                } header: {
-                    Text("Tags ausschließen")
-                } footer: {
-                    if relevantFeedTypeForFilterBehavior == .junk {
-                        Text("Ausgeschlossene Tags gelten nur für 'Neu' und 'Beliebt', nicht für 'Müll'.")
-                            .font(UIConstants.footnoteFont)
-                    } else {
-                        Text("Aktivierte Tags werden aus dem Feed gefiltert. Deaktiviere Tags, um sie temporär zu erlauben.")
-                            .font(UIConstants.footnoteFont)
-                    }
+                     .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
                 }
-                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
             }
             .navigationTitle("Filter")
             #if os(iOS)

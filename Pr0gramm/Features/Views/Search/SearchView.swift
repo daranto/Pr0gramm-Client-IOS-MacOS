@@ -189,6 +189,16 @@ struct SearchView: View {
 
     @State private var minBenisFilter: Int = 0
     @State private var scrollResetCounter: Int = 0
+    
+    enum SearchArea: String, CaseIterable, Identifiable {
+        case new = "Neu"
+        case popular = "Beliebt"
+        case junk = "Müll"
+        
+        var id: String { self.rawValue }
+    }
+    
+    @State private var selectedSearchArea: SearchArea = .new
 
     private static let searchHistoryKey = "searchHistory_v1"
     private static let maxSearchHistoryCount = 100
@@ -323,7 +333,7 @@ struct SearchView: View {
                 }
         }
         .sheet(isPresented: $showingFilterSheet) {
-            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
+            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false, showExcludedTagsSection: false)
                 .environmentObject(settings)
                 .environmentObject(authService)
         }
@@ -371,24 +381,52 @@ struct SearchView: View {
         SearchView.logger.info("SearchView: Relevant global filter flag changed. Not auto-triggering search (awaiting explicit submit).")
     }
     
-    /// Sanitizes search terms by escaping special characters that could cause API errors
-    private func sanitizeSearchTerm(_ term: String) -> String {
-        // The pr0gramm API uses certain characters as special search operators:
-        // "!" = search operator prefix
-        // ":" = used for special filters (e.g., "s:1000" for benis filter)
-        // "|" = OR operator
+    /// Determines if the search term uses advanced search syntax
+    private func usesAdvancedSearchSyntax(_ term: String) -> Bool {
+        // Check for advanced search operators and filters:
+        // - Negation: ! at start (e.g., !(tag) or !tag at beginning)
+        // - Operators: |, -
+        // - Filters: u:, f:, s:, q:, i:, d:
+        // BUT NOT: Tags ending with ! (e.g., Test!, Benis!)
         
-        // If the term contains special characters, wrap it in quotes to search literally
-        // This tells the API to treat these characters as part of the search term, not operators
-        let specialCharacters = CharacterSet(charactersIn: "!:|")
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        if term.rangeOfCharacter(from: specialCharacters) != nil {
-            // Wrap in quotes and escape any existing quotes
-            let escapedTerm = term.replacingOccurrences(of: "\"", with: "\\\"")
-            return "\"\(escapedTerm)\""
+        // Check if it starts with ! (negation/exclusion syntax)
+        // But not if it's just a tag ending with !
+        if trimmed.hasPrefix("!") {
+            return true
         }
         
-        return term.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Check for operators
+        if trimmed.contains("|") || trimmed.contains("-") {
+            return true
+        }
+        
+        // Check for filters (word boundaries to avoid false positives)
+        let filterPrefixes = ["u:", "f:", "s:", "q:", "i:", "d:"]
+        for prefix in filterPrefixes {
+            if trimmed.contains(prefix) {
+                return true
+            }
+        }
+        
+        // Tags that just end with ! (like "Test!") are NOT advanced syntax
+        return false
+    }
+    
+    /// Prepares search term for API - either passes through advanced syntax or wraps simple tags
+    private func prepareSearchTermForAPI(_ term: String) -> String {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        if usesAdvancedSearchSyntax(trimmed) {
+            // Advanced syntax detected - pass through as-is to server
+            SearchView.logger.info("Advanced search syntax detected in term: '\(trimmed)'")
+            return trimmed
+        } else {
+            // Simple tag search - wrap with !() for standard tag matching
+            SearchView.logger.info("Simple tag search detected: '\(trimmed)'")
+            return "!(\(trimmed))"
+        }
     }
 
     @MainActor
@@ -419,13 +457,65 @@ struct SearchView: View {
         }
     }
 
+    /// Check if Benis slider should be disabled (when search contains ! or uses advanced syntax)
+    private var shouldDisableBenisSlider: Bool {
+        guard let searchTerm = currentSearchTagForAPI?.trimmingCharacters(in: .whitespacesAndNewlines), !searchTerm.isEmpty else {
+            return false
+        }
+        // Disable slider if:
+        // 1. Search term contains ! but doesn't start with it (e.g., "Test!")
+        // 2. Search term uses advanced syntax (starts with !, contains operators, etc.)
+        return searchTerm.contains("!") || usesAdvancedSearchSyntax(searchTerm)
+    }
+    
+    @ViewBuilder
+    private var searchAreaPicker: some View {
+        if #available(iOS 26.0, *) {
+            HStack(spacing: 8) {
+                Picker("Suchbereich", selection: $selectedSearchArea) {
+                    ForEach(SearchArea.allCases) { area in
+                        Text(area.rawValue).tag(area)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .glassEffect(.regular, in: .rect(cornerRadius: 18))
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+            .onChange(of: selectedSearchArea) { _, _ in
+                Task { await performSearchLogic(isInitialSearch: true) }
+            }
+        } else {
+            HStack(spacing: 8) {
+                Picker("Suchbereich", selection: $selectedSearchArea) {
+                    ForEach(SearchArea.allCases) { area in
+                        Text(area.rawValue).tag(area)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+            .onChange(of: selectedSearchArea) { _, _ in
+                Task { await performSearchLogic(isInitialSearch: true) }
+            }
+        }
+    }
+    
     @ViewBuilder
     private var benisFilterSlider: some View {
         if #available(iOS 26.0, *) {
             HStack(spacing: 12) {
                 Text("Benis:")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(shouldDisableBenisSlider ? .tertiary : .secondary)
                 
                 Slider(
                     value: Binding(
@@ -443,10 +533,12 @@ struct SearchView: View {
                     Text("Benis Filter")
                 }
                 .accentColor(.accentColor)
+                .disabled(shouldDisableBenisSlider)
+                .opacity(shouldDisableBenisSlider ? 0.5 : 1.0)
                 
                 Text("\(minBenisFilter)")
                     .font(.caption)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(shouldDisableBenisSlider ? .tertiary : .primary)
                     .frame(minWidth: 40, alignment: .trailing)
                 
                 if minBenisFilter > 0 {
@@ -459,6 +551,8 @@ struct SearchView: View {
                             .foregroundStyle(.secondary, .quaternary)
                     }
                     .buttonStyle(.plain)
+                    .disabled(shouldDisableBenisSlider)
+                    .opacity(shouldDisableBenisSlider ? 0.5 : 1.0)
                 }
             }
             .padding(.horizontal, 16)
@@ -471,7 +565,7 @@ struct SearchView: View {
             HStack(spacing: 12) {
                 Text("Benis:")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(shouldDisableBenisSlider ? .tertiary : .secondary)
                 
                 Slider(
                     value: Binding(
@@ -489,10 +583,12 @@ struct SearchView: View {
                     Text("Benis Filter")
                 }
                 .accentColor(.accentColor)
+                .disabled(shouldDisableBenisSlider)
+                .opacity(shouldDisableBenisSlider ? 0.5 : 1.0)
                 
                 Text("\(minBenisFilter)")
                     .font(.caption)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(shouldDisableBenisSlider ? .tertiary : .primary)
                     .frame(minWidth: 40, alignment: .trailing)
                 
                 if minBenisFilter > 0 {
@@ -505,6 +601,8 @@ struct SearchView: View {
                             .foregroundStyle(.secondary, .quaternary)
                     }
                     .buttonStyle(.plain)
+                    .disabled(shouldDisableBenisSlider)
+                    .opacity(shouldDisableBenisSlider ? 0.5 : 1.0)
                 }
             }
             .padding(.horizontal, 16)
@@ -597,7 +695,10 @@ struct SearchView: View {
                         .padding(.bottom)
                     }
                 } header: {
-                    benisFilterSlider
+                    VStack(spacing: 0) {
+                        searchAreaPicker
+                        benisFilterSlider
+                    }
                 }
             }
         }
@@ -638,17 +739,27 @@ struct SearchView: View {
 
         let currentApiFlags = apiFlagsForSearch
         let effectiveSearchTerm = currentSearchTagForAPI?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasBenisFilter = minBenisFilter > 0
+        let hasBenisFilter = minBenisFilter > 0 && !shouldDisableBenisSlider
         
         // Build the complete tags string including benis filter
         var finalTags: String? = nil
         var tagComponents: [String] = []
         
         if let searchTerm = effectiveSearchTerm, !searchTerm.isEmpty {
-            // Sanitize the search term to remove special characters that cause API errors
-            let sanitized = sanitizeSearchTerm(searchTerm)
-            if !sanitized.isEmpty {
-                tagComponents.append(sanitized)
+            // Check if this uses advanced syntax
+            if usesAdvancedSearchSyntax(searchTerm) {
+                // Advanced syntax - pass through as-is
+                SearchView.logger.info("Advanced search syntax detected in term: '\(searchTerm)'")
+                tagComponents.append(searchTerm)
+            } else if searchTerm.contains("!") {
+                // Tag contains ! but doesn't start with it (e.g., "Test!")
+                // Pass through without wrapping
+                SearchView.logger.info("Tag with ! detected (not advanced): '\(searchTerm)'")
+                tagComponents.append(searchTerm)
+            } else {
+                // Simple tag - wrap it
+                SearchView.logger.info("Simple tag search detected: '\(searchTerm)'")
+                tagComponents.append("!(\(searchTerm))")
             }
         }
         
@@ -657,8 +768,36 @@ struct SearchView: View {
         }
         
         if !tagComponents.isEmpty {
-            // Join search terms with spaces (no ! prefix for normal search)
-            finalTags = tagComponents.joined(separator: " ")
+            if tagComponents.count == 1 {
+                // Only one component
+                let component = tagComponents[0]
+                // Check if it's already wrapped or is advanced syntax
+                if component.hasPrefix("!(") && component.hasSuffix(")") {
+                    // Already wrapped - use as-is
+                    finalTags = component
+                } else if component.hasPrefix("s:") {
+                    // Benis filter alone - needs wrapping
+                    finalTags = "!(\(component))"
+                } else {
+                    // Other single component (e.g., advanced syntax like "Test!")
+                    finalTags = component
+                }
+            } else {
+                // Multiple components - combine with &
+                let firstComponent = tagComponents[0]
+                
+                // Check if first component contains ! or is already wrapped
+                let hasExclamation = firstComponent.contains("!")
+                let isWrapped = firstComponent.hasPrefix("!(") && firstComponent.hasSuffix(")")
+                
+                if isWrapped || hasExclamation {
+                    // Already wrapped OR contains ! - just join with &, no additional wrapping
+                    finalTags = tagComponents.joined(separator: " & ")
+                } else {
+                    // Simple tag without ! - wrap the entire combination
+                    finalTags = "!(\(tagComponents.joined(separator: " & ")))"
+                }
+            }
         }
         
         // Allow search if we have content filters, search term, or benis filter
@@ -680,11 +819,26 @@ struct SearchView: View {
         defer { Task { @MainActor in self.isLoading = false } }
 
         do {
+            // Determine promoted and showJunk based on selected search area
+            let promoted: Int?
+            let showJunk: Bool
+            switch selectedSearchArea {
+            case .new:
+                promoted = nil
+                showJunk = false
+            case .popular:
+                promoted = 1
+                showJunk = false
+            case .junk:
+                promoted = nil
+                showJunk = true
+            }
+            
             let apiResponse = try await apiService.fetchItems(
                 flags: currentApiFlags,
-                promoted: nil,
+                promoted: promoted,
                 tags: finalTags,
-                showJunkParameter: false
+                showJunkParameter: showJunk
             )
             let fetchedItems = apiResponse.items
             self.items = fetchedItems
@@ -718,17 +872,27 @@ struct SearchView: View {
     private func loadMoreSearch() async {
         let currentApiFlags = apiFlagsForSearch
         let effectiveSearchTerm = currentSearchTagForAPI?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasBenisFilter = minBenisFilter > 0
+        let hasBenisFilter = minBenisFilter > 0 && !shouldDisableBenisSlider
         
         // Build the complete tags string including benis filter
         var finalTags: String? = nil
         var tagComponents: [String] = []
         
         if let searchTerm = effectiveSearchTerm, !searchTerm.isEmpty {
-            // Sanitize the search term to remove special characters that cause API errors
-            let sanitized = sanitizeSearchTerm(searchTerm)
-            if !sanitized.isEmpty {
-                tagComponents.append(sanitized)
+            // Check if this uses advanced syntax
+            if usesAdvancedSearchSyntax(searchTerm) {
+                // Advanced syntax - pass through as-is
+                SearchView.logger.info("Advanced search syntax detected in term: '\(searchTerm)'")
+                tagComponents.append(searchTerm)
+            } else if searchTerm.contains("!") {
+                // Tag contains ! but doesn't start with it (e.g., "Test!")
+                // Pass through without wrapping
+                SearchView.logger.info("Tag with ! detected (not advanced): '\(searchTerm)'")
+                tagComponents.append(searchTerm)
+            } else {
+                // Simple tag - wrap it
+                SearchView.logger.info("Simple tag search detected: '\(searchTerm)'")
+                tagComponents.append("!(\(searchTerm))")
             }
         }
         
@@ -737,8 +901,36 @@ struct SearchView: View {
         }
         
         if !tagComponents.isEmpty {
-            // Join search terms with spaces (no ! prefix for normal search)
-            finalTags = tagComponents.joined(separator: " ")
+            if tagComponents.count == 1 {
+                // Only one component
+                let component = tagComponents[0]
+                // Check if it's already wrapped or is advanced syntax
+                if component.hasPrefix("!(") && component.hasSuffix(")") {
+                    // Already wrapped - use as-is
+                    finalTags = component
+                } else if component.hasPrefix("s:") {
+                    // Benis filter alone - needs wrapping
+                    finalTags = "!(\(component))"
+                } else {
+                    // Other single component (e.g., advanced syntax like "Test!")
+                    finalTags = component
+                }
+            } else {
+                // Multiple components - combine with &
+                let firstComponent = tagComponents[0]
+                
+                // Check if first component contains ! or is already wrapped
+                let hasExclamation = firstComponent.contains("!")
+                let isWrapped = firstComponent.hasPrefix("!(") && firstComponent.hasSuffix(")")
+                
+                if isWrapped || hasExclamation {
+                    // Already wrapped OR contains ! - just join with &, no additional wrapping
+                    finalTags = tagComponents.joined(separator: " & ")
+                } else {
+                    // Simple tag without ! - wrap the entire combination
+                    finalTags = "!(\(tagComponents.joined(separator: " & ")))"
+                }
+            }
         }
         
         if currentApiFlags == 0 && (finalTags == nil || finalTags!.isEmpty) {
@@ -755,12 +947,27 @@ struct SearchView: View {
         defer { Task { @MainActor in self.isLoadingMore = false } }
 
         do {
+            // Determine promoted and showJunk based on selected search area
+            let promoted: Int?
+            let showJunk: Bool
+            switch selectedSearchArea {
+            case .new:
+                promoted = nil
+                showJunk = false
+            case .popular:
+                promoted = 1
+                showJunk = false
+            case .junk:
+                promoted = nil
+                showJunk = true
+            }
+            
             let apiResponse = try await apiService.fetchItems(
                 flags: currentApiFlags,
-                promoted: nil,
+                promoted: promoted,
                 tags: finalTags,
                 olderThanId: lastItemId,
-                showJunkParameter: false
+                showJunkParameter: showJunk
             )
             let newItems = apiResponse.items
             SearchView.logger.info("Loaded \(newItems.count) more search items from API.")

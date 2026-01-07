@@ -498,11 +498,16 @@ class APIService {
         
         guard var url = urlComponents.url else { throw URLError(.badURL) }
         
-        // Fix: URLComponents encoded Leerzeichen als %20, aber die pr0gramm API erwartet +
-        // Wir ersetzen %20 durch + im Query-String
+        // Fix: URLComponents escaped Sonderzeichen, aber die pr0gramm API erwartet diese unescaped
+        // Wir ersetzen %20 durch + und decodieren andere Sonderzeichen wie !, (, ), "
         if let urlString = url.absoluteString.components(separatedBy: "?").first,
            let queryString = url.query {
-            let fixedQueryString = queryString.replacingOccurrences(of: "%20", with: "+")
+            var fixedQueryString = queryString.replacingOccurrences(of: "%20", with: "+")
+            // pr0gramm API erwartet ! ( ) " unescaped in Tags
+            fixedQueryString = fixedQueryString.replacingOccurrences(of: "%21", with: "!")
+            fixedQueryString = fixedQueryString.replacingOccurrences(of: "%28", with: "(")
+            fixedQueryString = fixedQueryString.replacingOccurrences(of: "%29", with: ")")
+            fixedQueryString = fixedQueryString.replacingOccurrences(of: "%22", with: "\"")
             if let fixedURL = URL(string: urlString + "?" + fixedQueryString) {
                 url = fixedURL
             }
