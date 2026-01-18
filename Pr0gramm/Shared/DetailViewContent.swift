@@ -229,8 +229,14 @@ struct DetailViewContent: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.black)
                     } else if let actualPlayer = playerManager.player, playerManager.playerItemID == item.id {
-                        CustomVideoPlayerRepresentable(player: actualPlayer, handler: keyboardActionHandler, onWillBeginFullScreen: onWillBeginFullScreen, onWillEndFullScreen: onWillEndFullScreen, horizontalSizeClass: horizontalSizeClass)
-                            .id(item.id)
+                        VideoPlayerWithMuteButton(
+                            player: actualPlayer,
+                            handler: keyboardActionHandler,
+                            onWillBeginFullScreen: onWillBeginFullScreen,
+                            onWillEndFullScreen: onWillEndFullScreen,
+                            horizontalSizeClass: horizontalSizeClass,
+                            itemID: item.id
+                        )
                     } else {
                         Rectangle().fill(.black).overlay(ProgressView().tint(.white))
                     }
@@ -1242,5 +1248,136 @@ struct PreviewWrapper: View {
 #Preview("Compact - Limited Tags (Logged Out)") {
      PreviewWrapper(isLoggedIn: false)
 }
+
+// MARK: - Video Player mit Mute Button (für Mac)
+
+/// Wrapper für Video Player mit synchronisiertem Mute-Button
+@MainActor
+struct VideoPlayerWithMuteButton: View {
+    let player: AVPlayer
+    let handler: KeyboardActionHandler
+    let onWillBeginFullScreen: () -> Void
+    let onWillEndFullScreen: () -> Void
+    let horizontalSizeClass: UserInterfaceSizeClass?
+    let itemID: Int
+    
+    @State private var showControls: Bool = false
+    @State private var hideTimer: Timer?
+    @State private var isMouseOver: Bool = false
+    
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            CustomVideoPlayerRepresentable(
+                player: player,
+                handler: handler,
+                onWillBeginFullScreen: onWillBeginFullScreen,
+                onWillEndFullScreen: onWillEndFullScreen,
+                horizontalSizeClass: horizontalSizeClass
+            )
+            .id(itemID)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(_):
+                    // Maus bewegt sich über dem Video
+                    isMouseOver = true
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        showControls = true
+                    }
+                    resetHideTimer()
+                case .ended:
+                    // Maus hat das Video verlassen
+                    isMouseOver = false
+                    hideTimer?.invalidate()
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        showControls = false
+                    }
+                }
+            }
+            
+            // Mute-Button nur auf Mac anzeigen
+            if ProcessInfo.processInfo.isiOSAppOnMac {
+                MacOSMuteButton(player: player, isVisible: $showControls)
+                    .padding(.top, 12)
+                    .padding(.trailing, 12)
+                    .zIndex(1000)
+            }
+        }
+        .onDisappear {
+            hideTimer?.invalidate()
+            hideTimer = nil
+        }
+    }
+    
+    private func resetHideTimer() {
+        hideTimer?.invalidate()
+        
+        hideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+            // Nur ausblenden wenn Maus noch über Video ist (bei Inaktivität)
+            if isMouseOver {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    showControls = false
+                }
+            }
+        }
+    }
+}
+
+// Mute-Button für Mac ("Designed for iPad" Apps) - synchronisiert mit Player Controls
+/// A custom mute button that observes the player's isMuted state and syncs with video controls visibility
+@MainActor
+struct MacOSMuteButton: View {
+    @ObservedObject private var muteObserver: PlayerMuteObserver
+    @Binding var isVisible: Bool
+    
+    init(player: AVPlayer, isVisible: Binding<Bool>) {
+        self.muteObserver = PlayerMuteObserver(player: player)
+        self._isVisible = isVisible
+    }
+    
+    var body: some View {
+        Button(action: {
+            muteObserver.toggleMute()
+        }) {
+            Image(systemName: muteObserver.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.title2)
+                .foregroundColor(.white)
+                .padding(12)
+                .background(Color.black.opacity(0.6))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(isVisible ? 1.0 : 0.0)
+        .animation(.easeOut(duration: 0.3), value: isVisible)
+    }
+}
+
+/// Helper class to observe AVPlayer's isMuted property using KVO
+@MainActor
+class PlayerMuteObserver: ObservableObject {
+    @Published var isMuted: Bool = false
+    private weak var player: AVPlayer?
+    private var observation: NSKeyValueObservation?
+    
+    init(player: AVPlayer) {
+        self.player = player
+        self.isMuted = player.isMuted
+        
+        // Observe changes to isMuted
+        self.observation = player.observe(\.isMuted, options: [.new]) { [weak self] player, change in
+            Task { @MainActor [weak self] in
+                self?.isMuted = player.isMuted
+            }
+        }
+    }
+    
+    func toggleMute() {
+        player?.isMuted.toggle()
+    }
+    
+    deinit {
+        observation?.invalidate()
+    }
+}
+
 // --- END OF COMPLETE FILE ---
 
