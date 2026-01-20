@@ -62,11 +62,13 @@ struct SettingsView: View {
                     if UIConstants.isCurrentDeviceiPhone {
                         Toggle("pr0Tok aktivieren", isOn: $settings.enableUnlimitedStyleFeed)
                             .font(UIConstants.bodyFont)
+                            .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                     }
                     
                     if UIConstants.isPadOrMac {
                         Toggle("iPhone-Layout auf iPad/Mac erzwingen", isOn: $settings.forcePhoneLayoutOnPadAndMac)
                             .font(UIConstants.bodyFont)
+                            .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                     }
                 } header: {
                     Text("Darstellung")
@@ -82,13 +84,18 @@ struct SettingsView: View {
                     Section {
                         Toggle("Eigene Filter beim App-Start", isOn: $settings.enableStartupFilters)
                             .font(UIConstants.bodyFont)
+                            .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                         
                         if settings.enableStartupFilters {
                             Group {
                                 Toggle("SFW anzeigen", isOn: $settings.startupFilterSFW)
+                                    .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                                 Toggle("NSFW anzeigen", isOn: $settings.startupFilterNSFW)
+                                    .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                                 Toggle("NSFL anzeigen", isOn: $settings.startupFilterNSFL)
+                                    .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                                 Toggle("POL anzeigen", isOn: $settings.startupFilterPOL)
+                                    .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                             }
                             .font(UIConstants.bodyFont)
                             .padding(.leading)
@@ -106,6 +113,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
                         .font(UIConstants.bodyFont)
+                        .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
 
                     Picker("Untertitel", selection: $settings.subtitleActivationMode) {
                         ForEach(SubtitleActivationMode.allCases) { mode in
@@ -126,6 +134,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("Hintergrundaktualisierung für Nachrichten", isOn: $settings.enableBackgroundFetchForNotifications)
                         .font(UIConstants.bodyFont)
+                        .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                     
                     if settings.enableBackgroundFetchForNotifications {
                         Picker("Abrufintervall (ca.)", selection: $settings.backgroundFetchInterval) {

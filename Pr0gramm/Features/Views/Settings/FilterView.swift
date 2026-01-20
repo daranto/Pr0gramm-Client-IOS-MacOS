@@ -44,6 +44,7 @@ struct FilterView: View {
                         if showHideSeenItemsToggle {
                             Toggle("Nur Frisches anzeigen", isOn: $settings.hideSeenItems)
                                 .font(UIConstants.bodyFont)
+                                .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                         }
 
                     } header: {
@@ -61,6 +62,7 @@ struct FilterView: View {
                 Section {
                     Toggle("SFW", isOn: $settings.showSFW)
                         .font(UIConstants.bodyFont)
+                        .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                         // SFW kann immer umgeschaltet werden, auch im Junk-Feed.
                         // Die Logik in AppSettings.showSFW.didSet und apiFlags kümmert sich um die korrekte Interpretation.
                     
@@ -77,15 +79,19 @@ struct FilterView: View {
                         // Alle Filter für eingeloggte User anzeigen, unabhängig vom Feed-Typ
                         Toggle("NSFW (Not Safe for Work)", isOn: $settings.showNSFW)
                             .font(UIConstants.bodyFont)
+                            .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                         Toggle("NSFL (Not Safe for Life)", isOn: $settings.showNSFL)
                              .font(UIConstants.bodyFont)
+                             .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                         Toggle("POL (Politik)", isOn: $settings.showPOL)
                              .font(UIConstants.bodyFont)
+                             .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                         
                         // NSFP Toggle nur im Junk-Feed anzeigen
                         if relevantFeedTypeForFilterBehavior == .junk {
                             Toggle("NSFP (Not Safe for Public)", isOn: $settings.showNSFP)
                                 .font(UIConstants.bodyFont)
+                                .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                                 .disabled(settings.showSFW) // NSFP nur wählbar, wenn SFW im Junk aus ist
                         }
                     } else {
@@ -126,8 +132,14 @@ struct FilterView: View {
                                         settings.excludedTags[index].isEnabled = newValue
                                     }
                                 )) {
-                                    Text(tag.name)
-                                        .font(UIConstants.bodyFont)
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "tag.fill")
+                                            .foregroundColor(settings.accentColorChoice.swiftUIColor)
+                                            .font(.caption)
+                                        
+                                        Text(tag.name)
+                                            .font(UIConstants.bodyFont)
+                                    }
                                 }
                                 .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                                 
