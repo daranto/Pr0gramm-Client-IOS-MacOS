@@ -26,7 +26,13 @@ struct DetailImageView: View {
             .id(item.id)
             .background(Color.black)
             .clipped()
-            .onTapGesture { if !item.isVideo { logger.info("Image tapped for item \(item.id), setting fullscreen target."); fullscreenImageTarget = FullscreenImageTarget(item: item) } }
+            .onTapGesture { 
+                if !item.isVideo { 
+                    logger.info("Image tapped for item \(item.id), setting fullscreen target.")
+                    fullscreenImageTarget = FullscreenImageTarget(item: item) 
+                } 
+            }
+            .accessibilityAddTraits(item.isVideo ? [] : .isButton)
             .disabled(item.isVideo)
     }
 }
@@ -69,7 +75,7 @@ struct ShareSheet: UIViewControllerRepresentable {
 struct DetailViewContent: View {
     let item: Item
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
-    @ObservedObject var playerManager: VideoPlayerManager
+    @Bindable var playerManager: VideoPlayerManager
     let currentSubtitleText: String?
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
@@ -111,9 +117,9 @@ struct DetailViewContent: View {
     let onTagTappedInSheetCallback: ((String) -> Void)?
 
 
-    @EnvironmentObject var navigationService: NavigationService
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var settings: AppSettings
+    @Environment(NavigationService.self) var navigationService
+    @Environment(AuthService.self) var authService
+    @Environment(AppSettings.self) var settings
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "DetailViewContent")
     @State private var isProcessingFavorite = false
@@ -252,7 +258,7 @@ struct DetailViewContent: View {
                      .padding(.horizontal, 8)
                      .padding(.vertical, 4)
                      .background(.black.opacity(0.65))
-                     .cornerRadius(4)
+                     .clipShape(.rect(cornerRadius: 4))
                      .multilineTextAlignment(.center)
                      .padding(.bottom, horizontalSizeClass == .compact ? 40 : 20)
                      .padding(.horizontal)
@@ -532,8 +538,8 @@ struct DetailViewContent: View {
         let onDownvote: () -> Void
         let onTapTag: () -> Void
 
-        @EnvironmentObject var authService: AuthService
-        @EnvironmentObject var settings: AppSettings
+        @Environment(AuthService.self) var authService
+        @Environment(AppSettings.self) var settings
         
         @State private var showExcludeConfirmation = false
 
@@ -867,8 +873,8 @@ struct DetailViewContent: View {
                      pausePlayerForSheet()
                      self.tagForSheetSearch = newTagFromSheet
                  })
-                 .environmentObject(settings)
-                 .environmentObject(authService)
+                 .environment(settings)
+                 .environment(authService)
              }
             
             // Visual Copy Feedback Overlay (Zentriert)
@@ -905,9 +911,9 @@ struct DetailViewContent: View {
         @State var currentTag: String
         let onNewTagSelected: (String) -> Void
 
-        @StateObject private var localPlayerManager = VideoPlayerManager()
-        @EnvironmentObject var settings: AppSettings
-        @EnvironmentObject var authService: AuthService
+        @State private var localPlayerManager = VideoPlayerManager()
+        @Environment(AppSettings.self) var settings
+        @Environment(AuthService.self) var authService
 
         init(initialTag: String, onNewTagSelected: @escaping (String) -> Void) {
             self._currentTag = State(initialValue: initialTag)
@@ -924,9 +930,9 @@ struct DetailViewContent: View {
                 }
             )
                 .task { localPlayerManager.configure(settings: settings) }
-                .environmentObject(localPlayerManager)
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(localPlayerManager)
+                .environment(settings)
+                .environment(authService)
         }
     }
 
@@ -1106,10 +1112,10 @@ struct PreviewWrapper: View {
     @State var userProfileSheetTarget: UserProfileSheetTarget? = nil
     @State var fullscreenTarget: FullscreenImageTarget? = nil
     @State var collapsedIDs: Set<Int> = []
-    @StateObject var settings = AppSettings()
-    @StateObject var authService: AuthService
-    @StateObject var navService = NavigationService()
-    @StateObject var playerManager = VideoPlayerManager()
+    @State var settings = AppSettings()
+    @State var authService: AuthService
+    @State var navService = NavigationService()
+    @State var playerManager = VideoPlayerManager()
     @State private var commentReplyTarget: ReplyTarget? = nil
     @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
     @State private var previewTargetCommentID: Int? = 2
@@ -1118,7 +1124,7 @@ struct PreviewWrapper: View {
 
     init(isLoggedIn: Bool = true) {
         let tempSettings = AppSettings()
-        _settings = StateObject(wrappedValue: tempSettings)
+        _settings = State(wrappedValue: tempSettings)
         let tempAuthService = AuthService(appSettings: tempSettings)
 
         tempAuthService.isLoggedIn = isLoggedIn
@@ -1137,7 +1143,7 @@ struct PreviewWrapper: View {
             tempAuthService.votedTagStates = [1:1, 3:-1]
             tempSettings.selectedCollectionIdForFavorites = 1
         }
-         _authService = StateObject(wrappedValue: tempAuthService)
+         _authService = State(wrappedValue: tempAuthService)
          self.sampleItem = Item(id: 2, promoted: 1002, userId: 1, down: 9, up: 203, created: Int(Date().timeIntervalSince1970) - 100, image: "vid1.mp4", thumb: "t2.jpg", fullsize: nil, preview: nil, width: 1920, height: 1080, audio: true, source: nil, flags: 1, user: "UserA", mark: 1, repost: false, variants: nil, subtitles: nil, favorited: isLoggedIn ? true : false)
     }
 
@@ -1211,12 +1217,12 @@ struct PreviewWrapper: View {
                 CollectionSelectionView(item: target.item) { selectedCollection in
                      print("Preview: Collection '\(selectedCollection.name)' selected.")
                 }
-                .environmentObject(authService)
-                .environmentObject(settings)
+                .environment(authService)
+                .environment(settings)
             }
-            .environmentObject(navService)
-            .environmentObject(settings)
-            .environmentObject(authService)
+            .environment(navService)
+            .environment(settings)
+            .environment(authService)
             .environment(\.horizontalSizeClass, .compact)
             .preferredColorScheme(.dark)
             .task { playerManager.configure(settings: settings) }

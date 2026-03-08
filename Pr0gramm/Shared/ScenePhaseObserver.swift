@@ -4,8 +4,9 @@
 import SwiftUI
 import os
 
+@Observable
 @MainActor
-class ScenePhaseObserver: ObservableObject {
+final class ScenePhaseObserver {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ScenePhaseObserver")
     private weak var appSettings: AppSettings?
     private weak var authService: AuthService?

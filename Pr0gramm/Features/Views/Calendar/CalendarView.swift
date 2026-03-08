@@ -6,8 +6,8 @@ import os
 
 struct CalendarView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     
     @State private var events: [CalendarEvent] = []
     @State private var isLoading = false
@@ -133,21 +133,21 @@ struct CalendarView: View {
 
 #Preview {
     struct PreviewWrapper: View {
-        @StateObject var settings = AppSettings()
-        @StateObject var authService: AuthService
+        @State var settings = AppSettings()
+        @State var authService: AuthService
         
         init() {
             let s = AppSettings()
             let a = AuthService(appSettings: s)
             a.isLoggedIn = true
             a.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
-            _authService = StateObject(wrappedValue: a)
+            _authService = State(wrappedValue: a)
         }
         
         var body: some View {
             CalendarView()
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
         }
     }
     return PreviewWrapper()

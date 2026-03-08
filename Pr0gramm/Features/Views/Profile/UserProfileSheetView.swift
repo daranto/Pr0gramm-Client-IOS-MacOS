@@ -8,10 +8,10 @@ import os
 struct UserProfileSheetView: View {
     let username: String
 
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var settings: AppSettings
+    @Environment(AuthService.self) var authService
+    @Environment(AppSettings.self) var settings
     @Environment(\.dismiss) var dismiss
-    @EnvironmentObject var playerManager: VideoPlayerManager
+    @Environment(VideoPlayerManager.self) var playerManager
 
 
     @State private var profileInfo: ProfileInfoResponse?
@@ -148,8 +148,8 @@ struct UserProfileSheetView: View {
                             targetCommentID: targetCommentIDForDetailSheet,
                             isPresentedInSheet: true
                         )
-                        .environmentObject(settings)
-                        .environmentObject(authService)
+                        .environment(settings)
+                        .environment(authService)
                     }
                     .tint(settings.accentColorChoice.swiftUIColor)
                 }
@@ -157,9 +157,9 @@ struct UserProfileSheetView: View {
             .sheet(isPresented: $showAllUploadsSheet) {
                 NavigationStack {
                     UserUploadsView(username: username)
-                        .environmentObject(settings)
-                        .environmentObject(authService)
-                        .environmentObject(playerManager)
+                        .environment(settings)
+                        .environment(authService)
+                        .environment(playerManager)
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Fertig"){ showAllUploadsSheet = false } } }
                         .toolbarBackground(Material.bar, for: .navigationBar)
                         .toolbarBackground(.visible, for: .navigationBar)
@@ -169,9 +169,9 @@ struct UserProfileSheetView: View {
             .sheet(isPresented: $showAllCommentsSheet) {
                 NavigationStack {
                     UserProfileCommentsView(username: username)
-                        .environmentObject(settings)
-                        .environmentObject(authService)
-                        .environmentObject(playerManager)
+                        .environment(settings)
+                        .environment(authService)
+                        .environment(playerManager)
                         .toolbar{ ToolbarItem(placement: .confirmationAction){ Button("Fertig"){ showAllCommentsSheet = false } } }
                         .toolbarBackground(Material.bar, for: .navigationBar)
                         .toolbarBackground(.visible, for: .navigationBar)
@@ -181,9 +181,9 @@ struct UserProfileSheetView: View {
             .sheet(isPresented: $showConversationSheet) {
                 NavigationStack {
                     ConversationDetailView(partnerUsername: username)
-                        .environmentObject(settings)
-                        .environmentObject(authService)
-                        .environmentObject(playerManager)
+                        .environment(settings)
+                        .environment(authService)
+                        .environment(playerManager)
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
                                 Button("Fertig") { showConversationSheet = false }
@@ -196,8 +196,8 @@ struct UserProfileSheetView: View {
             }
             .sheet(item: $previewLinkTargetFromComment) { target in
                  LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
-                     .environmentObject(settings)
-                     .environmentObject(authService)
+                     .environment(settings)
+                     .environment(authService)
                      .tint(settings.accentColorChoice.swiftUIColor)
             }
         }

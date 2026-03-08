@@ -21,7 +21,7 @@ struct FavoritesItemThumbnail: View, Equatable {
                 .aspectRatio(contentMode: .fill)
                 .aspectRatio(1.0, contentMode: .fit)
                 .background(Material.ultraThin)
-                .cornerRadius(5)
+                .clipShape(.rect(cornerRadius: 5))
                 .clipped()
             
             if isSeen {
@@ -37,9 +37,9 @@ struct FavoritesItemThumbnail: View, Equatable {
 
 
 struct FavoritesView: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var navigationService: NavigationService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
+    @Environment(NavigationService.self) var navigationService
 
     @State private var items: [Item] = []
     @State private var errorMessage: String?
@@ -50,7 +50,7 @@ struct FavoritesView: View {
     @State private var navigationPath = NavigationPath()
     @State private var showingFilterSheet = false
 
-    @StateObject private var playerManager = VideoPlayerManager()
+    @State private var playerManager = VideoPlayerManager()
     
     private let preloadRowsAhead: Int = 5
 
@@ -101,8 +101,8 @@ struct FavoritesView: View {
                             playerManager: playerManager,
                             loadMoreAction: { Task { await loadMoreFavorites() } }
                         )
-                        .environmentObject(settings)
-                        .environmentObject(authService)
+                        .environment(settings)
+                        .environment(authService)
                     } else {
                         Text("Fehler: Item nicht in Favoriten gefunden.")
                             .onAppear { FavoritesView.logger.warning("Navigation destination item \(destinationItem.id) not found in favorites.") }
@@ -138,8 +138,8 @@ struct FavoritesView: View {
                 }
                 .sheet(isPresented: $showingFilterSheet) {
                     FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false, showExcludedTagsSection: false)
-                        .environmentObject(settings)
-                        .environmentObject(authService)
+                        .environment(settings)
+                        .environment(authService)
                 }
         }
         .onAppear {

@@ -13,8 +13,8 @@ struct LinkedItemPreviewView: View {
     // --- END NEW ---
 
     // MARK: - Environment & State
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     @Environment(\.dismiss) var dismiss // To close the sheet
 
     @State private var fetchedItem: Item? = nil // Holds the fetched item data
@@ -22,7 +22,7 @@ struct LinkedItemPreviewView: View {
     @State private var errorMessage: String? = nil
     @State private var isFilterMismatch: Bool = false
 
-    @StateObject private var playerManager = VideoPlayerManager()
+    @State private var playerManager = VideoPlayerManager()
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "LinkedItemPreviewView")
@@ -171,8 +171,8 @@ struct LinkedItemPreviewView: View {
 #Preview("Loading") {
     // --- MODIFIED: Preview initialisiert mit targetCommentID ---
     LinkedItemPreviewView(itemID: 12345, targetCommentID: 67890) // Beispielhafte commentID
-        .environmentObject(AppSettings())
-        .environmentObject(AuthService(appSettings: AppSettings()))
+        .environment(AppSettings())
+        .environment(AuthService(appSettings: AppSettings()))
     // --- END MODIFICATION ---
 }
 
@@ -182,8 +182,8 @@ struct LinkedItemPreviewView: View {
     // --- MODIFIED: Preview initialisiert mit targetCommentID (auch wenn Fehler) ---
     LinkedItemPreviewView(itemID: 999, targetCommentID: nil)
     // --- END MODIFICATION ---
-        .environmentObject(settings)
-        .environmentObject(auth)
+        .environment(settings)
+        .environment(auth)
 }
 // --- END OF COMPLETE FILE ---
 

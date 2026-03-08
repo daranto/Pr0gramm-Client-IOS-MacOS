@@ -9,8 +9,8 @@ struct TagSearchView: View {
     @Binding var currentSearchTag: String
     let onNewTagSelectedInSheet: ((String) -> Void)?
 
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     @Environment(\.dismiss) var dismiss
 
     @State private var items: [Item] = []
@@ -20,7 +20,7 @@ struct TagSearchView: View {
     @State private var isLoadingMore = false
     @State private var hasSearched = false
 
-    @StateObject private var playerManager = VideoPlayerManager()
+    @State private var playerManager = VideoPlayerManager()
     @State private var navigationPath = NavigationPath()
 
     private let apiService = APIService()
@@ -86,8 +86,8 @@ struct TagSearchView: View {
                 loadMoreAction: { Task { await triggerLoadMoreWithDebounce() } },
                 onTagTappedInSheetCallback: self.onNewTagSelectedInSheet
             )
-            .environmentObject(settings)
-            .environmentObject(authService)
+            .environment(settings)
+            .environment(authService)
         } else {
             Text("Fehler: Item \(destinationItem.id) nicht mehr in Suchergebnissen gefunden.")
                  .onAppear {
@@ -290,8 +290,8 @@ struct TagSearchView_PreviewWrapper: View {
             currentSearchTag: $previewTag,
             onNewTagSelectedInSheet: handleNewTagSelectionInSheet
         )
-            .environmentObject(settings)
-            .environmentObject(authService)
+            .environment(settings)
+            .environment(authService)
     }
 }
 

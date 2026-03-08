@@ -7,8 +7,8 @@ import os
 
 /// View for displaying and modifying application settings, including cache management.
 struct SettingsView: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) private var appSettings
+    @Environment(AuthService.self) var authService
     @State private var showingClearAllCacheAlert = false
     @State private var showingClearSeenItemsAlert = false
 
@@ -16,6 +16,7 @@ struct SettingsView: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "SettingsView")
 
     var body: some View {
+        @Bindable var settings = appSettings
         NavigationStack {
             Form {
                 if authService.isLoggedIn {
@@ -62,13 +63,13 @@ struct SettingsView: View {
                     if UIConstants.isCurrentDeviceiPhone {
                         Toggle("pr0Tok aktivieren", isOn: $settings.enableUnlimitedStyleFeed)
                             .font(UIConstants.bodyFont)
-                            .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                            .tint(settings.accentColorChoice.swiftUIColor)
                     }
                     
                     if UIConstants.isPadOrMac {
                         Toggle("iPhone-Layout auf iPad/Mac erzwingen", isOn: $settings.forcePhoneLayoutOnPadAndMac)
                             .font(UIConstants.bodyFont)
-                            .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                            .tint(settings.accentColorChoice.swiftUIColor)
                     }
                 } header: {
                     Text("Darstellung")
@@ -84,18 +85,18 @@ struct SettingsView: View {
                     Section {
                         Toggle("Eigene Filter beim App-Start", isOn: $settings.enableStartupFilters)
                             .font(UIConstants.bodyFont)
-                            .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                            .tint(settings.accentColorChoice.swiftUIColor)
                         
                         if settings.enableStartupFilters {
                             Group {
                                 Toggle("SFW anzeigen", isOn: $settings.startupFilterSFW)
-                                    .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                                    .tint(settings.accentColorChoice.swiftUIColor)
                                 Toggle("NSFW anzeigen", isOn: $settings.startupFilterNSFW)
-                                    .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                                    .tint(settings.accentColorChoice.swiftUIColor)
                                 Toggle("NSFL anzeigen", isOn: $settings.startupFilterNSFL)
-                                    .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                                    .tint(settings.accentColorChoice.swiftUIColor)
                                 Toggle("POL anzeigen", isOn: $settings.startupFilterPOL)
-                                    .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                                    .tint(settings.accentColorChoice.swiftUIColor)
                             }
                             .font(UIConstants.bodyFont)
                             .padding(.leading)
@@ -113,7 +114,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("Videos stumm starten", isOn: $settings.isVideoMuted)
                         .font(UIConstants.bodyFont)
-                        .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                        .tint(settings.accentColorChoice.swiftUIColor)
 
                     Picker("Untertitel", selection: $settings.subtitleActivationMode) {
                         ForEach(SubtitleActivationMode.allCases) { mode in
@@ -134,7 +135,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("Hintergrundaktualisierung für Nachrichten", isOn: $settings.enableBackgroundFetchForNotifications)
                         .font(UIConstants.bodyFont)
-                        .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
+                        .tint(settings.accentColorChoice.swiftUIColor)
                     
                     if settings.enableBackgroundFetchForNotifications {
                         Picker("Abrufintervall (ca.)", selection: $settings.backgroundFetchInterval) {
@@ -210,7 +211,7 @@ struct SettingsView: View {
                         Spacer()
                         Text(String(format: "%.1f MB", settings.currentImageDataCacheSizeMB))
                             .font(UIConstants.bodyFont)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                     HStack {
                         Text("Daten-Cache Größe")
@@ -218,7 +219,7 @@ struct SettingsView: View {
                         Spacer()
                         Text(String(format: "%.1f MB", settings.currentDataCacheSizeMB))
                             .font(UIConstants.bodyFont)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                     Picker("Max. Bild-Cache Größe", selection: $settings.maxImageCacheSizeMB) {
                         ForEach(cacheSizeOptions, id: \.self) { size in
@@ -424,7 +425,7 @@ struct DonationProgressView: View {
                 }
             }
         }
-        .animation(nil, value: isDonationTextExpanded)
+
         .onAppear { refreshIfNeeded(force: false) }
     }
 
@@ -532,8 +533,8 @@ struct DonationProgressView: View {
 
 #Preview {
     struct SettingsPreviewWrapper: View {
-        @StateObject private var settings: AppSettings
-        @StateObject private var authService: AuthService
+        @State private var settings: AppSettings
+        @State private var authService: AuthService
 
         init() {
             let appSettings = AppSettings()
@@ -556,27 +557,29 @@ struct DonationProgressView: View {
             appSettings.enableStartupFilters = true
 
 
-            _settings = StateObject(wrappedValue: appSettings)
-            _authService = StateObject(wrappedValue: authSvc)
+            _settings = State(wrappedValue: appSettings)
+            _authService = State(wrappedValue: authSvc)
         }
 
         var body: some View {
             SettingsView()
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
         }
     }
     return SettingsPreviewWrapper()
 }
 
 #Preview("Logged Out") {
-    let appSettings = AppSettings()
-    let authSvc = AuthService(appSettings: appSettings)
-    authSvc.isLoggedIn = false
-
-    return SettingsView()
-        .environmentObject(appSettings)
-        .environmentObject(authSvc)
+    @Previewable @State var appSettings = AppSettings()
+    @Previewable @State var authSvc = AuthService(appSettings: AppSettings())
+    
+    SettingsView()
+        .environment(appSettings)
+        .environment(authSvc)
+        .task {
+            authSvc.isLoggedIn = false
+        }
 }
 
 struct LicenseAndDependenciesView: View {

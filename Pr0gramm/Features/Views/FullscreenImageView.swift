@@ -65,7 +65,7 @@ struct FullscreenImageView: View {
             }
             .padding()
             .background(Material.ultraThinMaterial)
-            .cornerRadius(15)
+            .clipShape(.rect(cornerRadius: 15))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.black.opacity(0.4))
         }

@@ -16,7 +16,7 @@ struct AllTagsSheetView: View {
     let onShowAddTagSheet: () -> Void
 
 
-    @EnvironmentObject var authService: AuthService
+    @Environment(AuthService.self) var authService
     @Environment(\.dismiss) var dismiss
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AllTagsSheetView")
 
@@ -114,8 +114,8 @@ fileprivate struct SheetVotableTagView: View {
     let onDownvote: () -> Void
     let onTapTag: () -> Void
 
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var settings: AppSettings
+    @Environment(AuthService.self) var authService
+    @Environment(AppSettings.self) var settings
     
     @State private var showExcludeConfirmation = false
     
@@ -246,8 +246,8 @@ fileprivate struct SheetVotableTagView: View {
         onRetryLoadDetails: { print("Retry Load Details") },
         onShowAddTagSheet: { print("Show Add Tag Sheet triggered from AllTagsSheet") }
     )
-    .environmentObject(authService)
-    .environmentObject(settings)
+    .environment(authService)
+    .environment(settings)
 }
 
 // --- END OF COMPLETE FILE ---

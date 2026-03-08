@@ -20,7 +20,7 @@ struct CommentView: View {
     let onUpvoteComment: () -> Void
     let onDownvoteComment: () -> Void
 
-    @EnvironmentObject var authService: AuthService
+    @Environment(AuthService.self) var authService
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CommentView")
 
     @State private var isHighlighted: Bool = false
@@ -72,6 +72,16 @@ struct CommentView: View {
     private var isVoting: Bool {
         authService.isVotingComment[comment.id] ?? false
     }
+    
+    private var scoreTextColor: Color {
+        if score > 0 {
+            return .green
+        } else if score < 0 {
+            return .red
+        } else {
+            return .secondary
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -96,7 +106,7 @@ struct CommentView: View {
                         .foregroundColor(.accentColor)
                 }
                 Text("•").foregroundColor(.secondary)
-                Text("\(score)").font(UIConstants.captionFont).foregroundColor(score > 0 ? .green : (score < 0 ? .red : .secondary))
+                Text("\(score)").font(UIConstants.captionFont).foregroundColor(scoreTextColor)
                 Text("•").foregroundColor(.secondary)
                 Text(relativeTime).font(UIConstants.captionFont).foregroundColor(.secondary)
                 Spacer()
@@ -363,7 +373,7 @@ extension String: Identifiable {
                   .listRowInsets(EdgeInsets())
             }
             .listStyle(.plain)
-            .environmentObject(auth)
+            .environment(auth)
              .sheet(item: $userProfileSheetTarget_Normal) { targetUsername in
                  Text("Preview: User Profile Sheet for \(targetUsername.username)")
              }
@@ -392,7 +402,7 @@ extension String: Identifiable {
                 onDownvoteComment: { print("Preview: Downvote comment 2") }
             )
             .padding()
-            .environmentObject(AuthService(appSettings: AppSettings()))
+            .environment(AuthService(appSettings: AppSettings()))
         }
     }
     return PreviewWrapperCollapsed()
@@ -421,7 +431,7 @@ extension String: Identifiable {
                 onDownvoteComment: { print("Preview: Downvote comment 3") }
             )
             .padding()
-            .environmentObject(auth)
+            .environment(auth)
         }
     }
     return PreviewWrapperNoChildren()

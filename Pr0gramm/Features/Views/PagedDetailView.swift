@@ -68,7 +68,7 @@ struct PagedDetailTabViewItem: View {
 
     let dataModel: DataModel
     @ObservedObject var keyboardActionHandler: KeyboardActionHandler
-    @ObservedObject var playerManager: VideoPlayerManager
+    @Bindable var playerManager: VideoPlayerManager
 
     let onWillBeginFullScreen: () -> Void
     let onWillEndFullScreen: () -> Void
@@ -143,10 +143,10 @@ struct PagedDetailTabViewItem: View {
              if let subtitleError = playerManager.subtitleError, playerManager.playerItemID == dataModel.item.id {
                  Text("Untertitel: \(subtitleError)")
                      .font(.caption)
-                     .foregroundColor(.orange)
+                     .foregroundStyle(.orange)
                      .padding(5)
                      .background(Material.ultraThin)
-                     .cornerRadius(5)
+                     .clipShape(.rect(cornerRadius: 5))
                      .transition(.opacity.combined(with: .move(edge: .top)))
                      .padding(.top, 5)
                      .onAppear {
@@ -162,14 +162,14 @@ struct PagedDetailView: View {
     @Binding var items: [Item]
     @State private var selectedIndex: Int
     @Environment(\.dismiss) var dismiss
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     @Environment(\.scenePhase) var scenePhase
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
     @StateObject private var keyboardActionHandler = KeyboardActionHandler()
-    @ObservedObject var playerManager: VideoPlayerManager
+    @Bindable var playerManager: VideoPlayerManager
     @State private var isFullscreen = false
     @State private var cachedDetails: [Int: CachedItemDetails] = [:]
     @State private var infoLoadingStatus: [Int: InfoLoadingStatus] = [:]
@@ -230,13 +230,13 @@ struct PagedDetailView: View {
         .background(KeyCommandView(handler: keyboardActionHandler))
         .sheet(item: $previewLinkTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
              LinkedItemPreviewWrapperView(itemID: targetWrapper.itemID, targetCommentID: targetWrapper.commentID)
-                 .environmentObject(settings).environmentObject(authService)
+                 .environment(settings).environment(authService)
         }
         .sheet(item: $userProfileSheetTarget, onDismiss: resumePlayerIfNeeded) { target in
             UserProfileSheetView(username: target.username)
-                .environmentObject(authService)
-                .environmentObject(settings)
-                .environmentObject(playerManager)
+                .environment(authService)
+                .environment(settings)
+                .environment(playerManager)
         }
         .sheet(item: $fullscreenImageTarget, onDismiss: resumePlayerIfNeeded) { targetWrapper in
              FullscreenImageView(item: targetWrapper.item)
@@ -250,8 +250,8 @@ struct PagedDetailView: View {
                     }
                 }
             )
-            .environmentObject(authService)
-            .environmentObject(settings)
+            .environment(authService)
+            .environment(settings)
             .presentationDetents([.medium, .large])
         }
         .sheet(item: $commentReplyTarget) { target in
@@ -1069,8 +1069,8 @@ struct LinkedItemPreviewWrapperView: View {
     let itemID: Int
     let targetCommentID: Int?
 
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     @Environment(\.dismiss) var dismiss
 
     init(itemID: Int, targetCommentID: Int? = nil) {
@@ -1082,7 +1082,7 @@ struct LinkedItemPreviewWrapperView: View {
     var body: some View {
         NavigationStack {
             LinkedItemPreviewView(itemID: itemID, targetCommentID: targetCommentID)
-                .environmentObject(settings).environmentObject(authService)
+                .environment(settings).environment(authService)
                 .navigationTitle("Vorschau")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
@@ -1101,15 +1101,15 @@ struct LinkedItemPreviewWrapperView: View {
              Item(id: 3, promoted: 1003, userId: 2, down: 5, up: 50, created: 3, image: "img2.png", thumb: "t3.png", fullsize: "f2.png", preview: nil, width: 1024, height: 768, audio: false, source: nil, flags: 1, user: "UserB", mark: 2, repost: nil, variants: nil, subtitles: nil, favorited: nil),
              Item(id: 4, promoted: 1004, userId: 3, down: 1, up: 10, created: 4, image: "img3.gif", thumb: "t4.gif", fullsize: nil, preview: nil, width: 500, height: 300, audio: false, source: nil, flags: 1, user: "UserC", mark: 0, repost: nil, variants: nil, subtitles: nil, favorited: false)
          ]
-         @StateObject var previewSettings: AppSettings
-         @StateObject var previewAuthService: AuthService
-         @StateObject var previewPlayerManager = VideoPlayerManager()
+         @State var previewSettings: AppSettings
+         @State var previewAuthService: AuthService
+         @State var previewPlayerManager = VideoPlayerManager()
 
         init() {
             let tempSettings = AppSettings()
-            _previewSettings = StateObject(wrappedValue: tempSettings)
+            _previewSettings = State(wrappedValue: tempSettings)
             let tempAuthService = AuthService(appSettings: tempSettings)
-            _previewAuthService = StateObject(wrappedValue: tempAuthService)
+            _previewAuthService = State(wrappedValue: tempAuthService)
             
             previewAuthService.isLoggedIn = true
             let collections = [
@@ -1144,8 +1144,8 @@ struct LinkedItemPreviewWrapperView: View {
                     isPresentedInSheet: true
                  )
              }
-             .environmentObject(previewSettings)
-             .environmentObject(previewAuthService)
+             .environment(previewSettings)
+             .environment(previewAuthService)
              .task {
                  print("Preview Task: Initial setup done.")
              }

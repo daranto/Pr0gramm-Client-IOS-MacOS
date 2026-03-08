@@ -2,7 +2,7 @@ import SwiftUI
 
 /// A view presented as a sheet for user login, handling username, password, and captcha input.
 struct LoginView: View {
-    @EnvironmentObject var authService: AuthService // Access authentication logic and state
+    @Environment(AuthService.self) var authService // Access authentication logic and state
     @Environment(\.dismiss) var dismiss // Action to close the sheet
 
     @State private var username = ""
@@ -142,9 +142,9 @@ struct LoginView: View {
     // previewAuthService.isLoading = true
 
     // Provide the services to the LoginView
-    return LoginView()
-        .environmentObject(previewAuthService)
+    LoginView()
+        .environment(previewAuthService)
         // Although LoginView doesn't *directly* use settings,
         // AuthService does, so providing it here ensures the preview environment is complete.
-        .environmentObject(settings)
+        .environment(settings)
 }

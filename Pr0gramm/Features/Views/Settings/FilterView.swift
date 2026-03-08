@@ -7,8 +7,8 @@ import SwiftUI
 /// feed type (New/Promoted) and content filters (SFW, NSFW, etc.).
 /// Can optionally hide the feed-specific options and the "hide seen items" toggle.
 struct FilterView: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) private var appSettings
+    @Environment(AuthService.self) var authService
     @Environment(\.dismiss) var dismiss
 
     let relevantFeedTypeForFilterBehavior: FeedType?
@@ -27,6 +27,7 @@ struct FilterView: View {
     }
 
     var body: some View {
+        @Bindable var settings = appSettings
         NavigationStack {
             Form {
                 if !hideFeedOptions || showHideSeenItemsToggle {
@@ -200,25 +201,25 @@ struct FilterView: View {
     private func addExcludedTag() {
         let trimmedTag = newExcludedTag.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTag.isEmpty else { return }
-        guard !settings.excludedTags.contains(where: { $0.name.lowercased() == trimmedTag.lowercased() }) else {
+        guard !appSettings.excludedTags.contains(where: { $0.name.lowercased() == trimmedTag.lowercased() }) else {
             newExcludedTag = ""
             return
         }
         withAnimation {
-            settings.excludedTags.append(ExcludedTag(name: trimmedTag, isEnabled: true))
+            appSettings.excludedTags.append(ExcludedTag(name: trimmedTag, isEnabled: true))
         }
         newExcludedTag = ""
     }
     
     private func removeExcludedTag(withId id: UUID) {
         withAnimation {
-            settings.excludedTags.removeAll { $0.id == id }
+            appSettings.excludedTags.removeAll { $0.id == id }
         }
     }
     
     private func deleteExcludedTags(at offsets: IndexSet) {
         withAnimation {
-            settings.excludedTags.remove(atOffsets: offsets)
+            appSettings.excludedTags.remove(atOffsets: offsets)
         }
     }
 }
@@ -226,39 +227,48 @@ struct FilterView: View {
 // MARK: - Previews
 
 #Preview("Feed Context (Logged In, Feed=Promoted)") {
-    let previewSettings = AppSettings()
-    previewSettings.feedType = .promoted
-    previewSettings.showSFW = true
-    previewSettings.showNSFP = true
-    let previewAuthService = AuthService(appSettings: previewSettings)
-    previewAuthService.isLoggedIn = true
-    previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: true)
-    return FilterView(relevantFeedTypeForFilterBehavior: previewSettings.feedType, hideFeedOptions: false, showHideSeenItemsToggle: true)
-        .environmentObject(previewSettings)
-        .environmentObject(previewAuthService)
+    @Previewable @State var previewSettings = AppSettings()
+    @Previewable @State var previewAuthService = AuthService(appSettings: AppSettings())
+    
+    FilterView(relevantFeedTypeForFilterBehavior: .promoted, hideFeedOptions: false, showHideSeenItemsToggle: true)
+        .environment(previewSettings)
+        .environment(previewAuthService)
+        .task {
+            previewSettings.feedType = .promoted
+            previewSettings.showSFW = true
+            previewSettings.showNSFP = true
+            previewAuthService.isLoggedIn = true
+            previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: true)
+        }
 }
 
 #Preview("Feed Context (Logged In, Feed=Junk)") {
-    let previewSettings = AppSettings()
-    previewSettings.feedType = .junk
-    previewSettings.showSFW = false // Teste den Fall, wo NSFP aktiv sein könnte
-    previewSettings.showNSFP = true
-    let previewAuthService = AuthService(appSettings: previewSettings)
-    previewAuthService.isLoggedIn = true
-    previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: true)
-    return FilterView(relevantFeedTypeForFilterBehavior: previewSettings.feedType, hideFeedOptions: false, showHideSeenItemsToggle: true)
-        .environmentObject(previewSettings)
-        .environmentObject(previewAuthService)
+    @Previewable @State var previewSettings = AppSettings()
+    @Previewable @State var previewAuthService = AuthService(appSettings: AppSettings())
+    
+    FilterView(relevantFeedTypeForFilterBehavior: .junk, hideFeedOptions: false, showHideSeenItemsToggle: true)
+        .environment(previewSettings)
+        .environment(previewAuthService)
+        .task {
+            previewSettings.feedType = .junk
+            previewSettings.showSFW = false
+            previewSettings.showNSFP = true
+            previewAuthService.isLoggedIn = true
+            previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: true)
+        }
 }
 
 #Preview("Logged Out (relevantFeedType = .promoted)") {
-    let previewSettings = AppSettings()
-    previewSettings.showSFW = true // Standard für ausgeloggt
-    let previewAuthService = AuthService(appSettings: previewSettings)
-    previewAuthService.isLoggedIn = false
-    previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: false)
-    return FilterView(relevantFeedTypeForFilterBehavior: .promoted, hideFeedOptions: false, showHideSeenItemsToggle: true)
-        .environmentObject(previewSettings)
-        .environmentObject(previewAuthService)
+    @Previewable @State var previewSettings = AppSettings()
+    @Previewable @State var previewAuthService = AuthService(appSettings: AppSettings())
+    
+    FilterView(relevantFeedTypeForFilterBehavior: .promoted, hideFeedOptions: false, showHideSeenItemsToggle: true)
+        .environment(previewSettings)
+        .environment(previewAuthService)
+        .task {
+            previewSettings.showSFW = true
+            previewAuthService.isLoggedIn = false
+            previewSettings.updateUserLoginStatusForApiFlags(isLoggedIn: false)
+        }
 }
 // --- END OF COMPLETE FILE ---

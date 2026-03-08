@@ -16,6 +16,7 @@ struct FeedItemThumbnail: View, Equatable {
     }
 
     var body: some View {
+
         ZStack(alignment: .topTrailing) {
             KFImage(item.thumbnailUrl)
                 .placeholder { Rectangle().fill(Material.ultraThin).overlay(ProgressView()) }
@@ -25,8 +26,7 @@ struct FeedItemThumbnail: View, Equatable {
                 .aspectRatio(contentMode: .fill)
                 .aspectRatio(1.0, contentMode: .fit)
                 .background(Material.ultraThin)
-                .cornerRadius(5)
-                .clipped()
+                .clipShape(.rect(cornerRadius: 5))
             
             if isSeen {
                 Image(systemName: "checkmark.circle.fill")
@@ -42,8 +42,8 @@ struct FeedItemThumbnail: View, Equatable {
 
 struct FeedView: View {
     let popToRootTrigger: UUID
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) private var appSettings
+    @Environment(AuthService.self) var authService
     
     @State private var items: [Item] = []
     @State private var errorMessage: String?
@@ -55,7 +55,7 @@ struct FeedView: View {
     @State private var navigationPath = NavigationPath()
     @State private var didLoadInitially = false
     
-    @StateObject private var playerManager = VideoPlayerManager()
+    @State private var playerManager = VideoPlayerManager()
     @State private var refreshTask: Task<Void, Never>?
     
     @State private var nextOlderThanIdForApiCall: Int?
@@ -72,12 +72,13 @@ struct FeedView: View {
     private var gridColumns: [GridItem] {
         let isMac = ProcessInfo.processInfo.isiOSAppOnMac
         let currentHorizontalSizeClass: UserInterfaceSizeClass? = isMac ? .regular : .compact
-        let numberOfColumns = settings.gridSize.columns(for: currentHorizontalSizeClass, isMac: isMac)
+        let numberOfColumns = appSettings.gridSize.columns(for: currentHorizontalSizeClass, isMac: isMac)
         let minItemWidth: CGFloat = isMac ? 400 : (numberOfColumns <= 3 ? 100 : 80)
         return Array(repeating: GridItem(.adaptive(minimum: minItemWidth), spacing: 3), count: numberOfColumns)
     }
 
     var body: some View {
+        @Bindable var settings = appSettings
         NavigationStack(path: $navigationPath) {
             ZStack {
                 // Basis-Content der den ganzen Screen füllt
@@ -96,9 +97,9 @@ struct FeedView: View {
                 }
             }
             .sheet(isPresented: $showingFilterSheet) {
-                 FilterView(relevantFeedTypeForFilterBehavior: settings.feedType, hideFeedOptions: true, showHideSeenItemsToggle: true)
-                     .environmentObject(settings)
-                     .environmentObject(authService)
+                 FilterView(relevantFeedTypeForFilterBehavior: appSettings.feedType, hideFeedOptions: true, showHideSeenItemsToggle: true)
+                     .environment(appSettings)
+                     .environment(authService)
             }
             .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
                 Button("OK") { errorMessage = nil }
@@ -117,14 +118,12 @@ struct FeedView: View {
                     Text("Fehler: Item nicht im aktuellen Feed gefunden.")
                 }
             }
-            .onChange(of: settings.feedType) { triggerRefreshTask() }
-            // --- OPTIMIERUNG: `onChange`-Handler zusammengefasst ---
-            .onChange(of: settings.apiFlags) { triggerRefreshTask() }
-            .onChange(of: settings.hideSeenItems) { triggerRefreshTask() }
-            .onChange(of: settings.excludedTags) { triggerRefreshTask() }
+            .onChange(of: appSettings.feedType) { _, _ in triggerRefreshTask() }
+            .onChange(of: appSettings.hideSeenItems) { _, _ in triggerRefreshTask() }
+            .onChange(of: appSettings.excludedTags) { _, _ in triggerRefreshTask() }
             .task {
                  FeedView.logger.debug("FeedView task started.")
-                 playerManager.configure(settings: settings)
+                 playerManager.configure(settings: appSettings)
                  if !didLoadInitially {
                      FeedView.logger.info("FeedView task: Initial load required.")
                      try? await Task.sleep(for: initialLoadDelay)
@@ -145,6 +144,7 @@ struct FeedView: View {
 
     @ViewBuilder
     private var headerControls: some View {
+        @Bindable var settings = appSettings
         if #available(iOS 26.0, *) {
             // Liquid Glass Design für iOS 26+ - mit vergrößertem Rahmen und runderen Ecken
             HStack(spacing: 8) {
@@ -206,8 +206,8 @@ struct FeedView: View {
         } else if isLoading && items.isEmpty {
             ProgressView("Lade...").frame(maxHeight: .infinity)
         } else if items.isEmpty && !isLoading && errorMessage == nil {
-             let message = settings.hideSeenItems ? "Keine neuen Posts, die den Filtern entsprechen." : "Keine Posts für die aktuellen Filter gefunden."
-             Text(message).foregroundColor(.secondary).multilineTextAlignment(.center).padding()
+             let message = appSettings.hideSeenItems ? "Keine neuen Posts, die den Filtern entsprechen." : "Keine Posts für die aktuellen Filter gefunden."
+             Text(message).foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
         } else {
             scrollViewContent
         }
@@ -216,9 +216,10 @@ struct FeedView: View {
     private var scrollViewContent: some View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 3) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                ForEach(items.indices, id: \.self) { index in
+                    let item = items[index]
                     NavigationLink(value: item) {
-                        FeedItemThumbnail(item: item, isSeen: settings.seenItemIDs.contains(item.id))
+                        FeedItemThumbnail(item: item, isSeen: appSettings.seenItemIDs.contains(item.id))
                     }
                     .buttonStyle(.plain)
                     .onAppear {
@@ -239,7 +240,7 @@ struct FeedView: View {
                         // Trigger early load more when reaching a threshold several rows before the end
                         let offset = max(1, gridColumns.count) * preloadRowsAhead
                         let thresholdIndex = max(0, items.count - offset)
-                        if index >= thresholdIndex && canLoadMore && !isLoadingMore && !isLoading && settings.hasActiveContentFilter {
+                        if index >= thresholdIndex && canLoadMore && !isLoadingMore && !isLoading && appSettings.hasActiveContentFilter {
                             Task { await loadMoreItems() }
                         }
                     }
@@ -269,9 +270,9 @@ struct FeedView: View {
     @ViewBuilder private var noFilterContentView: some View {
         VStack {
              Spacer()
-             Image(systemName: "line.3.horizontal.decrease.circle").font(.largeTitle).foregroundColor(.secondary).padding(.bottom, 5)
+             Image(systemName: "line.3.horizontal.decrease.circle").font(.largeTitle).foregroundStyle(.secondary).padding(.bottom, 5)
              Text("Keine Inhalte ausgewählt").font(UIConstants.headlineFont)
-             Text("Bitte passe deine Filter an, um Inhalte zu sehen.").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal)
+             Text("Bitte passe deine Filter an, um Inhalte zu sehen.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal)
              Button("Filter anpassen") { showingFilterSheet = true }.buttonStyle(.bordered).padding(.top)
              Spacer()
         }
@@ -298,7 +299,7 @@ struct FeedView: View {
         nextOlderThanIdForApiCall = nil
         canLoadMore = true
         errorMessage = nil
-        showNoFilterMessage = !settings.hasActiveContentFilter
+        showNoFilterMessage = !appSettings.hasActiveContentFilter
         
         if showNoFilterMessage { return }
 
@@ -328,7 +329,7 @@ struct FeedView: View {
 
     @MainActor
     private func loadMoreItems() async {
-        guard !isLoadingMore && canLoadMore && !isLoading && settings.hasActiveContentFilter else { return }
+        guard !isLoadingMore && canLoadMore && !isLoading && appSettings.hasActiveContentFilter else { return }
         
         isLoadingMore = true
         defer { isLoadingMore = false }
@@ -367,38 +368,38 @@ struct FeedView: View {
         var apiSaysNoMoreItems = false
         var currentOlderForLoop: Int? = olderThanId
 
-        if settings.hideSeenItems {
+        if appSettings.hideSeenItems {
             var pagesAttempted = 0
             while fetchedItems.isEmpty && !apiSaysNoMoreItems {
                 guard !Task.isCancelled else { throw CancellationError() }
                 pagesAttempted += 1
                 
                 let apiResponse = try await apiService.fetchItems(
-                    flags: settings.apiFlags, promoted: settings.apiPromoted,
-                    tags: settings.apiExcludedTagsString,
-                    olderThanId: currentOlderForLoop, showJunkParameter: settings.apiShowJunk
+                    flags: appSettings.apiFlags, promoted: appSettings.apiPromoted,
+                    tags: appSettings.apiExcludedTagsString,
+                    olderThanId: currentOlderForLoop, showJunkParameter: appSettings.apiShowJunk
                 )
 
                 let rawPageItems = apiResponse.items
                 lastRawItemFromApiResponse = rawPageItems.last
                 
                 let currentItemIDs = await MainActor.run { Set(self.items.map { $0.id }) }
-                let uniqueUnseenItems = rawPageItems.filter { !settings.seenItemIDs.contains($0.id) && !currentItemIDs.contains($0.id) }
+                let uniqueUnseenItems = rawPageItems.filter { !appSettings.seenItemIDs.contains($0.id) && !currentItemIDs.contains($0.id) }
                 
                 fetchedItems.append(contentsOf: uniqueUnseenItems)
                 apiSaysNoMoreItems = apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil)
                 
                 if let lastItem = rawPageItems.last, !apiSaysNoMoreItems {
-                    currentOlderForLoop = settings.feedType == .promoted ? lastItem.promoted ?? lastItem.id : lastItem.id
+                    currentOlderForLoop = appSettings.feedType == .promoted ? lastItem.promoted ?? lastItem.id : lastItem.id
                 } else if rawPageItems.isEmpty {
                     apiSaysNoMoreItems = true
                 }
             }
         } else {
             let apiResponse = try await apiService.fetchItems(
-                flags: settings.apiFlags, promoted: settings.apiPromoted,
-                tags: settings.apiExcludedTagsString,
-                olderThanId: olderThanId, showJunkParameter: settings.apiShowJunk
+                flags: appSettings.apiFlags, promoted: appSettings.apiPromoted,
+                tags: appSettings.apiExcludedTagsString,
+                olderThanId: olderThanId, showJunkParameter: appSettings.apiShowJunk
             )
             let currentItemIDs = await MainActor.run { Set(self.items.map { $0.id }) }
             fetchedItems = apiResponse.items.filter { !currentItemIDs.contains($0.id) }
@@ -406,7 +407,7 @@ struct FeedView: View {
             apiSaysNoMoreItems = apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil)
         }
         
-        let nextIdToUse = settings.feedType == .promoted ? lastRawItemFromApiResponse?.promoted ?? lastRawItemFromApiResponse?.id : lastRawItemFromApiResponse?.id
+        let nextIdToUse = appSettings.feedType == .promoted ? lastRawItemFromApiResponse?.promoted ?? lastRawItemFromApiResponse?.id : lastRawItemFromApiResponse?.id
         let finalNextOlderId = nextIdToUse ?? currentOlderForLoop
 
         return FetchResult(items: fetchedItems, nextOlderThanId: finalNextOlderId, apiReachedEnd: apiSaysNoMoreItems)

@@ -8,9 +8,9 @@ import Combine // Für Keyboard-Notifications
 struct ConversationDetailView: View {
     let partnerUsername: String
 
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var playerManager: VideoPlayerManager
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
+    @Environment(VideoPlayerManager.self) var playerManager
 
     @State private var messages: [PrivateMessage] = []
     @State private var isLoading = false
@@ -77,13 +77,13 @@ struct ConversationDetailView: View {
                  playerManager: playerManager,
                  targetCommentID: navValue.targetCommentID
              )
-             .environmentObject(settings)
-             .environmentObject(authService)
+             .environment(settings)
+             .environment(authService)
         }
         .sheet(item: $previewLinkTargetFromMessage) { target in
             LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
         }
         .overlay {
             if isLoadingNavigationTarget {
@@ -711,9 +711,9 @@ struct ConversationMessageRow: View {
 // MARK: - Preview
 #Preview {
     struct PreviewWrapper: View {
-        @StateObject private var settings = AppSettings()
-        @StateObject private var authService: AuthService
-        @StateObject private var playerManager = VideoPlayerManager()
+        @State private var settings = AppSettings()
+        @State private var authService: AuthService
+        @State private var playerManager = VideoPlayerManager()
 
         init() {
             let s = AppSettings()
@@ -721,19 +721,19 @@ struct ConversationMessageRow: View {
             a.isLoggedIn = true
             a.currentUser = UserInfo(id: 1, name: "CurrentUser", registered: 1, score: 100, mark: 0, badges: [])
             a.userNonce = "preview_nonce_123"
-            _authService = StateObject(wrappedValue: a)
-            _settings = StateObject(wrappedValue: s)
+            _authService = State(wrappedValue: a)
+            _settings = State(wrappedValue: s)
             let pm = VideoPlayerManager()
             pm.configure(settings: s)
-            _playerManager = StateObject(wrappedValue: pm)
+            _playerManager = State(wrappedValue: pm)
         }
 
         var body: some View {
             NavigationStack {
                 ConversationDetailView(partnerUsername: "PartnerUser")
-                    .environmentObject(settings)
-                    .environmentObject(authService)
-                    .environmentObject(playerManager)
+                    .environment(settings)
+                    .environment(authService)
+                    .environment(playerManager)
             }
         }
     }

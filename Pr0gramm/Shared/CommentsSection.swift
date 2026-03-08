@@ -149,8 +149,8 @@ private struct CommentsSectionPreviewWrapper<Content: View>: View {
 
     var body: some View {
         content($previewTargetLink, $userProfileTargetLink, isCollapsed, toggleCollapse, showCommentInput, initialTargetCommentIDForPreview, highlightCompletedLog, upvoteCommentLog, downvoteCommentLog)
-            .environmentObject(AppSettings())
-            .environmentObject(AuthService(appSettings: AppSettings()))
+            .environment(AppSettings())
+            .environment(AuthService(appSettings: AppSettings()))
     }
 }
 

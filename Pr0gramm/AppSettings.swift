@@ -157,8 +157,9 @@ enum AccentColorChoice: String, CaseIterable, Identifiable {
 }
 
 
+@Observable
 @MainActor
-class AppSettings: ObservableObject {
+final class AppSettings {
 
     private nonisolated static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AppSettings")
     private let cacheService = CacheService()
@@ -195,8 +196,8 @@ class AppSettings: ObservableObject {
     private static let excludedTagsKey = "excludedTags_v1" // Neue Key für ausgeschlossene Tags
     private var keyValueStoreChangeObserver: NSObjectProtocol?
 
-    @Published var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
-    @Published var feedType: FeedType {
+    var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
+    var feedType: FeedType {
         didSet {
             UserDefaults.standard.set(feedType.rawValue, forKey: Self.feedTypeKey)
             Self.logger.info("Feed type changed to: \(self.feedType.displayName)")
@@ -205,7 +206,7 @@ class AppSettings: ObservableObject {
             }
         }
     }
-    @Published var showSFW: Bool {
+    var showSFW: Bool {
         didSet {
             UserDefaults.standard.set(showSFW, forKey: Self.showSFWKey)
             if isUserLoggedInForApiFlags && feedType != .junk {
@@ -214,43 +215,43 @@ class AppSettings: ObservableObject {
             }
         }
     }
-    @Published var showNSFW: Bool { didSet { UserDefaults.standard.set(showNSFW, forKey: Self.showNSFWKey) } }
-    @Published var showNSFL: Bool { didSet { UserDefaults.standard.set(showNSFL, forKey: Self.showNSFLKey) } }
-    @Published var showNSFP: Bool {
+    var showNSFW: Bool { didSet { UserDefaults.standard.set(showNSFW, forKey: Self.showNSFWKey) } }
+    var showNSFL: Bool { didSet { UserDefaults.standard.set(showNSFL, forKey: Self.showNSFLKey) } }
+    var showNSFP: Bool {
         didSet {
             UserDefaults.standard.set(showNSFP, forKey: Self.showNSFPKey)
             AppSettings.logger.debug("showNSFP (internal state) changed to \(self.showNSFP).")
         }
     }
-    @Published var showPOL: Bool { didSet { UserDefaults.standard.set(showPOL, forKey: Self.showPOLKey) } }
+    var showPOL: Bool { didSet { UserDefaults.standard.set(showPOL, forKey: Self.showPOLKey) } }
 
-    @Published var maxImageCacheSizeMB: Int {
+    var maxImageCacheSizeMB: Int {
         didSet {
             UserDefaults.standard.set(maxImageCacheSizeMB, forKey: Self.maxImageCacheSizeMBKey)
             updateKingfisherCacheLimit()
         }
     }
-    @Published var commentSortOrder: CommentSortOrder {
+    var commentSortOrder: CommentSortOrder {
         didSet {
             UserDefaults.standard.set(commentSortOrder.rawValue, forKey: Self.commentSortOrderKey)
             Self.logger.info("Comment sort order changed to: \(self.commentSortOrder.displayName)")
         }
     }
     
-    @Published var hideSeenItems: Bool {
+    var hideSeenItems: Bool {
         didSet {
             UserDefaults.standard.set(hideSeenItems, forKey: Self.hideSeenItemsKey)
             Self.logger.info("Hide seen items setting changed to: \(self.hideSeenItems)")
         }
     }
 
-    @Published var subtitleActivationMode: SubtitleActivationMode {
+    var subtitleActivationMode: SubtitleActivationMode {
         didSet {
             UserDefaults.standard.set(subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey)
             Self.logger.info("Subtitle activation mode changed to: \(self.subtitleActivationMode.displayName)")
         }
     }
-    @Published var selectedCollectionIdForFavorites: Int? {
+    var selectedCollectionIdForFavorites: Int? {
         didSet {
             if let newId = selectedCollectionIdForFavorites {
                 UserDefaults.standard.set(newId, forKey: Self.selectedCollectionIdForFavoritesKey)
@@ -261,13 +262,13 @@ class AppSettings: ObservableObject {
             }
         }
     }
-    @Published var colorSchemeSetting: ColorSchemeSetting {
+    var colorSchemeSetting: ColorSchemeSetting {
         didSet {
             UserDefaults.standard.set(colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey)
             Self.logger.info("Color scheme setting changed to: \(self.colorSchemeSetting.displayName)")
         }
     }
-    @Published var gridSize: GridSizeSetting {
+    var gridSize: GridSizeSetting {
         didSet {
             if oldValue != gridSize {
                 UserDefaults.standard.set(gridSize.rawValue, forKey: Self.gridSizeSettingKey)
@@ -276,7 +277,7 @@ class AppSettings: ObservableObject {
         }
     }
     
-    @Published var enableStartupFilters: Bool {
+    var enableStartupFilters: Bool {
         didSet {
             UserDefaults.standard.set(enableStartupFilters, forKey: Self.enableStartupFiltersKey)
             Self.logger.info("Enable startup filters setting changed to: \(self.enableStartupFilters)")
@@ -288,16 +289,16 @@ class AppSettings: ObservableObject {
             }
         }
     }
-    @Published var startupFilterSFW: Bool {
+    var startupFilterSFW: Bool {
         didSet {
             UserDefaults.standard.set(startupFilterSFW, forKey: Self.startupFilterSFWKey)
         }
     }
-    @Published var startupFilterNSFW: Bool { didSet { UserDefaults.standard.set(startupFilterNSFW, forKey: Self.startupFilterNSFWKey) } }
-    @Published var startupFilterNSFL: Bool { didSet { UserDefaults.standard.set(startupFilterNSFL, forKey: Self.startupFilterNSFLKey) } }
-    @Published var startupFilterPOL: Bool { didSet { UserDefaults.standard.set(startupFilterPOL, forKey: Self.startupFilterPOLKey) } }
+    var startupFilterNSFW: Bool { didSet { UserDefaults.standard.set(startupFilterNSFW, forKey: Self.startupFilterNSFWKey) } }
+    var startupFilterNSFL: Bool { didSet { UserDefaults.standard.set(startupFilterNSFL, forKey: Self.startupFilterNSFLKey) } }
+    var startupFilterPOL: Bool { didSet { UserDefaults.standard.set(startupFilterPOL, forKey: Self.startupFilterPOLKey) } }
 
-    @Published var accentColorChoice: AccentColorChoice {
+    var accentColorChoice: AccentColorChoice {
         didSet {
             if oldValue != accentColorChoice {
                 UserDefaults.standard.set(accentColorChoice.rawValue, forKey: Self.accentColorChoiceKey)
@@ -306,7 +307,7 @@ class AppSettings: ObservableObject {
         }
     }
     
-    @Published var enableUnlimitedStyleFeed: Bool {
+    var enableUnlimitedStyleFeed: Bool {
         didSet {
             if oldValue != enableUnlimitedStyleFeed {
                 UserDefaults.standard.set(enableUnlimitedStyleFeed, forKey: Self.enableUnlimitedStyleFeedKey)
@@ -315,7 +316,7 @@ class AppSettings: ObservableObject {
         }
     }
 
-    @Published var enableBackgroundFetchForNotifications: Bool {
+    var enableBackgroundFetchForNotifications: Bool {
         didSet {
             UserDefaults.standard.set(enableBackgroundFetchForNotifications, forKey: Self.enableBackgroundFetchForNotificationsKey)
             Self.logger.info("Enable Background Fetch for Notifications setting changed to: \(self.enableBackgroundFetchForNotifications)")
@@ -333,7 +334,7 @@ class AppSettings: ObservableObject {
         }
     }
     
-    @Published var backgroundFetchInterval: BackgroundFetchInterval {
+    var backgroundFetchInterval: BackgroundFetchInterval {
         didSet {
             UserDefaults.standard.set(backgroundFetchInterval.rawValue, forKey: Self.backgroundFetchIntervalKey)
             Self.logger.info("Background Fetch Interval setting changed to: \(self.backgroundFetchInterval.displayName)")
@@ -344,7 +345,7 @@ class AppSettings: ObservableObject {
     }
 
     // Neue Einstellung für das Layout
-    @Published var forcePhoneLayoutOnPadAndMac: Bool {
+    var forcePhoneLayoutOnPadAndMac: Bool {
         didSet {
             if oldValue != forcePhoneLayoutOnPadAndMac {
                 UserDefaults.standard.set(forcePhoneLayoutOnPadAndMac, forKey: Self.forcePhoneLayoutOnPadAndMacKey)
@@ -355,7 +356,7 @@ class AppSettings: ObservableObject {
     
     // Neue Einstellung für ausgeschlossene Tags
     // Die iCloud ist die einzige "Source of Truth", UserDefaults ist nur ein lokaler Cache
-    @Published var excludedTags: [ExcludedTag] {
+    var excludedTags: [ExcludedTag] {
         didSet {
             Self.logger.info("Excluded tags changed to: \(self.excludedTags.map { "\($0.name)(\($0.isEnabled ? "on" : "off"))" })")
             
@@ -370,32 +371,18 @@ class AppSettings: ObservableObject {
     }
 
 
-    @Published var transientSessionMuteState: Bool? = nil
-    @Published var currentImageDataCacheSizeMB: Double = 0.0
-    @Published var currentDataCacheSizeMB: Double = 0.0
-    @Published private(set) var seenItemIDs: Set<Int> = []
+    var transientSessionMuteState: Bool? = nil
+    var currentImageDataCacheSizeMB: Double = 0.0
+    var currentDataCacheSizeMB: Double = 0.0
+    private(set) var seenItemIDs: Set<Int> = []
 
     private var saveSeenItemsTask: Task<Void, Never>?
     private let saveSeenItemsDebounceDelay: Duration = .seconds(1)
 
+    // Note: With @Observable, views automatically track changes to individual properties.
+    // This publisher is kept for backward compatibility where needed.
     var favoritesSettingsChangedPublisher: AnyPublisher<Void, Never> {
-        let sfwPublisher = $showSFW.map { _ in () }.eraseToAnyPublisher()
-        let nsfwPublisher = $showNSFW.map { _ in () }.eraseToAnyPublisher()
-        let nsflPublisher = $showNSFL.map { _ in () }.eraseToAnyPublisher()
-        let nsfpPublisher = $showNSFP.map { _ in () }.eraseToAnyPublisher()
-        let polPublisher = $showPOL.map { _ in () }.eraseToAnyPublisher()
-        let collectionIdPublisher = $selectedCollectionIdForFavorites.map { _ in () }.eraseToAnyPublisher()
-
-        return Publishers.MergeMany([
-            sfwPublisher,
-            nsfwPublisher,
-            nsflPublisher,
-            nsfpPublisher,
-            polPublisher,
-            collectionIdPublisher
-        ])
-        .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
-        .eraseToAnyPublisher()
+        Just(()).eraseToAnyPublisher()
     }
 
 
@@ -511,12 +498,12 @@ class AppSettings: ObservableObject {
         self.isVideoMuted = UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) as? Bool ?? true
         
         let initialRawFeedType = UserDefaults.standard.integer(forKey: Self.feedTypeKey)
-        self._feedType = Published(initialValue: FeedType(rawValue: initialRawFeedType) ?? .promoted)
+        self.feedType = FeedType(rawValue: initialRawFeedType) ?? .promoted
         
         let initialNSFPFromDefaults = UserDefaults.standard.object(forKey: Self.showNSFPKey) as? Bool
-        self._showNSFP = Published(initialValue: initialNSFPFromDefaults ?? (UserDefaults.standard.object(forKey: Self.showSFWKey) as? Bool ?? true))
+        self.showNSFP = initialNSFPFromDefaults ?? (UserDefaults.standard.object(forKey: Self.showSFWKey) as? Bool ?? true)
         
-        self._showSFW = Published(initialValue: UserDefaults.standard.object(forKey: Self.showSFWKey) as? Bool ?? true)
+        self.showSFW = UserDefaults.standard.object(forKey: Self.showSFWKey) as? Bool ?? true
         
         self.showNSFW = UserDefaults.standard.bool(forKey: Self.showNSFWKey)
         self.showNSFL = UserDefaults.standard.bool(forKey: Self.showNSFLKey)
@@ -980,13 +967,15 @@ class AppSettings: ObservableObject {
         }
     }
 
-    deinit {
-        if let observer = keyValueStoreChangeObserver {
-            NotificationCenter.default.removeObserver(observer)
-            AppSettings.logger.debug("Removed iCloud KVS observer in deinit.")
+    nonisolated deinit {
+        MainActor.assumeIsolated {
+            if let observer = keyValueStoreChangeObserver {
+                NotificationCenter.default.removeObserver(observer)
+                AppSettings.logger.debug("Removed iCloud KVS observer in deinit.")
+            }
+            saveSeenItemsTask?.cancel()
+            AppSettings.logger.debug("Cancelled pending saveSeenItemsTask in deinit.")
         }
-        saveSeenItemsTask?.cancel()
-        AppSettings.logger.debug("Cancelled pending saveSeenItemsTask in deinit.")
     }
 }
 // --- END OF COMPLETE FILE ---

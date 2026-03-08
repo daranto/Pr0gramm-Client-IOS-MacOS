@@ -21,7 +21,7 @@ struct CollectionItemThumbnail: View, Equatable {
                 .aspectRatio(contentMode: .fill)
                 .aspectRatio(1.0, contentMode: .fit)
                 .background(Material.ultraThin)
-                .cornerRadius(5)
+                .clipShape(.rect(cornerRadius: 5))
                 .clipped()
             
             if isSeen {
@@ -39,8 +39,8 @@ struct CollectionItemsView: View {
     let collection: ApiCollection
     let username: String
 
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     @State var items: [Item]
     @State private var errorMessage: String?
     @State private var isLoading = false
@@ -48,7 +48,7 @@ struct CollectionItemsView: View {
     @State private var isLoadingMore = false
     @State private var showNoFilterMessage = false
 
-    @StateObject private var playerManager = VideoPlayerManager()
+    @State private var playerManager = VideoPlayerManager()
     @State private var showingFilterSheet = false
 
     @State private var searchText = ""
@@ -137,8 +137,8 @@ struct CollectionItemsView: View {
                     playerManager: playerManager,
                     loadMoreAction: { Task { await loadMoreItems() } }
                 )
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
             } else {
                 Text("Fehler: Item \(destinationItem.id) nicht in dieser Sammlung gefunden.")
                     .onAppear { CollectionItemsView.logger.warning("Navigation destination item \(destinationItem.id) not found in CollectionItemsView.") }
@@ -155,8 +155,8 @@ struct CollectionItemsView: View {
         }
         .sheet(isPresented: $showingFilterSheet) {
             FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
         }
         .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
             Button("OK") { errorMessage = nil }

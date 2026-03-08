@@ -23,11 +23,11 @@ struct Pr0grammApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Environment(\.scenePhase) var scenePhase
 
-    @StateObject private var appSettings: AppSettings
-    @StateObject private var authService: AuthService
-    @StateObject private var navigationService = NavigationService()
-    @StateObject private var scenePhaseObserver: ScenePhaseObserver
-    @StateObject private var appOrientationManager = AppOrientationManager()
+    @State private var appSettings: AppSettings
+    @State private var authService: AuthService
+    @State private var navigationService = NavigationService()
+    @State private var scenePhaseObserver: ScenePhaseObserver
+    @State private var appOrientationManager = AppOrientationManager()
 
 
     @State private var activeDeepLinkData: DeepLinkData? = nil
@@ -37,9 +37,9 @@ struct Pr0grammApp: App {
     init() {
         let settings = AppSettings()
         let auth = AuthService(appSettings: settings)
-        _appSettings = StateObject(wrappedValue: settings)
-        _authService = StateObject(wrappedValue: auth)
-        _scenePhaseObserver = StateObject(wrappedValue: ScenePhaseObserver(appSettings: settings, authService: auth))
+        _appSettings = State(wrappedValue: settings)
+        _authService = State(wrappedValue: auth)
+        _scenePhaseObserver = State(wrappedValue: ScenePhaseObserver(appSettings: settings, authService: auth))
         
         configureAudioSession()
         Pr0grammApp.logger.info("Pr0grammApp init")
@@ -51,11 +51,11 @@ struct Pr0grammApp: App {
     var body: some Scene {
         WindowGroup {
             AppRootView()
-                .environmentObject(appSettings)
-                .environmentObject(authService)
-                .environmentObject(navigationService)
-                .environmentObject(scenePhaseObserver)
-                .environmentObject(appOrientationManager)
+                .environment(appSettings)
+                .environment(authService)
+                .environment(navigationService)
+                .environment(scenePhaseObserver)
+                .environment(appOrientationManager)
                 .onOpenURL { url in
                     Pr0grammApp.logger.info("App opened with URL: \(url.absoluteString)")
                     handleIncomingURL(url)
@@ -65,8 +65,8 @@ struct Pr0grammApp: App {
                         itemID: data.itemIDValue,
                         targetCommentID: data.commentIDValue
                     )
-                    .environmentObject(appSettings)
-                    .environmentObject(authService)
+                    .environment(appSettings)
+                    .environment(authService)
                 }
         }
         .onChange(of: scenePhase) { oldPhase, newPhase in
@@ -152,15 +152,15 @@ struct Pr0grammApp: App {
 }
 
 struct AppRootView: View {
-    @EnvironmentObject var appSettings: AppSettings
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var navigationService: NavigationService
-    @EnvironmentObject var scenePhaseObserver: ScenePhaseObserver
-    @EnvironmentObject var appOrientationManager: AppOrientationManager
+    @Environment(AppSettings.self) var appSettings
+    @Environment(AuthService.self) var authService
+    @Environment(NavigationService.self) var navigationService
+    @Environment(ScenePhaseObserver.self) var scenePhaseObserver
+    @Environment(AppOrientationManager.self) var appOrientationManager
     @Environment(\.scenePhase) var scenePhase
 
     var body: some View {
-        MainView(navigationService: navigationService)
+        MainView()
             .accentColor(appSettings.accentColorChoice.swiftUIColor)
             .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
             .task {
@@ -177,9 +177,9 @@ struct DeepLinkItemLoaderView: View {
     let targetCommentID: Int?
     @Environment(\.dismiss) var dismissSheet
 
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
-    @StateObject private var playerManager = VideoPlayerManager()
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
+    @State private var playerManager = VideoPlayerManager()
     
     @State private var fetchedItem: Item? = nil
     @State private var isLoading: Bool = true
@@ -195,9 +195,9 @@ struct DeepLinkItemLoaderView: View {
                 ProgressView("Lade Post \(itemID)...")
             } else if let error = errorMessage {
                 VStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange).font(.largeTitle)
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.largeTitle)
                     Text("Fehler beim Laden").font(.headline)
-                    Text(error).font(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
+                    Text(error).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     Button("Erneut versuchen") { Task { await loadItem() } }.padding(.top)
                 }
                 .padding()
@@ -205,7 +205,7 @@ struct DeepLinkItemLoaderView: View {
                 VStack(spacing: 15) {
                     Image(systemName: "eye.slash.fill")
                         .font(.system(size: 40))
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                     Text("Post ausgeblendet")
                         .font(.title2.bold())
                     Text("Dieser Post (ID: \(item.id)) ist mit deinen aktuellen Filtern nicht sichtbar.")
@@ -234,8 +234,8 @@ struct DeepLinkItemLoaderView: View {
                         targetCommentID: targetCommentID,
                         isPresentedInSheet: true
                     )
-                    .environmentObject(settings)
-                    .environmentObject(authService)
+                    .environment(settings)
+                    .environment(authService)
                     .navigationTitle("Post \(item.id)")
                     #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)

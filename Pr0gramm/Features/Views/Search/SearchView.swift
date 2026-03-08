@@ -142,8 +142,7 @@ struct SearchItemThumbnail: View, Equatable {
                 .aspectRatio(contentMode: .fill)
                 .aspectRatio(1.0, contentMode: .fit)
                 .background(Material.ultraThin)
-                .cornerRadius(5)
-                .clipped()
+                .clipShape(.rect(cornerRadius: 5))
             
             if isSeen {
                 Image(systemName: "checkmark.circle.fill")
@@ -157,9 +156,9 @@ struct SearchItemThumbnail: View, Equatable {
 }
 
 struct SearchView: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var navigationService: NavigationService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
+    @Environment(NavigationService.self) var navigationService
     @Environment(\.dismissSearch) private var dismissSearch
 
     @State private var items: [Item] = []
@@ -171,7 +170,7 @@ struct SearchView: View {
     @State private var navigationPath = NavigationPath()
     @State private var showingFilterSheet = false
 
-    @StateObject private var playerManager = VideoPlayerManager()
+    @State private var playerManager = VideoPlayerManager()
     @State private var helpPostPreviewTarget: PreviewLinkTarget? = nil
     @State private var isLoadingHelpPost = false
 
@@ -242,8 +241,8 @@ struct SearchView: View {
                             playerManager: playerManager,
                             loadMoreAction: { Task { await loadMoreSearch() } }
                         )
-                        .environmentObject(settings)
-                        .environmentObject(authService)
+                        .environment(settings)
+                        .environment(authService)
                     } else {
                         Text("Fehler: Item nicht in Suchergebnissen gefunden.")
                             .onAppear { SearchView.logger.warning("Navigation destination item \(destinationItem.id) not found in search results.") }
@@ -310,15 +309,13 @@ struct SearchView: View {
                             searchHistory: searchHistory,
                             onSelectTerm: { term in
                                 let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
-                                Task.detached {
-                                    await MainActor.run {
-                                        searchText = trimmed
-                                        isSearchActive = false
-                                        addTermToSearchHistory(trimmed)
-                                        dismissSearch()
-                                        dismissKeyboard()
-                                    }
-                                    try? await Task.sleep(nanoseconds: 150_000_000)
+                                Task { @MainActor in
+                                    searchText = trimmed
+                                    isSearchActive = false
+                                    addTermToSearchHistory(trimmed)
+                                    dismissSearch()
+                                    dismissKeyboard()
+                                    try? await Task.sleep(for: .milliseconds(150))
                                     await performSearchLogic(isInitialSearch: true)
                                 }
                             },
@@ -334,13 +331,13 @@ struct SearchView: View {
         }
         .sheet(isPresented: $showingFilterSheet) {
             FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false, showExcludedTagsSection: false)
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
         }
         .sheet(item: $helpPostPreviewTarget) { targetWrapper in
             LinkedItemPreviewWrapperView(itemID: targetWrapper.itemID, targetCommentID: targetWrapper.commentID)
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
         }
         .onAppear {
             loadSearchHistory()

@@ -9,8 +9,8 @@ import os
 struct UserCollectionsListView: View {
     let username: String // Username whose collections to display
 
-    @EnvironmentObject var authService: AuthService // To get the collections
-    @EnvironmentObject var settings: AppSettings // For PagedDetailViewWrapperForItem if needed
+    @Environment(AuthService.self) var authService // To get the collections
+    @Environment(AppSettings.self) var settings // For PagedDetailViewWrapperForItem if needed
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserCollectionsListView")
 
@@ -72,8 +72,8 @@ struct UserCollectionsListView: View {
 // MARK: - Previews
 #Preview {
     struct UserCollectionsListViewPreviewWrapper: View {
-        @StateObject private var settings: AppSettings
-        @StateObject private var authService: AuthService
+        @State private var settings: AppSettings
+        @State private var authService: AuthService
         let usernameForPreview: String
 
         init(collections: [ApiCollection], username: String) {
@@ -85,16 +85,16 @@ struct UserCollectionsListView: View {
             tempAuthService.setUserCollectionsForPreview(collections)
             #endif
 
-            _settings = StateObject(wrappedValue: tempSettings)
-            _authService = StateObject(wrappedValue: tempAuthService)
+            _settings = State(wrappedValue: tempSettings)
+            _authService = State(wrappedValue: tempAuthService)
             self.usernameForPreview = username
         }
 
         var body: some View {
             NavigationStack {
                 UserCollectionsListView(username: usernameForPreview)
-                    .environmentObject(settings)
-                    .environmentObject(authService)
+                    .environment(settings)
+                    .environment(authService)
             }
         }
     }
@@ -109,8 +109,8 @@ struct UserCollectionsListView: View {
 
 #Preview("Empty Collections") {
     struct UserCollectionsListViewEmptyPreviewWrapper: View {
-        @StateObject private var settings = AppSettings()
-        @StateObject private var authService: AuthService
+        @State private var settings = AppSettings()
+        @State private var authService: AuthService
         let usernameForPreview: String
 
         init() {
@@ -122,16 +122,16 @@ struct UserCollectionsListView: View {
             tempAuthService.setUserCollectionsForPreview([])
             #endif
             
-            _settings = StateObject(wrappedValue: tempSettings)
-            _authService = StateObject(wrappedValue: tempAuthService)
+            _settings = State(wrappedValue: tempSettings)
+            _authService = State(wrappedValue: tempAuthService)
             self.usernameForPreview = "TestUser"
         }
         
         var body: some View {
             NavigationStack {
                 UserCollectionsListView(username: usernameForPreview)
-                    .environmentObject(settings)
-                    .environmentObject(authService)
+                    .environment(settings)
+                    .environment(authService)
             }
         }
     }

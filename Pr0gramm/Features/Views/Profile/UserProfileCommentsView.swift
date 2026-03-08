@@ -8,8 +8,8 @@ import Kingfisher
 struct UserProfileCommentsView: View {
     let username: String
 
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     @State private var comments: [ItemComment] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
@@ -27,7 +27,7 @@ struct UserProfileCommentsView: View {
     @State private var previewLinkTargetFromComment: PreviewLinkTarget? = nil
     @State private var didLoad: Bool = false
 
-    @StateObject private var playerManager = VideoPlayerManager()
+    @State private var playerManager = VideoPlayerManager()
 
     private let apiService = APIService()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserProfileCommentsView")
@@ -51,8 +51,8 @@ struct UserProfileCommentsView: View {
                  playerManager: playerManager,
                  targetCommentID: navValue.targetCommentID
              )
-             .environmentObject(settings)
-             .environmentObject(authService)
+             .environment(settings)
+             .environment(authService)
              .onDisappear {
                  UserProfileCommentsView.logger.info("PagedDetailViewWrapperForItem disappeared. itemNavigationValue should now be nil.")
              }
@@ -60,8 +60,8 @@ struct UserProfileCommentsView: View {
         // --- MODIFIED: LinkedItemPreviewView Aufruf angepasst ---
         .sheet(item: $previewLinkTargetFromComment) { target in
             LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID) // commentID übergeben
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
                 .tint(settings.accentColorChoice.swiftUIColor)
         }
         // --- END MODIFICATION ---
@@ -347,23 +347,23 @@ struct UserProfileCommentsView: View {
 
 #Preview {
     struct PreviewWrapper: View {
-        @StateObject private var previewSettings = AppSettings()
-        @StateObject private var previewAuthService: AuthService
+        @State private var previewSettings = AppSettings()
+        @State private var previewAuthService: AuthService
 
         init() {
             let settings = AppSettings()
             let authService = AuthService(appSettings: settings)
             authService.isLoggedIn = true
             authService.currentUser = UserInfo(id: 1, name: "TestUserSelf", registered: 1, score: 100, mark: 1, badges: [])
-            _previewAuthService = StateObject(wrappedValue: authService)
-            _previewSettings = StateObject(wrappedValue: settings)
+            _previewAuthService = State(wrappedValue: authService)
+            _previewSettings = State(wrappedValue: settings)
         }
 
         var body: some View {
             NavigationStack {
                 UserProfileCommentsView(username: "Daranto")
-                    .environmentObject(previewSettings)
-                    .environmentObject(previewAuthService)
+                    .environment(previewSettings)
+                    .environment(previewAuthService)
             }
         }
     }

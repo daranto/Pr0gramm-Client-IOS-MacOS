@@ -18,11 +18,11 @@ struct UnlimitedFeedItemDataModel {
 }
 
 struct UnlimitedStyleFeedView: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var navigationService: NavigationService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
+    @Environment(NavigationService.self) var navigationService
 
-    @StateObject private var playerManager: VideoPlayerManager
+    @State private var playerManager: VideoPlayerManager
     @StateObject private var keyboardActionHandlerInstance = KeyboardActionHandler()
 
     @State private var items: [Item] = []
@@ -87,7 +87,7 @@ struct UnlimitedStyleFeedView: View {
     
     init() {
         let pm = VideoPlayerManager()
-        _playerManager = StateObject(wrappedValue: pm)
+        _playerManager = State(wrappedValue: pm)
         _items = State(initialValue: [createDummyStartItem()])
         _activeItemID = State(initialValue: dummyStartItemID)
         _scrolledItemID = State(initialValue: dummyStartItemID)
@@ -287,16 +287,16 @@ struct UnlimitedStyleFeedView: View {
         // Sheets nacheinander, nicht verschachtelt
         .sheet(isPresented: $showingFilterSheet, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) {
             FilterView(relevantFeedTypeForFilterBehavior: settings.feedType, hideFeedOptions: false, showHideSeenItemsToggle: true)
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
         }
         .onChange(of: showingFilterSheet) { if $1 { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
 
         .sheet(item: $tagForSearchSheet, onDismiss: { tagForSearchSheet = nil; resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) { tag in
             NavigationStack {
                 TagSearchView(currentSearchTag: .constant(tag))
-                    .environmentObject(settings)
-                    .environmentObject(authService)
+                    .environment(settings)
+                    .environment(authService)
                     .navigationTitle("\(tag)")
                     .navigationBarTitleDisplayMode(.inline)
             }
@@ -328,8 +328,8 @@ struct UnlimitedStyleFeedView: View {
                     }
                 }
             )
-            .environmentObject(settings)
-            .environmentObject(authService)
+            .environment(settings)
+            .environment(authService)
         }
         .onChange(of: itemForTagSheet) { if $1 != nil { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
             
@@ -349,17 +349,17 @@ struct UnlimitedStyleFeedView: View {
             
         .sheet(item: $collectionSelectionSheetTarget, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) { target in
             CollectionSelectionView(item: target.item, onCollectionSelected: { selectedCollection in Task { await addActiveItemToSelectedCollection(collection: selectedCollection) } } )
-                .environmentObject(authService)
-                .environmentObject(settings)
+                .environment(authService)
+                .environment(settings)
                 .presentationDetents([.medium, .large])
         }
         .onChange(of: collectionSelectionSheetTarget) { if $1 != nil { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
             
         .sheet(item: $userProfileSheetUsername, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) { usernameToDisplay in
             UserProfileSheetView(username: usernameToDisplay)
-                .environmentObject(authService)
-                .environmentObject(settings)
-                .environmentObject(playerManager)
+                .environment(authService)
+                .environment(settings)
+                .environment(playerManager)
         }
         .onChange(of: userProfileSheetUsername) { if $1 != nil { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
         .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoadingFeed)) {
@@ -448,6 +448,7 @@ struct UnlimitedStyleFeedView: View {
     
     @ViewBuilder
     private var feedControls: some View {
+        @Bindable var settings = settings
         Picker("Feed Typ", selection: $settings.feedType) {
             ForEach(FeedType.allCases) { type in
                 Text(type.displayName).tag(type)
@@ -1382,8 +1383,8 @@ struct UnlimitedStyleFeedView: View {
     settings.enableUnlimitedStyleFeed = true
     
     return UnlimitedStyleFeedView()
-        .environmentObject(settings)
-        .environmentObject(authService)
-        .environmentObject(navigationService)
+        .environment(settings)
+        .environment(authService)
+        .environment(navigationService)
 }
 // --- END OF COMPLETE FILE ---

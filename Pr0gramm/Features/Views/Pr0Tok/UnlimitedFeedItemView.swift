@@ -14,8 +14,8 @@ fileprivate struct UnlimitedVotableTagView: View {
     let onDownvote: () -> Void
     let onTapTag: () -> Void
 
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var settings: AppSettings
+    @Environment(AuthService.self) var authService
+    @Environment(AppSettings.self) var settings
     
     @State private var showExcludeConfirmation = false
 
@@ -121,13 +121,13 @@ fileprivate struct UnlimitedVotableTagView: View {
 
 struct UnlimitedFeedItemView: View {
     let itemData: UnlimitedFeedItemDataModel
-    @ObservedObject var playerManager: VideoPlayerManager
+    @Bindable var playerManager: VideoPlayerManager
     @ObservedObject var keyboardActionHandlerForVideo: KeyboardActionHandler
     let isActive: Bool
     let isDummyItem: Bool
 
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UnlimitedFeedItemView")
 
     let onToggleShowAllTags: () -> Void
@@ -185,7 +185,7 @@ struct UnlimitedFeedItemView: View {
                                 .foregroundColor(.orange)
                                 .padding(5)
                                 .background(Material.ultraThin)
-                                .cornerRadius(5)
+                                .clipShape(.rect(cornerRadius: 5))
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                                 .padding(.top, 50)
                             Spacer()
@@ -203,7 +203,7 @@ struct UnlimitedFeedItemView: View {
                              .padding(.horizontal, 10)
                              .padding(.vertical, 5)
                              .background(.black.opacity(0.75))
-                             .cornerRadius(6)
+                             .clipShape(.rect(cornerRadius: 6))
                              .multilineTextAlignment(.center)
                              .padding(.horizontal)
                              .padding(.bottom, bottomUIBarHeightEstimate + (bottomSafeAreaPadding > 0 ? bottomSafeAreaPadding : 10) + 10)
@@ -247,8 +247,8 @@ struct UnlimitedFeedItemView: View {
                     initialInfoStatusProp: itemData.itemInfoStatus,
                     onRetryLoadDetails: onRetryLoadDetails
                 )
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
             }
     }
 

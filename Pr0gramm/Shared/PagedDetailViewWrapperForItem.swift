@@ -9,7 +9,7 @@ import os
 @MainActor
 struct PagedDetailViewWrapperForItem: View {
     @State var items: [Item] // State variable holding the array with the single item.
-    @ObservedObject var playerManager: VideoPlayerManager // Pass down the player manager.
+    @Bindable var playerManager: VideoPlayerManager // Pass down the player manager.
     let targetCommentID: Int?
     let isPresentedInSheet: Bool // Neue Eigenschaft
 

@@ -7,7 +7,7 @@ import os
 struct CalendarEventDetailView: View {
     let event: CalendarEvent
 
-    @EnvironmentObject var navigationService: NavigationService
+    @Environment(NavigationService.self) var navigationService
     @State private var fullEvent: CalendarEvent?
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -162,6 +162,6 @@ extension String {
     return NavigationStack {
         CalendarEventDetailView(event: sampleEvent)
     }
-    .environmentObject(NavigationService())
+    .environment(NavigationService())
 }
 // --- END OF COMPLETE FILE ---

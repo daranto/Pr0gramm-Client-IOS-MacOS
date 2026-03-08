@@ -6,8 +6,9 @@ import Combine
 import os
 import UIKit
 
+@Observable
 @MainActor
-class AuthService: ObservableObject {
+final class AuthService {
 
     // MARK: - Dependencies
     private let apiService = APIService()
@@ -29,7 +30,7 @@ class AuthService: ObservableObject {
 
 
     // MARK: - Published Properties
-    @Published var isLoggedIn: Bool = false {
+    var isLoggedIn: Bool = false {
         didSet {
             appSettings.updateUserLoginStatusForApiFlags(isLoggedIn: isLoggedIn)
             if isLoggedIn {
@@ -48,41 +49,41 @@ class AuthService: ObservableObject {
             }
         }
     }
-    @Published var currentUser: UserInfo? = nil
-    @Published var userNonce: String? = nil
-    @Published private(set) var isLoading: Bool = false
-    @Published private(set) var loginError: String? = nil
-    @Published private(set) var needsCaptcha: Bool = false
-    @Published private(set) var captchaToken: String? = nil
-    @Published private(set) var captchaImage: UIImage? = nil
+    var currentUser: UserInfo? = nil
+    var userNonce: String? = nil
+    private(set) var isLoading: Bool = false
+    private(set) var loginError: String? = nil
+    private(set) var needsCaptcha: Bool = false
+    private(set) var captchaToken: String? = nil
+    private(set) var captchaImage: UIImage? = nil
 
-    @Published var favoritedItemIDs: Set<Int> = []
-    @Published var votedItemStates: [Int: Int] = [:]
-    @Published private(set) var isVoting: [Int: Bool] = [:]
+    var favoritedItemIDs: Set<Int> = []
+    var votedItemStates: [Int: Int] = [:]
+    private(set) var isVoting: [Int: Bool] = [:]
 
-    @Published var favoritedCommentIDs: Set<Int> = []
-    @Published private(set) var isFavoritingComment: [Int: Bool] = [:]
+    var favoritedCommentIDs: Set<Int> = []
+    private(set) var isFavoritingComment: [Int: Bool] = [:]
 
-    @Published var votedCommentStates: [Int: Int] = [:]
-    @Published private(set) var isVotingComment: [Int: Bool] = [:]
+    var votedCommentStates: [Int: Int] = [:]
+    private(set) var isVotingComment: [Int: Bool] = [:]
     
-    @Published var votedTagStates: [Int: Int] = [:]
-    @Published private(set) var isVotingTag: [Int: Bool] = [:]
+    var votedTagStates: [Int: Int] = [:]
+    private(set) var isVotingTag: [Int: Bool] = [:]
     
-    @Published private(set) var userCollections: [ApiCollection] = []
+    private(set) var userCollections: [ApiCollection] = []
     
-    @Published private(set) var unreadInboxTotal: Int = 0
-    @Published private(set) var unreadCommentCount: Int = 0
-    @Published private(set) var unreadMentionCount: Int = 0
-    @Published private(set) var unreadSystemNotificationCount: Int = 0
-    @Published private(set) var unreadFollowCount: Int = 0
-    @Published private(set) var unreadPrivateMessageCount: Int = 0
+    private(set) var unreadInboxTotal: Int = 0
+    private(set) var unreadCommentCount: Int = 0
+    private(set) var unreadMentionCount: Int = 0
+    private(set) var unreadSystemNotificationCount: Int = 0
+    private(set) var unreadFollowCount: Int = 0
+    private(set) var unreadPrivateMessageCount: Int = 0
     
-    @Published var followedUsers: [FollowListItem] = []
-    @Published var subscribedUsernames: Set<String> = []
-    @Published private(set) var isLoadingFollowList: Bool = false
-    @Published private(set) var followListError: String? = nil
-    @Published private(set) var isModifyingFollowStatus: [String: Bool] = [:]
+    var followedUsers: [FollowListItem] = []
+    var subscribedUsernames: Set<String> = []
+    private(set) var isLoadingFollowList: Bool = false
+    private(set) var followListError: String? = nil
+    private(set) var isModifyingFollowStatus: [String: Bool] = [:]
 
 
     private var unreadCountSyncTimer: Timer?
@@ -1267,11 +1268,10 @@ class AuthService: ObservableObject {
          AuthService.logger.debug("--- End Cookie List ---")
     }
     
-    deinit {
-        let timer = self.unreadCountSyncTimer
-        Task { @MainActor [timer] in
-            timer?.invalidate()
-            AuthService.logger.debug("AuthService deinit. Unread count sync timer invalidated via Task.")
+    nonisolated deinit {
+        MainActor.assumeIsolated {
+            unreadCountSyncTimer?.invalidate()
+            AuthService.logger.debug("AuthService deinit. Unread count sync timer invalidated.")
         }
     }
 }

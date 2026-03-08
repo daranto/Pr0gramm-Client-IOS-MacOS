@@ -7,8 +7,8 @@ import os
 /// A view to display a list of conversations for the "Private Messages" tab in the Inbox.
 /// Fetches conversations from the API and allows navigation to a specific conversation's detail view.
 struct ConversationsListView: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
 
     @Binding var conversations: [InboxConversation]
     @Binding var isLoading: Bool
@@ -74,8 +74,8 @@ struct ConversationsListView: View {
 // MARK: - Preview
 #Preview {
     struct PreviewWrapper: View {
-        @StateObject private var settings = AppSettings()
-        @StateObject private var authService: AuthService
+        @State private var settings = AppSettings()
+        @State private var authService: AuthService
         
         @State private var sampleConversations: [InboxConversation] = [
             InboxConversation(name: "UserAlpha", mark: 2, lastMessage: Int(Date().timeIntervalSince1970 - 300), unreadCount: 2, blocked: 0, canReceiveMessages: 1),
@@ -90,8 +90,8 @@ struct ConversationsListView: View {
             let a = AuthService(appSettings: s)
             a.isLoggedIn = true
             a.currentUser = UserInfo(id: 1, name: "PreviewUser", registered: 1, score: 100, mark: 1, badges: [])
-            _authService = StateObject(wrappedValue: a)
-            _settings = StateObject(wrappedValue: s)
+            _authService = State(wrappedValue: a)
+            _settings = State(wrappedValue: s)
         }
 
         var body: some View {
@@ -112,8 +112,8 @@ struct ConversationsListView: View {
                     }
                 )
                 .navigationTitle("Private Nachrichten")
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
             }
         }
     }

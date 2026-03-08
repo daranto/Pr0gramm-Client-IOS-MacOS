@@ -3,24 +3,24 @@
 
 import Foundation
 import AVKit
-import Combine
 import os
 
 /// Manages the lifecycle and state of the single AVPlayer instance used across the PagedDetailView.
 /// This ensures proper cleanup even when the owning view's state changes rapidly.
 /// Also handles fetching, parsing, and displaying video subtitles based on user settings.
+@Observable
 @MainActor
-class VideoPlayerManager: ObservableObject {
+final class VideoPlayerManager {
     nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "VideoPlayerManager")
 
-    // MARK: - Published Player State
-    @Published private(set) var player: AVPlayer? = nil
-    @Published private(set) var playerItemID: Int? = nil
+    // MARK: - Player State
+    private(set) var player: AVPlayer? = nil
+    private(set) var playerItemID: Int? = nil
 
-    // MARK: - Published Subtitle State
-    @Published private(set) var subtitleCues: [SubtitleCue] = []
-    @Published private(set) var currentSubtitleText: String? = nil
-    @Published private(set) var subtitleError: String? = nil
+    // MARK: - Subtitle State
+    private(set) var subtitleCues: [SubtitleCue] = []
+    private(set) var currentSubtitleText: String? = nil
+    private(set) var subtitleError: String? = nil
     
     // MARK: - Sheet Player Preservation
     private var preservedPlayer: AVPlayer? = nil
@@ -29,8 +29,8 @@ class VideoPlayerManager: ObservableObject {
     private var isSheetPlayerActive: Bool = false
     
     // MARK: - Published Error/Retry State
-    @Published private(set) var playerError: String? = nil
-    @Published private(set) var showRetryButton: Bool = false
+    private(set) var playerError: String? = nil
+    private(set) var showRetryButton: Bool = false
     private var currentItem: Item?
     private var retryCount = 0
     private let maxRetries = 3
@@ -594,27 +594,19 @@ class VideoPlayerManager: ObservableObject {
         player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
-    deinit {
-        let kvoMuteObserver = self.muteObserver
-        let kvoItemStatusObserver = self.playerItemStatusObserver
-        let kvoItemErrorObserver = self.playerItemErrorObserver
-        let ncObserver = self.loopObserver
-        let timeToken = self.timeObserverToken
-        Task { @MainActor [weak self] in
-            guard let strongSelf = self else { return }
-            kvoMuteObserver?.invalidate()
-            kvoItemStatusObserver?.invalidate()
-            kvoItemErrorObserver?.invalidate()
-            if let ncObserver = ncObserver { NotificationCenter.default.removeObserver(ncObserver) }
-            if let token = timeToken, let player = strongSelf.player {
-                player.removeTimeObserver(token)
-                VideoPlayerManager.logger.trace("[Manager] Removed time observer in deinit Task.")
-            } else if timeToken != nil {
-                 VideoPlayerManager.logger.trace("[Manager] Could not remove time observer in deinit Task (player was nil).")
+    nonisolated deinit {
+        MainActor.assumeIsolated {
+            muteObserver?.invalidate()
+            playerItemStatusObserver?.invalidate()
+            playerItemErrorObserver?.invalidate()
+            if let observer = loopObserver {
+                NotificationCenter.default.removeObserver(observer)
             }
-            VideoPlayerManager.logger.debug("[Manager] Observer cleanup attempted in deinit via Task.")
+            if let token = timeObserverToken {
+                player?.removeTimeObserver(token)
+            }
+            VideoPlayerManager.logger.debug("VideoPlayerManager deinit cleanup completed.")
         }
-         VideoPlayerManager.logger.debug("VideoPlayerManager deinit initiated.")
     }
 }
 // --- END OF COMPLETE FILE ---

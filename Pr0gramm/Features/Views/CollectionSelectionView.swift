@@ -10,8 +10,8 @@ struct CollectionSelectionView: View {
     let item: Item // The item to be added
     let onCollectionSelected: (ApiCollection) -> Void // Callback when a collection is chosen
 
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var settings: AppSettings // For API flags or other general settings if needed by API calls indirectly
+    @Environment(AuthService.self) var authService
+    @Environment(AppSettings.self) var settings // For API flags or other general settings if needed by API calls indirectly
     @Environment(\.dismiss) var dismiss
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "CollectionSelectionView")
@@ -78,8 +78,8 @@ struct CollectionSelectionView: View {
 #Preview {
     // Preview requires a bit of setup for AuthService and an Item
     struct CollectionSelectionPreviewWrapper: View {
-        @StateObject var authService: AuthService
-        @StateObject var settings = AppSettings() // Add AppSettings for preview
+        @State var authService: AuthService
+        @State var settings = AppSettings() // Add AppSettings for preview
         let sampleItem = Item(id: 123, promoted: nil, userId: 1, down: 0, up: 10, created: 0, image: "test.jpg", thumb: "test_thumb.jpg", fullsize: nil, preview: nil, width: 100, height: 100, audio: false, source: nil, flags: 1, user: "Test", mark: 1, repost: nil, variants: nil, subtitles: nil)
 
         init() {
@@ -103,8 +103,8 @@ struct CollectionSelectionView: View {
             tempSettings.selectedCollectionIdForFavorites = 1
 
 
-            _authService = StateObject(wrappedValue: tempAuthService)
-            _settings = StateObject(wrappedValue: tempSettings) // Store AppSettings
+            _authService = State(wrappedValue: tempAuthService)
+            _settings = State(wrappedValue: tempSettings) // Store AppSettings
         }
 
         var body: some View {
@@ -116,8 +116,8 @@ struct CollectionSelectionView: View {
                 CollectionSelectionView(item: sampleItem) { selectedCollection in
                     print("Preview: Collection '\(selectedCollection.name)' selected for item \(sampleItem.id)")
                 }
-                .environmentObject(authService)
-                .environmentObject(settings) // Provide AppSettings to the sheet environment
+                .environment(authService)
+                .environment(settings) // Provide AppSettings to the sheet environment
             }
         }
     }

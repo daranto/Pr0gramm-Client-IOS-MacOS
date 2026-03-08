@@ -75,9 +75,9 @@ enum InboxViewMessageType: Int, CaseIterable, Identifiable {
 
 
 struct InboxView: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var navigationService: NavigationService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
+    @Environment(NavigationService.self) var navigationService
     
     @State var messages: [InboxMessage] = []
     @State private var errorMessage: String?
@@ -91,7 +91,7 @@ struct InboxView: View {
 
     @State private var previewLinkTargetFromMessage: PreviewLinkTarget? = nil
 
-    @StateObject private var playerManager = VideoPlayerManager()
+    @State private var playerManager = VideoPlayerManager()
 
     @State private var selectedMessageType: InboxViewMessageType = .comments
     
@@ -133,20 +133,20 @@ struct InboxView: View {
                      playerManager: playerManager,
                      targetCommentID: navValue.targetCommentID
                  )
-                 .environmentObject(settings)
-                 .environmentObject(authService)
+                 .environment(settings)
+                 .environment(authService)
             }
             .navigationDestination(item: $profileNavigationValue) { navValue in
                  UserProfileSheetView(username: navValue.username)
-                      .environmentObject(settings)
-                      .environmentObject(authService)
-                      .environmentObject(playerManager)
+                      .environment(settings)
+                      .environment(authService)
+                      .environment(playerManager)
             }
             .navigationDestination(item: $conversationNavigationValue) { navValue in
                 ConversationDetailView(partnerUsername: navValue.conversationPartnerName)
-                    .environmentObject(settings)
-                    .environmentObject(authService)
-                    .environmentObject(playerManager)
+                    .environment(settings)
+                    .environment(authService)
+                    .environment(playerManager)
             }
             .sheet(item: $previewLinkTargetFromMessage) { target in
                 NavigationStack {
@@ -163,8 +163,8 @@ struct InboxView: View {
                         .toolbarBackground(Material.bar, for: .navigationBar)
                         .toolbarBackground(.visible, for: .navigationBar)
                 }
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
             }
             .overlay {
                 if isLoadingNavigationTarget {
@@ -762,10 +762,10 @@ struct InboxView: View {
 // MARK: - InboxContentOnlyView for use within other NavigationStacks
 /// A wrapper that displays inbox content without its own NavigationStack
 struct InboxContentOnlyView: View {
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var navigationService: NavigationService
-    @StateObject private var playerManager = VideoPlayerManager()
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
+    @Environment(NavigationService.self) var navigationService
+    @State private var playerManager = VideoPlayerManager()
     
     @State var messages: [InboxMessage] = []
     @State private var errorMessage: String?
@@ -821,9 +821,9 @@ struct InboxContentOnlyView: View {
         }
         .navigationDestination(item: $selectedConversationPartner) { partnerUsername in
             ConversationDetailView(partnerUsername: partnerUsername)
-                .environmentObject(settings)
-                .environmentObject(authService)
-                .environmentObject(playerManager)
+                .environment(settings)
+                .environment(authService)
+                .environment(playerManager)
         }
         .navigationDestination(item: $itemNavigationValue) { navValue in
              PagedDetailViewWrapperForItem(
@@ -831,14 +831,14 @@ struct InboxContentOnlyView: View {
                  playerManager: playerManager,
                  targetCommentID: navValue.targetCommentID
              )
-             .environmentObject(settings)
-             .environmentObject(authService)
+             .environment(settings)
+             .environment(authService)
         }
         .navigationDestination(item: $profileNavigationValue) { navValue in
              UserProfileSheetView(username: navValue.username)
-                  .environmentObject(settings)
-                  .environmentObject(authService)
-                  .environmentObject(playerManager)
+                  .environment(settings)
+                  .environment(authService)
+                  .environment(playerManager)
         }
         .sheet(item: $previewLinkTargetFromMessage) { target in
             NavigationStack {
@@ -855,8 +855,8 @@ struct InboxContentOnlyView: View {
                     .toolbarBackground(Material.bar, for: .navigationBar)
                     .toolbarBackground(.visible, for: .navigationBar)
             }
-            .environmentObject(settings)
-            .environmentObject(authService)
+            .environment(settings)
+            .environment(authService)
         }
         .overlay {
             if isLoadingNavigationTarget {
@@ -1364,9 +1364,9 @@ struct InboxMessageRow: View {
 }
 
 private struct InboxPreviewWrapper: View {
-    @StateObject private var settings = AppSettings()
-    @StateObject private var authService: AuthService
-    @StateObject private var navigationService = NavigationService()
+    @State private var settings = AppSettings()
+    @State private var authService: AuthService
+    @State private var navigationService = NavigationService()
 
 
     init() {
@@ -1374,9 +1374,9 @@ private struct InboxPreviewWrapper: View {
         let authService = AuthService(appSettings: settings)
         authService.isLoggedIn = true
         authService.currentUser = UserInfo(id: 1, name: "PreviewUser", registered: 1, score: 1, mark: 1, badges: [])
-        _authService = StateObject(wrappedValue: authService)
-        _settings = StateObject(wrappedValue: settings)
-        _navigationService = StateObject(wrappedValue: NavigationService())
+        _authService = State(wrappedValue: authService)
+        _settings = State(wrappedValue: settings)
+        _navigationService = State(wrappedValue: NavigationService())
     }
 
     var body: some View {
@@ -1394,9 +1394,9 @@ private struct InboxPreviewWrapper: View {
             initialMessagesForPreview: [msg1, msg2, msg3],
             initialConversationsForPreview: sampleConversations
         )
-            .environmentObject(settings)
-            .environmentObject(authService)
-            .environmentObject(navigationService)
+            .environment(settings)
+            .environment(authService)
+            .environment(navigationService)
     }
 }
 // --- END OF COMPLETE FILE ---

@@ -5,9 +5,10 @@ import SwiftUI
 import UIKit
 import os
 
+@Observable
 @MainActor
-class AppOrientationManager: ObservableObject {
-    @Published var isLockedToPortrait: Bool = false
+final class AppOrientationManager {
+    var isLockedToPortrait: Bool = false
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AppOrientationManager")
 
     func lockOrientationToPortrait() {

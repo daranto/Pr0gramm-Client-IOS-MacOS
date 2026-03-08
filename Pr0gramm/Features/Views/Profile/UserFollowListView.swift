@@ -8,10 +8,10 @@ import os
 struct UserFollowListView: View {
     let username: String
 
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var navigationService: NavigationService
-    @EnvironmentObject var playerManager: VideoPlayerManager
+    @Environment(AuthService.self) var authService
+    @Environment(AppSettings.self) var settings
+    @Environment(NavigationService.self) var navigationService
+    @Environment(VideoPlayerManager.self) var playerManager
 
     @State private var itemNavigationValue: ItemNavigationValue? = nil
     @State private var userProfileSheetTarget: ProfileNavigationValue? = nil
@@ -78,8 +78,8 @@ struct UserFollowListView: View {
             // da die Follow-Liste nicht an einen spezifischen Feed-Typ gebunden ist.
             // Die API für /user/followlist verwendet die übergebenen Flags.
             FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
         }
         // --- END NEW ---
         .refreshable {
@@ -110,19 +110,19 @@ struct UserFollowListView: View {
                 playerManager: playerManager,
                 targetCommentID: navValue.targetCommentID
             )
-            .environmentObject(settings)
-            .environmentObject(authService)
+            .environment(settings)
+            .environment(authService)
         }
         .sheet(item: $userProfileSheetTarget) { target in // .sheet statt .navigationDestination
             UserProfileSheetView(username: target.username)
-                .environmentObject(authService)
-                .environmentObject(settings)
-                .environmentObject(playerManager)
+                .environment(authService)
+                .environment(settings)
+                .environment(playerManager)
         }
         .overlay {
             if isLoadingNavigationTarget {
                 ProgressView("Lade Post \(navigationTargetItemId ?? 0)...")
-                    .padding().background(Material.regular).cornerRadius(10).shadow(radius: 5)
+                    .padding().background(Material.regular).clipShape(.rect(cornerRadius: 10)).shadow(radius: 5)
             }
         }
     }
@@ -137,11 +137,11 @@ struct UserFollowListView: View {
                     } label: {
                         KFImage(thumbUrl)
                             .resizable()
-                            .placeholder { Color.gray.opacity(0.1).frame(width: 50, height: 50).cornerRadius(4) }
+                            .placeholder { Color.gray.opacity(0.1).frame(width: 50, height: 50).clipShape(.rect(cornerRadius: 4)) }
                             .aspectRatio(contentMode: .fill)
                             .frame(width: 50, height: 50)
                             .clipped()
-                            .cornerRadius(4)
+                            .clipShape(.rect(cornerRadius: 4))
                     }
                     .buttonStyle(.plain)
                     .disabled(isLoadingNavigationTarget)
@@ -271,10 +271,10 @@ struct UserFollowListView: View {
 // MARK: - Preview
 #Preview {
     struct PreviewWrapper: View {
-        @StateObject private var authService: AuthService
-        @StateObject private var settings = AppSettings()
-        @StateObject private var navigationService = NavigationService()
-        @StateObject private var playerManager = VideoPlayerManager()
+        @State private var authService: AuthService
+        @State private var settings = AppSettings()
+        @State private var navigationService = NavigationService()
+        @State private var playerManager = VideoPlayerManager()
 
 
         init() {
@@ -292,21 +292,21 @@ struct UserFollowListView: View {
             #if DEBUG
             tempAuthService.setFollowedUsersForPreview(sampleFollows)
             #endif
-            _authService = StateObject(wrappedValue: tempAuthService)
-            _settings = StateObject(wrappedValue: tempSettings)
+            _authService = State(wrappedValue: tempAuthService)
+            _settings = State(wrappedValue: tempSettings)
             let pm = VideoPlayerManager()
             pm.configure(settings: tempSettings)
-            _playerManager = StateObject(wrappedValue: pm)
+            _playerManager = State(wrappedValue: pm)
         }
 
         var body: some View {
             NavigationStack {
                 UserFollowListView(username: "PreviewUser")
             }
-            .environmentObject(authService)
-            .environmentObject(settings)
-            .environmentObject(navigationService)
-            .environmentObject(playerManager)
+            .environment(authService)
+            .environment(settings)
+            .environment(navigationService)
+            .environment(playerManager)
         }
     }
     return PreviewWrapper()
@@ -314,10 +314,10 @@ struct UserFollowListView: View {
 
 #Preview("Empty Follow List") {
      struct PreviewWrapperEmpty: View {
-        @StateObject private var authService: AuthService
-        @StateObject private var settings = AppSettings()
-        @StateObject private var navigationService = NavigationService()
-        @StateObject private var playerManager = VideoPlayerManager()
+        @State private var authService: AuthService
+        @State private var settings = AppSettings()
+        @State private var navigationService = NavigationService()
+        @State private var playerManager = VideoPlayerManager()
 
         init() {
             let tempSettings = AppSettings()
@@ -327,20 +327,20 @@ struct UserFollowListView: View {
             #if DEBUG
             tempAuthService.setFollowedUsersForPreview([])
             #endif
-            _authService = StateObject(wrappedValue: tempAuthService)
-            _settings = StateObject(wrappedValue: tempSettings)
+            _authService = State(wrappedValue: tempAuthService)
+            _settings = State(wrappedValue: tempSettings)
             let pm = VideoPlayerManager()
             pm.configure(settings: tempSettings)
-            _playerManager = StateObject(wrappedValue: pm)
+            _playerManager = State(wrappedValue: pm)
         }
         var body: some View {
             NavigationStack {
                 UserFollowListView(username: "PreviewUser")
             }
-            .environmentObject(authService)
-            .environmentObject(settings)
-            .environmentObject(navigationService)
-            .environmentObject(playerManager)
+            .environment(authService)
+            .environment(settings)
+            .environment(navigationService)
+            .environment(playerManager)
         }
     }
     return PreviewWrapperEmpty()

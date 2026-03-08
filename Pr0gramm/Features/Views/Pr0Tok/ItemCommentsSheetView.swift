@@ -15,8 +15,8 @@ struct ItemCommentsSheetView: View {
     let onRetryLoadDetails: () -> Void // Callback, falls die Haupt-View Details neu laden soll
 
     @Environment(\.dismiss) var dismiss
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ItemCommentsSheetView")
     private let apiService = APIService()
@@ -127,13 +127,13 @@ struct ItemCommentsSheetView: View {
             }
             .sheet(item: $previewLinkTarget) { target in
                  LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID)
-                     .environmentObject(settings)
-                     .environmentObject(authService)
+                     .environment(settings)
+                     .environment(authService)
             }
             .sheet(item: $userProfileSheetTarget) { target in
                 UserProfileSheetView(username: target.username)
-                    .environmentObject(authService)
-                    .environmentObject(settings)
+                    .environment(authService)
+                    .environment(settings)
             }
         }
         .tint(settings.accentColorChoice.swiftUIColor)
@@ -306,8 +306,8 @@ struct CommentHelper {
         initialInfoStatusProp: .loaded,
         onRetryLoadDetails: { print("Retry load details called in preview") }
     )
-    .environmentObject(settings)
-    .environmentObject(authService)
+    .environment(settings)
+    .environment(authService)
 }
 // --- END OF COMPLETE FILE ---
 

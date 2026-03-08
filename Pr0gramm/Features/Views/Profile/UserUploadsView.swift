@@ -21,7 +21,7 @@ struct UserUploadsItemThumbnail: View, Equatable {
                 .aspectRatio(contentMode: .fill)
                 .aspectRatio(1.0, contentMode: .fit)
                 .background(Material.ultraThin)
-                .cornerRadius(5)
+                .clipShape(.rect(cornerRadius: 5))
                 .clipped()
             
             if isSeen {
@@ -38,15 +38,15 @@ struct UserUploadsItemThumbnail: View, Equatable {
 struct UserUploadsView: View {
     let username: String
 
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     @State var items: [Item] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
 
-    @EnvironmentObject var playerManager: VideoPlayerManager
+    @Environment(VideoPlayerManager.self) var playerManager
 
     @State private var searchText = ""
     @State private var currentSearchTagForAPI: String? = nil
@@ -100,8 +100,8 @@ struct UserUploadsView: View {
                          playerManager: playerManager,
                          loadMoreAction: { Task { await loadMoreUploads() } }
                      )
-                     .environmentObject(settings)
-                     .environmentObject(authService)
+                     .environment(settings)
+                     .environment(authService)
                  } else {
                      Text("Fehler: Item \(destinationItem.id) nicht in den Uploads gefunden.")
                          .onAppear {

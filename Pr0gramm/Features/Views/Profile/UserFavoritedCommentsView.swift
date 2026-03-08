@@ -8,8 +8,8 @@ import Kingfisher
 struct UserFavoritedCommentsView: View {
     let username: String
 
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     @State private var comments: [ItemComment] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
@@ -29,7 +29,7 @@ struct UserFavoritedCommentsView: View {
     @State private var previewLinkTargetFromComment: PreviewLinkTarget? = nil
     @State private var didLoad: Bool = false
 
-    @StateObject private var playerManager = VideoPlayerManager()
+    @State private var playerManager = VideoPlayerManager()
 
     private let apiService = APIService()
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UserFavoritedCommentsView")
@@ -53,8 +53,8 @@ struct UserFavoritedCommentsView: View {
                  playerManager: playerManager,
                  targetCommentID: navValue.targetCommentID
              )
-             .environmentObject(settings)
-             .environmentObject(authService)
+             .environment(settings)
+             .environment(authService)
              .onDisappear {
                  UserFavoritedCommentsView.logger.info("PagedDetailViewWrapperForItem disappeared. itemNavigationValue should now be nil.")
              }
@@ -62,8 +62,8 @@ struct UserFavoritedCommentsView: View {
         // --- MODIFIED: LinkedItemPreviewView Aufruf angepasst ---
         .sheet(item: $previewLinkTargetFromComment) { target in
             LinkedItemPreviewView(itemID: target.itemID, targetCommentID: target.commentID) // commentID übergeben
-                .environmentObject(settings)
-                .environmentObject(authService)
+                .environment(settings)
+                .environment(authService)
         }
         // --- END MODIFICATION ---
         .overlay {
@@ -424,23 +424,23 @@ struct FavoritedCommentRow: View {
 
 #Preview {
     struct UserFavoritedCommentsPreviewWrapper: View {
-        @StateObject private var previewSettings = AppSettings()
-        @StateObject private var previewAuthService: AuthService
+        @State private var previewSettings = AppSettings()
+        @State private var previewAuthService: AuthService
 
         init() {
             let settings = AppSettings()
             let authService = AuthService(appSettings: settings)
             authService.isLoggedIn = true
             authService.currentUser = UserInfo(id: 1, name: "Daranto", registered: 1, score: 1337, mark: 2, badges: [])
-            _previewAuthService = StateObject(wrappedValue: authService)
-            _previewSettings = StateObject(wrappedValue: settings)
+            _previewAuthService = State(wrappedValue: authService)
+            _previewSettings = State(wrappedValue: settings)
         }
 
         var body: some View {
             NavigationStack {
                 UserFavoritedCommentsView(username: "Daranto")
-                    .environmentObject(previewSettings)
-                    .environmentObject(previewAuthService)
+                    .environment(previewSettings)
+                    .environment(previewAuthService)
             }
         }
     }

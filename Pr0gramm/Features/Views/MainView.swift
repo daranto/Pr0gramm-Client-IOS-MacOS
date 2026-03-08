@@ -37,9 +37,9 @@ extension View {
 /// The root view of the application, containing the main content area and the modern Liquid Glass tab bar.
 /// It observes `NavigationService` to switch between different content views (Feed, Favorites, etc.).
 struct MainView: View {
-    @ObservedObject var navigationService: NavigationService
-    @EnvironmentObject var settings: AppSettings
-    @EnvironmentObject var authService: AuthService
+    @Environment(NavigationService.self) var navigationService
+    @Environment(AppSettings.self) var settings
+    @Environment(AuthService.self) var authService
     // AppOrientationManager wird nicht mehr direkt hier benötigt, aber dieAppDelegate-Logik greift global.
 
     @State private var feedPopToRootTrigger = UUID()
@@ -91,7 +91,7 @@ struct MainView: View {
                 .tabItem { Label("Einstellungen", systemImage: "gearshape.fill") }
                 .tag(Tab.settings)
         }
-        .accentColor(settings.accentColorChoice.swiftUIColor)
+        .tint(settings.accentColorChoice.swiftUIColor)
         .onAppear {
             // Customize tab bar appearance for compact display of all tabs
             let appearance = UITabBarAppearance()
@@ -115,7 +115,7 @@ struct MainView: View {
                 UITabBar.appearance().scrollEdgeAppearance = appearance
             }
         }
-        .onReceive(navigationService.$selectedTab) { newTab in
+        .onChange(of: navigationService.selectedTab) { oldTab, newTab in
             if selectedTab != newTab {
                 selectedTab = newTab
             }
@@ -132,17 +132,19 @@ struct MainView: View {
 }
 
 #Preview {
-    let settings = AppSettings()
-    let authService = AuthService(appSettings: settings)
-    let navigationService = NavigationService()
-    let appOrientationManager = AppOrientationManager()
+    @Previewable @State var settings = AppSettings()
+    @Previewable @State var authService = AuthService(appSettings: AppSettings())
+    @Previewable @State var navigationService = NavigationService()
+    @Previewable @State var appOrientationManager = AppOrientationManager()
 
-    authService.isLoggedIn = true
-    authService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
-
-    return MainView(navigationService: navigationService)
-        .environmentObject(settings)
-        .environmentObject(authService)
-        .environmentObject(appOrientationManager)
+    MainView()
+        .environment(settings)
+        .environment(authService)
+        .environment(navigationService)
+        .environment(appOrientationManager)
+        .task {
+            authService.isLoggedIn = true
+            authService.currentUser = UserInfo(id: 1, name: "Preview", registered: 1, score: 1, mark: 1, badges: [])
+        }
 }
 // --- END OF COMPLETE FILE ---

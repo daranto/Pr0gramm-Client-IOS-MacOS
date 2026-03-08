@@ -17,15 +17,15 @@ enum ProfileNavigationTarget: Hashable {
 
 /// Displays the user's profile information when logged in, or prompts for login otherwise.
 struct ProfileView: View {
-    @EnvironmentObject var authService: AuthService
-    @EnvironmentObject var settings: AppSettings
+    @Environment(AuthService.self) var authService
+    @Environment(AppSettings.self) var settings
     @State private var showingLoginSheet = false
     @State private var showingCalendar = false
     @State private var showingInbox = false
     @State private var navigationPath = NavigationPath()
 
-    @StateObject private var playerManager = VideoPlayerManager()
-    @StateObject private var navigationService = NavigationService()
+    @State private var playerManager = VideoPlayerManager()
+    @State private var navigationService = NavigationService()
 
     private let germanDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -88,21 +88,21 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $showingLoginSheet) {
                 LoginView()
-                    .environmentObject(authService)
-                    .environmentObject(settings)
+                    .environment(authService)
+                    .environment(settings)
             }
             .sheet(isPresented: $showingCalendar) {
                 CalendarView()
-                    .environmentObject(authService)
-                    .environmentObject(settings)
+                    .environment(authService)
+                    .environment(settings)
             }
             .sheet(isPresented: $showingInbox) {
                 NavigationStack {
                     InboxContentOnlyView()
-                        .environmentObject(settings)
-                        .environmentObject(authService)
-                        .environmentObject(playerManager)
-                        .environmentObject(navigationService)
+                        .environment(settings)
+                        .environment(authService)
+                        .environment(playerManager)
+                        .environment(navigationService)
                         .navigationTitle("Nachrichten")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
@@ -124,18 +124,18 @@ struct ProfileView: View {
                  switch target {
                  case .uploads(let username):
                      UserUploadsView(username: username)
-                        .environmentObject(playerManager) // PlayerManager hier übergeben
+                        .environment(playerManager) // PlayerManager hier übergeben
                  case .favoritedComments(let username):
                      UserFavoritedCommentsView(username: username)
-                        .environmentObject(playerManager)
+                        .environment(playerManager)
                  case .allCollections(let username):
                      UserCollectionsListView(username: username)
                  case .collectionItems(let collection, let username):
                      CollectionItemsView(collection: collection, username: username)
-                        .environmentObject(playerManager)
+                        .environment(playerManager)
                  case .userProfileComments(let username):
                      UserProfileCommentsView(username: username)
-                        .environmentObject(playerManager)
+                        .environment(playerManager)
                  case .postDetail(let item, let targetCommentID):
                      PagedDetailViewWrapperForItem(
                          item: item,
@@ -144,13 +144,13 @@ struct ProfileView: View {
                      )
                  case .userFollowList(let username):
                      UserFollowListView(username: username)
-                        .environmentObject(playerManager)
+                        .environment(playerManager)
                  case .inbox:
                      InboxContentOnlyView()
-                        .environmentObject(settings)
-                        .environmentObject(authService)
-                        .environmentObject(playerManager)
-                        .environmentObject(navigationService)
+                        .environment(settings)
+                        .environment(authService)
+                        .environment(playerManager)
+                        .environment(navigationService)
                  }
             }
             // --- MODIFICATION: Entfernt von hier ---
@@ -160,8 +160,8 @@ struct ProfileView: View {
             //         playerManager: playerManager,
             //         targetCommentID: nil
             //     )
-            //     .environmentObject(settings)
-            //     .environmentObject(authService)
+            //     .environment(settings)
+            //     .environment(authService)
             // }
             // --- END MODIFICATION ---
             .task {
@@ -362,9 +362,9 @@ struct ProfileView: View {
 
 // MARK: - Previews
 private struct LoggedInProfilePreviewWrapper: View {
-    @StateObject private var settings: AppSettings
-    @StateObject private var authService: AuthService
-    @StateObject private var playerManager = VideoPlayerManager()
+    @State private var settings: AppSettings
+    @State private var authService: AuthService
+    @State private var playerManager = VideoPlayerManager()
 
 
     init() {
@@ -396,16 +396,16 @@ private struct LoggedInProfilePreviewWrapper: View {
         ai.setUserCollectionsForPreview(sampleCollections)
         #endif
 
-        _settings = StateObject(wrappedValue: si)
-        _authService = StateObject(wrappedValue: ai)
+        _settings = State(wrappedValue: si)
+        _authService = State(wrappedValue: ai)
         playerManager.configure(settings: si)
     }
 
     var body: some View {
         ProfileView()
-            .environmentObject(settings)
-            .environmentObject(authService)
-            .environmentObject(playerManager)
+            .environment(settings)
+            .environment(authService)
+            .environment(playerManager)
     }
 }
 
@@ -415,8 +415,8 @@ private struct LoggedInProfilePreviewWrapper: View {
 
 #Preview("Logged Out") {
     ProfileView()
-        .environmentObject(AppSettings())
-        .environmentObject(AuthService(appSettings: AppSettings()))
-        .environmentObject(VideoPlayerManager())
+        .environment(AppSettings())
+        .environment(AuthService(appSettings: AppSettings()))
+        .environment(VideoPlayerManager())
 }
 // --- END OF COMPLETE FILE ---
