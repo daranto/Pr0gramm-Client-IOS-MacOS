@@ -97,22 +97,11 @@ struct ProfileView: View {
                     .environment(settings)
             }
             .sheet(isPresented: $showingInbox) {
-                NavigationStack {
-                    InboxContentOnlyView()
-                        .environment(settings)
-                        .environment(authService)
-                        .environment(playerManager)
-                        .environment(navigationService)
-                        .navigationTitle("Nachrichten")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .navigationBarTrailing) {
-                                Button("Fertig") {
-                                    showingInbox = false
-                                }
-                            }
-                        }
-                }
+                InboxView(embedInNavigationStack: true)
+                    .environment(settings)
+                    .environment(authService)
+                    .environment(playerManager)
+                    .environment(navigationService)
             }
             .overlay {
                  if authService.isLoading {
@@ -146,7 +135,7 @@ struct ProfileView: View {
                      UserFollowListView(username: username)
                         .environment(playerManager)
                  case .inbox:
-                     InboxContentOnlyView()
+                     InboxView(embedInNavigationStack: false)
                         .environment(settings)
                         .environment(authService)
                         .environment(playerManager)
