@@ -872,27 +872,7 @@ struct UnlimitedStyleFeedView: View {
             }
 
             if !allFetchedUnseenItems.isEmpty {
-                let firstRealItemIndexAfterDummy = 1
-                
-                if items.indices.contains(firstRealItemIndexAfterDummy) {
-                    let initialActiveItem = items[firstRealItemIndexAfterDummy]
-                    Self.logger.debug("Refresh complete: Preloading details for initial active item: \(initialActiveItem.id)")
-                    await loadItemDetailsIfNeeded(for: initialActiveItem)
-
-                    let nextIndex = firstRealItemIndexAfterDummy + 1
-                    if items.indices.contains(nextIndex) && items[nextIndex].id != dummyStartItemID {
-                        let itemToPreloadNext = items[nextIndex]
-                        Self.logger.debug("Refresh complete: Preloading details for N+1: Item ID \(itemToPreloadNext.id)")
-                        await loadItemDetailsIfNeeded(for: itemToPreloadNext)
-                    }
-
-                    let overNextIndex = firstRealItemIndexAfterDummy + 2
-                    if items.indices.contains(overNextIndex) && items[overNextIndex].id != dummyStartItemID {
-                        let itemToPreloadOverNext = items[overNextIndex]
-                        Self.logger.debug("Refresh complete: Preloading details for N+2: Item ID \(itemToPreloadOverNext.id)")
-                        await loadItemDetailsIfNeeded(for: itemToPreloadOverNext)
-                    }
-                }
+                await preloadInitialItems()
             }
 
         } catch is CancellationError {
@@ -907,6 +887,28 @@ struct UnlimitedStyleFeedView: View {
                 self.errorMessage = "Fehler beim Laden: \(error.localizedDescription)"
                 self.canLoadMore = false
             }
+        }
+    }
+    
+    private func preloadInitialItems() async {
+        let firstRealItemIndex = 1
+        
+        guard items.indices.contains(firstRealItemIndex) else { return }
+        
+        let initialItem = items[firstRealItemIndex]
+        Self.logger.debug("Preloading details for initial active item: \(initialItem.id)")
+        await loadItemDetailsIfNeeded(for: initialItem)
+        
+        let nextIndex = firstRealItemIndex + 1
+        if items.indices.contains(nextIndex) && items[nextIndex].id != dummyStartItemID {
+            Self.logger.debug("Preloading N+1: Item ID \(items[nextIndex].id)")
+            await loadItemDetailsIfNeeded(for: items[nextIndex])
+        }
+        
+        let overNextIndex = firstRealItemIndex + 2
+        if items.indices.contains(overNextIndex) && items[overNextIndex].id != dummyStartItemID {
+            Self.logger.debug("Preloading N+2: Item ID \(items[overNextIndex].id)")
+            await loadItemDetailsIfNeeded(for: items[overNextIndex])
         }
     }
     
