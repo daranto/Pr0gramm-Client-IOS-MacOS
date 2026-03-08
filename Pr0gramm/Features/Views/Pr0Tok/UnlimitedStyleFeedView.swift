@@ -1272,62 +1272,26 @@ struct UnlimitedStyleFeedView: View {
             sharePreparationErrorGlobal = "Item nicht gefunden."
             return
         }
-        guard let mediaUrl = item.imageUrl else {
-            Self.logger.error("Cannot share media: URL is nil for item \(itemID)")
-            sharePreparationErrorGlobal = "Medien-URL nicht verfügbar."
-            return
-        }
 
-        await MainActor.run {
-            self.isPreparingShareGlobal = true
-            self.sharePreparationErrorGlobal = nil
-        }
-        var temporaryFileToDelete: URL? = nil
-
+        isPreparingShareGlobal = true
+        sharePreparationErrorGlobal = nil
+        
         defer {
             Task { @MainActor in self.isPreparingShareGlobal = false }
         }
 
-        if item.isVideo {
-            do {
-                let temporaryDirectory = FileManager.default.temporaryDirectory
-                let fileName = mediaUrl.lastPathComponent
-                let localUrl = temporaryDirectory.appendingPathComponent(fileName)
-                temporaryFileToDelete = localUrl
-
-                let (downloadedUrl, response) = try await URLSession.shared.download(from: mediaUrl)
-                guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
-                    await MainActor.run { sharePreparationErrorGlobal = "Video-Download fehlgeschlagen (Code: \((response as? HTTPURLResponse)?.statusCode ?? -1))." }
-                    return
-                }
-                if FileManager.default.fileExists(atPath: localUrl.path) { try FileManager.default.removeItem(at: localUrl) }
-                try FileManager.default.moveItem(at: downloadedUrl, to: localUrl)
-                await MainActor.run { itemToShareWrapper = ShareableItemWrapper(itemsToShare: [localUrl], temporaryFileUrlToDelete: localUrl) }
-            } catch {
-                await MainActor.run { sharePreparationErrorGlobal = "Video-Download fehlgeschlagen." }
-                await MainActor.run { itemToShareWrapper = ShareableItemWrapper(itemsToShare: [mediaUrl]) }
-            }
-        } else {
-            let result: Result<ImageLoadingResult, KingfisherError> = await withCheckedContinuation { continuation in
-                KingfisherManager.shared.downloader.downloadImage(with: mediaUrl, options: nil) { result in
-                    continuation.resume(returning: result)
-                }
-            }
-            switch result {
-            case .success(let imageLoadingResult):
-                await MainActor.run { itemToShareWrapper = ShareableItemWrapper(itemsToShare: [imageLoadingResult.image]) }
-            case .failure(let error):
-                if !error.isTaskCancelled && !error.isNotCurrentTask {
-                    await MainActor.run { sharePreparationErrorGlobal = "Bild-Download fehlgeschlagen." }
-                }
-            }
+        let result = await ShareHelper.prepareMediaForSharing(item: item)
+        
+        switch result {
+        case .success(let shareableWrapper):
+            itemToShareWrapper = shareableWrapper
+        case .failure(let errorMessage):
+            sharePreparationErrorGlobal = errorMessage
         }
     }
 
     private func copyPostLink(for itemID: Int) {
-        let urlString = "https://pr0gramm.com/new/\(itemID)"
-        UIPasteboard.general.string = urlString
-        Self.logger.info("Copied Post-URL to clipboard: \(urlString)")
+        ShareHelper.copyPostLink(for: itemID)
         triggerCopyFeedback(message: "Post-URL kopiert")
     }
 
@@ -1336,12 +1300,8 @@ struct UnlimitedStyleFeedView: View {
             Self.logger.warning("Failed to copy Media-Link: Item with ID \(itemID) not found.")
             return
         }
-        if let urlString = item.imageUrl?.absoluteString {
-            UIPasteboard.general.string = urlString
-            Self.logger.info("Copied Media-Link to clipboard: \(urlString)")
+        if ShareHelper.copyMediaLink(for: item) {
             triggerCopyFeedback(message: "Direkte Medien-URL kopiert")
-        } else {
-            Self.logger.warning("Failed to copy Media-Link: URL was nil for item \(itemID)")
         }
     }
 
@@ -1363,15 +1323,7 @@ struct UnlimitedStyleFeedView: View {
 
 
     private func deleteTemporaryFile(at url: URL) {
-        Task(priority: .background) {
-            do {
-                if FileManager.default.fileExists(atPath: url.path) {
-                    try FileManager.default.removeItem(at: url)
-                }
-            } catch {
-                Self.logger.error("Error deleting temporary shared file \(url.path): \(error.localizedDescription)")
-            }
-        }
+        ShareHelper.deleteTemporaryFile(at: url)
     }
 }
 
