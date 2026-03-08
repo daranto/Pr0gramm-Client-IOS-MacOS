@@ -420,7 +420,7 @@ struct InboxView: View {
                 }
             }
             .environment(\.openURL, OpenURLAction { url in
-                if let (itemID, commentID) = parsePr0grammLink(url: url) {
+                if let (itemID, commentID) = Pr0grammLinkParser.parse(url: url) {
                     InboxView.logger.info("Pr0gramm link tapped in inbox message, attempting to preview item ID: \(itemID), commentID: \(commentID ?? -1)")
                     self.previewLinkTargetFromMessage = PreviewLinkTarget(itemID: itemID, commentID: commentID)
                     return .handled
@@ -442,51 +442,7 @@ struct InboxView: View {
         }
     }
     
-    private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
-        guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
 
-        let path = url.path
-        let components = path.components(separatedBy: "/")
-        var itemID: Int? = nil
-        var commentID: Int? = nil
-
-        if let lastPathComponent = components.last {
-            if lastPathComponent.contains(":comment") {
-                let parts = lastPathComponent.split(separator: ":")
-                if parts.count == 2, let idPart = Int(parts[0]), parts[1].starts(with: "comment"), let cID = Int(parts[1].dropFirst("comment".count)) {
-                    itemID = idPart
-                    commentID = cID
-                }
-            } else {
-                var potentialItemIDIndex: Int? = nil
-                if let idx = components.lastIndex(where: { $0 == "new" || $0 == "top" }), idx + 1 < components.count {
-                    potentialItemIDIndex = idx + 1
-                } else if components.count > 1 && Int(components.last!) != nil {
-                    potentialItemIDIndex = components.count - 1
-                }
-                
-                if let idx = potentialItemIDIndex, let id = Int(components[idx]) {
-                    itemID = id
-                }
-            }
-        }
-        
-        if itemID == nil, let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
-            for item in queryItems {
-                if item.name == "id", let value = item.value, let id = Int(value) {
-                    itemID = id
-                    break
-                }
-            }
-        }
-        
-        if let itemID = itemID {
-            return (itemID, commentID)
-        }
-
-        InboxView.logger.warning("Could not parse item or comment ID from pr0gramm link: \(url.absoluteString)")
-        return nil
-    }
 
     @MainActor
     private func handleMessageTap(_ message: InboxMessage) async {
@@ -865,7 +821,7 @@ struct InboxContentOnlyView: View {
             }
         }
         .environment(\.openURL, OpenURLAction { url in
-            if let (itemID, commentID) = parsePr0grammLink(url: url) {
+            if let (itemID, commentID) = Pr0grammLinkParser.parse(url: url) {
                 InboxView.logger.info("Pr0gramm link tapped in inbox message, attempting to preview item ID: \(itemID), commentID: \(commentID ?? -1)")
                 self.previewLinkTargetFromMessage = PreviewLinkTarget(itemID: itemID, commentID: commentID)
                 return .handled
@@ -996,51 +952,7 @@ struct InboxContentOnlyView: View {
         await BackgroundNotificationManager.shared.appDidBecomeActiveOrInboxViewed(currentTotalUnread: authService.unreadInboxTotal)
     }
     
-    private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
-        guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
 
-        let path = url.path
-        let components = path.components(separatedBy: "/")
-        var itemID: Int? = nil
-        var commentID: Int? = nil
-
-        if let lastPathComponent = components.last {
-            if lastPathComponent.contains(":comment") {
-                let parts = lastPathComponent.split(separator: ":")
-                if parts.count == 2, let idPart = Int(parts[0]), parts[1].starts(with: "comment"), let cID = Int(parts[1].dropFirst("comment".count)) {
-                    itemID = idPart
-                    commentID = cID
-                }
-            } else {
-                var potentialItemIDIndex: Int? = nil
-                if let idx = components.lastIndex(where: { $0 == "new" || $0 == "top" }), idx + 1 < components.count {
-                    potentialItemIDIndex = idx + 1
-                } else if components.count > 1 && Int(components.last!) != nil {
-                    potentialItemIDIndex = components.count - 1
-                }
-                
-                if let idx = potentialItemIDIndex, let id = Int(components[idx]) {
-                    itemID = id
-                }
-            }
-        }
-        
-        if itemID == nil, let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
-            for item in queryItems {
-                if item.name == "id", let value = item.value, let id = Int(value) {
-                    itemID = id
-                    break
-                }
-            }
-        }
-        
-        if let itemID = itemID {
-            return (itemID, commentID)
-        }
-
-        InboxView.logger.warning("Could not parse item or comment ID from pr0gramm link: \(url.absoluteString)")
-        return nil
-    }
 
     @MainActor
     private func handleMessageTap(_ message: InboxMessage) async {
