@@ -333,7 +333,7 @@ struct SearchView: View {
                 }
         }
         .sheet(isPresented: $showingFilterSheet) {
-            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false, showExcludedTagsSection: false)
+            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: true, showExcludedTagsSection: false)
                 .environmentObject(settings)
                 .environmentObject(authService)
         }
@@ -352,6 +352,9 @@ struct SearchView: View {
         .onChange(of: settings.showNSFW) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showNSFL) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showPOL) { _, _ in handleApiFlagsChange() }
+        .onChange(of: settings.hideSeenItems) { _, _ in
+            Task { await performSearchLogic(isInitialSearch: true) }
+        }
         .task(id: navigationService.selectedTab) {
             let newTab = navigationService.selectedTab
             if newTab == .search {
@@ -833,23 +836,37 @@ struct SearchView: View {
                 promoted = nil
                 showJunk = true
             }
-            
-            let apiResponse = try await apiService.fetchItems(
-                flags: currentApiFlags,
-                promoted: promoted,
-                tags: finalTags,
-                showJunkParameter: showJunk
-            )
-            let fetchedItems = apiResponse.items
-            self.items = fetchedItems
 
-            if fetchedItems.isEmpty {
-                self.canLoadMore = false
-            } else {
-                let atEnd = apiResponse.atEnd ?? false
-                let hasOlder = apiResponse.hasOlder ?? true
-                self.canLoadMore = !(atEnd || !hasOlder)
-            }
+            var visibleItems: [Item] = []
+            var currentOlderThanId: Int? = nil
+            var apiReachedEnd = false
+
+            // When hiding seen items, loop over pages until we have visible results or run out of pages.
+            repeat {
+                guard !Task.isCancelled else { throw CancellationError() }
+
+                let apiResponse = try await apiService.fetchItems(
+                    flags: currentApiFlags,
+                    promoted: promoted,
+                    tags: finalTags,
+                    olderThanId: currentOlderThanId,
+                    showJunkParameter: showJunk
+                )
+                let pageItems = apiResponse.items
+                apiReachedEnd = apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) || pageItems.isEmpty
+
+                let filtered = settings.hideSeenItems
+                    ? pageItems.filter { !settings.seenItemIDs.contains($0.id) }
+                    : pageItems
+                visibleItems.append(contentsOf: filtered)
+
+                if !apiReachedEnd, let lastItem = pageItems.last {
+                    currentOlderThanId = lastItem.id
+                }
+            } while visibleItems.isEmpty && !apiReachedEnd && settings.hideSeenItems
+
+            self.items = visibleItems
+            self.canLoadMore = !apiReachedEnd
             self.errorMessage = nil
             SearchView.logger.info("Search updated with tags: '\(finalTags ?? "nil")'. Total: \(self.items.count). Can load more: \(self.canLoadMore)")
         }
@@ -976,14 +993,22 @@ struct SearchView: View {
                 self.canLoadMore = false
             } else {
                 let currentIDs = Set(self.items.map { $0.id })
-                let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
+                var uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
+                if settings.hideSeenItems {
+                    uniqueNewItems = uniqueNewItems.filter { !settings.seenItemIDs.contains($0.id) }
+                }
+
+                let atEnd = apiResponse.atEnd ?? false
+                let hasOlder = apiResponse.hasOlder ?? true
+                self.canLoadMore = !(atEnd || !hasOlder)
+
                 if uniqueNewItems.isEmpty {
-                    self.canLoadMore = false
+                    // All items on this page were already seen / duplicates; try next page automatically.
+                    if self.canLoadMore {
+                        Task { await loadMoreSearch() }
+                    }
                 } else {
                     self.items.append(contentsOf: uniqueNewItems)
-                    let atEnd = apiResponse.atEnd ?? false
-                    let hasOlder = apiResponse.hasOlder ?? true
-                    self.canLoadMore = !(atEnd || !hasOlder)
                 }
             }
         }
