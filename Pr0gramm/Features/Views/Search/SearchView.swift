@@ -31,6 +31,7 @@ struct SearchView: View {
 
     @State private var searchHistory: [String] = []
     @State private var isSearchActive = true
+    @State private var suppressSearchActivationFromProgrammaticTextChange = false
     @State private var wasPlayingBeforeTabSwitch = false
 
     @State private var minBenisFilter: Int = 0
@@ -120,6 +121,11 @@ struct SearchView: View {
                 #endif
                 .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Tags suchen…")
                 .onChange(of: searchText) { _, newValue in  // ✅ Aktualisiert
+                    if suppressSearchActivationFromProgrammaticTextChange {
+                        suppressSearchActivationFromProgrammaticTextChange = false
+                        return
+                    }
+
                     // Wenn der Benutzer anfängt zu tippen, Verlauf wieder anzeigen
                     if !isSearchActive {
                         isSearchActive = true
@@ -139,32 +145,14 @@ struct SearchView: View {
                 }
                 .onSubmit(of: .search) {
                     SearchView.logger.info("Search submitted with: \(searchText)")
-                    let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    
-                    isSearchActive = false
-                    
-                    if !trimmed.isEmpty { addTermToSearchHistory(trimmed) }
-                    dismissSearch()
-                    #if os(iOS)
-                    dismissKeyboard()
-                    #endif
-                    Task { await performSearchLogic(isInitialSearch: true) }
+                    submitSearch(for: searchText)
                 }
                 .searchSuggestions {
                     if isSearchActive {
                         SearchHistoryView(
                             searchHistory: searchHistory,
                             onSelectTerm: { term in
-                                let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
-                                Task { @MainActor in
-                                    searchText = trimmed
-                                    isSearchActive = false
-                                    addTermToSearchHistory(trimmed)
-                                    dismissSearch()
-                                    dismissKeyboard()
-                                    try? await Task.sleep(for: .milliseconds(150))
-                                    await performSearchLogic(isInitialSearch: true)
-                                }
+                                submitSearch(for: term)
                             },
                             onDeleteTerm: { term in
                                 deleteTermFromSearchHistory(term)
@@ -553,8 +541,30 @@ struct SearchView: View {
     }
 
     @MainActor
-    private func performSearchLogic(isInitialSearch: Bool) async {
-        let trimmedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func submitSearch(for term: String) {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        suppressSearchActivationFromProgrammaticTextChange = true
+        searchText = trimmed
+        isSearchActive = false
+
+        if !trimmed.isEmpty {
+            addTermToSearchHistory(trimmed)
+        }
+
+        dismissSearch()
+        #if os(iOS)
+        dismissKeyboard()
+        #endif
+
+        Task {
+            await performSearchLogic(isInitialSearch: true, searchTermOverride: trimmed)
+        }
+    }
+
+    @MainActor
+    private func performSearchLogic(isInitialSearch: Bool, searchTermOverride: String? = nil) async {
+        let trimmedSearchText = (searchTermOverride ?? searchText).trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Allow search if we have a search term OR a benis filter is set
         let hasBenisFilter = minBenisFilter > 0
