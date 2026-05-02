@@ -39,7 +39,8 @@ struct CustomVideoPlayerRepresentable: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: CustomAVPlayerViewController, context: Context) {
         // Update the player instance if it changes
         if uiViewController.player !== player {
-             print("CustomVideoPlayerRepresentable: Updating player.")
+            print("CustomVideoPlayerRepresentable: Updating player from \(String(describing: uiViewController.player)) to \(String(describing: player))")
+            // Directly assign the new player - no async tricks
             uiViewController.player = player
         }
         // Update the handler if it changes

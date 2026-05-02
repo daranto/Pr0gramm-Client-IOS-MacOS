@@ -286,7 +286,7 @@ struct UnlimitedStyleFeedView: View {
         }
         // Sheets nacheinander, nicht verschachtelt
         .sheet(isPresented: $showingFilterSheet, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) {
-            FilterView(relevantFeedTypeForFilterBehavior: settings.feedType, hideFeedOptions: false, showHideSeenItemsToggle: true)
+            FilterView(relevantFeedTypeForFilterBehavior: settings.feedType, hideFeedOptions: false, hideSeenItemsToggleContext: .feed)
                 .environment(settings)
                 .environment(authService)
         }

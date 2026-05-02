@@ -5,6 +5,11 @@ import Foundation
 import AVKit
 import os
 
+/// Notification posted when the video player resumes playback after buffering
+extension Notification.Name {
+    static let videoPlayerDidResumeFromBuffer = Notification.Name("videoPlayerDidResumeFromBuffer")
+}
+
 /// Manages the lifecycle and state of the single AVPlayer instance used across the PagedDetailView.
 /// This ensures proper cleanup even when the owning view's state changes rapidly.
 /// Also handles fetching, parsing, and displaying video subtitles based on user settings.
@@ -41,6 +46,7 @@ final class VideoPlayerManager {
     private var timeObserverToken: Any? = nil
     private var playerItemStatusObserver: NSKeyValueObservation? = nil
     private var playerItemErrorObserver: NSKeyValueObservation? = nil
+    private var timeControlStatusObserver: NSKeyValueObservation? = nil
 
 
     // MARK: - Private Task Properties
@@ -226,7 +232,17 @@ final class VideoPlayerManager {
         }
 
         let playerItem = AVPlayerItem(url: url)
+        
+        // CRITICAL FIX: Configure AVPlayerItem for stable streaming
+        // Increase buffer duration to prevent stream interruptions
+        playerItem.preferredForwardBufferDuration = 15.0  // 15 seconds buffer for smooth playback
+        
         let newPlayer = AVPlayer(playerItem: playerItem)
+        
+        // IMPORTANT: Keep automaticallyWaitsToMinimizeStalling = true (default)
+        // This allows AVPlayer to pause and buffer when needed
+        // Without this, the layer can freeze while audio continues
+        
         let initialMute = settings.transientSessionMuteState ?? settings.isVideoMuted
         if settings.transientSessionMuteState == nil {
             settings.transientSessionMuteState = initialMute
@@ -315,6 +331,29 @@ final class VideoPlayerManager {
         }
         VideoPlayerManager.logger.debug("[Manager] Added player item error KVO observer for item \(item.id).")
 
+        // CRITICAL FIX: Observe timeControlStatus to detect when player pauses/resumes
+        // This helps synchronize the layer when buffering occurs
+        self.timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new, .old]) { observedPlayer, change in
+            Task { @MainActor in
+                switch observedPlayer.timeControlStatus {
+                case .paused:
+                    VideoPlayerManager.logger.debug("[Manager] Player paused (likely buffering)")
+                case .playing:
+                    VideoPlayerManager.logger.debug("[Manager] Player playing/resumed from buffer")
+                    
+                    // CRITICAL FIX: Post notification to force layer refresh when resuming from buffer
+                    // This replicates what happens when Control Center is opened/closed
+                    NotificationCenter.default.post(name: .videoPlayerDidResumeFromBuffer, object: observedPlayer)
+                    VideoPlayerManager.logger.debug("[Manager] Posted videoPlayerDidResumeFromBuffer notification")
+                    
+                case .waitingToPlayAtSpecifiedRate:
+                    VideoPlayerManager.logger.debug("[Manager] Player waiting to play (buffering)")
+                @unknown default:
+                    break
+                }
+            }
+        }
+        VideoPlayerManager.logger.debug("[Manager] Added timeControlStatus observer for item \(item.id).")
 
         self.loopObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: playerItem, queue: nil) { [weak self, weakPlayerItem = player.currentItem, itemID = item.id] notification in
              Task { @MainActor [weak self, weakPlayerItem, itemID] in
@@ -335,10 +374,10 @@ final class VideoPlayerManager {
         VideoPlayerManager.logger.debug("[Manager] Added loop observer for item \(item.id).")
 
         let interval = CMTime(value: 1, timescale: 4)
-        self.timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: nil) { [weak self] time in
-             Task { @MainActor [weak self] in
-                 self?.updateSubtitle(for: time)
-             }
+        // CRITICAL FIX: Run time observer on main queue to prevent Task flooding
+        // Using DispatchQueue.main instead of nil prevents creating 4 Tasks per second
+        self.timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            self?.updateSubtitle(for: time)
         }
         VideoPlayerManager.logger.debug("[Manager] Added periodic time observer for item \(item.id).")
     }
@@ -541,8 +580,9 @@ final class VideoPlayerManager {
         removeObservers()
         if let playerToCleanup = self.player {
             playerToCleanup.pause()
+            playerToCleanup.replaceCurrentItem(with: nil)
             self.player = nil
-            VideoPlayerManager.logger.debug("[Manager] Player paused and released for item \(cleanupItemID).")
+            VideoPlayerManager.logger.debug("[Manager] Player paused, item cleared, and released for item \(cleanupItemID).")
         }
         self.playerItemID = nil
         VideoPlayerManager.logger.debug("[Manager] Player state cleanup finished for item \(cleanupItemID).")
@@ -564,6 +604,11 @@ final class VideoPlayerManager {
             playerItemErrorObserver?.invalidate()
             playerItemErrorObserver = nil
             VideoPlayerManager.logger.trace("[Manager] Invalidated player item error observer internally.")
+        }
+        if timeControlStatusObserver != nil {
+            timeControlStatusObserver?.invalidate()
+            timeControlStatusObserver = nil
+            VideoPlayerManager.logger.trace("[Manager] Invalidated timeControlStatus observer internally.")
         }
         if let observer = loopObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -599,6 +644,7 @@ final class VideoPlayerManager {
             muteObserver?.invalidate()
             playerItemStatusObserver?.invalidate()
             playerItemErrorObserver?.invalidate()
+            timeControlStatusObserver?.invalidate()
             if let observer = loopObserver {
                 NotificationCenter.default.removeObserver(observer)
             }

@@ -154,7 +154,7 @@ struct CollectionItemsView: View {
             }
         }
         .sheet(isPresented: $showingFilterSheet) {
-            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
+            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, hideSeenItemsToggleContext: nil)
                 .environment(settings)
                 .environment(authService)
         }

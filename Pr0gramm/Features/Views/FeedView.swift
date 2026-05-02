@@ -97,7 +97,7 @@ struct FeedView: View {
                 }
             }
             .sheet(isPresented: $showingFilterSheet) {
-                 FilterView(relevantFeedTypeForFilterBehavior: appSettings.feedType, hideFeedOptions: true, showHideSeenItemsToggle: true)
+                 FilterView(relevantFeedTypeForFilterBehavior: appSettings.feedType, hideFeedOptions: true, hideSeenItemsToggleContext: .feed)
                      .environment(appSettings)
                      .environment(authService)
             }
@@ -413,4 +413,3 @@ struct FeedView: View {
         return FetchResult(items: fetchedItems, nextOlderThanId: finalNextOlderId, apiReachedEnd: apiSaysNoMoreItems)
     }
 }
-

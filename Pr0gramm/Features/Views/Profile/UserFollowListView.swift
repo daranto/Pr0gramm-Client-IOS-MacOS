@@ -77,7 +77,7 @@ struct UserFollowListView: View {
             // Wichtig: relevantFeedTypeForFilterBehavior ist hier nil,
             // da die Follow-Liste nicht an einen spezifischen Feed-Typ gebunden ist.
             // Die API für /user/followlist verwendet die übergebenen Flags.
-            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false)
+            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, hideSeenItemsToggleContext: nil)
                 .environment(settings)
                 .environment(authService)
         }

@@ -177,7 +177,7 @@ struct SearchView: View {
                 }
         }
         .sheet(isPresented: $showingFilterSheet) {
-            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false, showExcludedTagsSection: false)
+            FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, hideSeenItemsToggleContext: .search, showExcludedTagsSection: false)
                 .environment(settings)
                 .environment(authService)
         }
@@ -196,6 +196,9 @@ struct SearchView: View {
         .onChange(of: settings.showNSFW) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showNSFL) { _, _ in handleApiFlagsChange() }
         .onChange(of: settings.showPOL) { _, _ in handleApiFlagsChange() }
+        .onChange(of: settings.hideSeenItemsInSearch) { _, _ in
+            Task { await performSearchLogic(isInitialSearch: true) }
+        }
         .task(id: navigationService.selectedTab) {
             let newTab = navigationService.selectedTab
             if newTab == .search {
@@ -678,22 +681,35 @@ struct SearchView: View {
                 showJunk = true
             }
             
-            let apiResponse = try await apiService.fetchItems(
-                flags: currentApiFlags,
-                promoted: promoted,
-                tags: finalTags,
-                showJunkParameter: showJunk
-            )
-            let fetchedItems = apiResponse.items
-            self.items = fetchedItems
+            var visibleItems: [Item] = []
+            var currentOlderThanId: Int? = nil
+            var apiReachedEnd = false
 
-            if fetchedItems.isEmpty {
-                self.canLoadMore = false
-            } else {
-                let atEnd = apiResponse.atEnd ?? false
-                let hasOlder = apiResponse.hasOlder ?? true
-                self.canLoadMore = !(atEnd || !hasOlder)
-            }
+            repeat {
+                guard !Task.isCancelled else { throw CancellationError() }
+
+                let apiResponse = try await apiService.fetchItems(
+                    flags: currentApiFlags,
+                    promoted: promoted,
+                    tags: finalTags,
+                    olderThanId: currentOlderThanId,
+                    showJunkParameter: showJunk
+                )
+                let pageItems = apiResponse.items
+                apiReachedEnd = apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil) || pageItems.isEmpty
+
+                let filteredItems = settings.hideSeenItemsInSearch
+                    ? pageItems.filter { !settings.seenItemIDs.contains($0.id) }
+                    : pageItems
+                visibleItems.append(contentsOf: filteredItems)
+
+                if !apiReachedEnd, let lastItem = pageItems.last {
+                    currentOlderThanId = lastItem.id
+                }
+            } while visibleItems.isEmpty && !apiReachedEnd && settings.hideSeenItemsInSearch
+
+            self.items = visibleItems
+            self.canLoadMore = !apiReachedEnd
             self.errorMessage = nil
             SearchView.logger.info("Search updated with tags: '\(finalTags ?? "nil")'. Total: \(self.items.count). Can load more: \(self.canLoadMore)")
         }
@@ -820,14 +836,21 @@ struct SearchView: View {
                 self.canLoadMore = false
             } else {
                 let currentIDs = Set(self.items.map { $0.id })
-                let uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
+                var uniqueNewItems = newItems.filter { !currentIDs.contains($0.id) }
+                if settings.hideSeenItemsInSearch {
+                    uniqueNewItems = uniqueNewItems.filter { !settings.seenItemIDs.contains($0.id) }
+                }
+
+                let atEnd = apiResponse.atEnd ?? false
+                let hasOlder = apiResponse.hasOlder ?? true
+                self.canLoadMore = !(atEnd || !hasOlder)
+
                 if uniqueNewItems.isEmpty {
-                    self.canLoadMore = false
+                    if self.canLoadMore {
+                        Task { await loadMoreSearch() }
+                    }
                 } else {
                     self.items.append(contentsOf: uniqueNewItems)
-                    let atEnd = apiResponse.atEnd ?? false
-                    let hasOlder = apiResponse.hasOlder ?? true
-                    self.canLoadMore = !(atEnd || !hasOlder)
                 }
             }
         }
@@ -893,4 +916,3 @@ struct SearchView: View {
         return verticalPadding + buttonHeight + bottomMargin
     }
 }
-

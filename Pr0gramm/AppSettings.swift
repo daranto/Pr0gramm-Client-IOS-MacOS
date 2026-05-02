@@ -176,6 +176,7 @@ final class AppSettings {
     private static let maxImageCacheSizeMBKey = "maxImageCacheSizeMB_v1"
     private static let commentSortOrderKey = "commentSortOrder_v1"
     private static let hideSeenItemsKey = "hideSeenItems_v1"
+    private static let hideSeenItemsInSearchKey = "hideSeenItemsInSearch_v1"
     private static let subtitleActivationModeKey = "subtitleActivationMode_v1"
     private static let selectedCollectionIdForFavoritesKey = "selectedCollectionIdForFavorites_v1"
     private static let colorSchemeSettingKey = "colorSchemeSetting_v1"
@@ -242,6 +243,12 @@ final class AppSettings {
         didSet {
             UserDefaults.standard.set(hideSeenItems, forKey: Self.hideSeenItemsKey)
             Self.logger.info("Hide seen items setting changed to: \(self.hideSeenItems)")
+        }
+    }
+    var hideSeenItemsInSearch: Bool {
+        didSet {
+            UserDefaults.standard.set(hideSeenItemsInSearch, forKey: Self.hideSeenItemsInSearchKey)
+            Self.logger.info("Hide seen items in search setting changed to: \(self.hideSeenItemsInSearch)")
         }
     }
 
@@ -514,6 +521,7 @@ final class AppSettings {
         self.commentSortOrder = CommentSortOrder(rawValue: initialRawCommentSortOrder) ?? .date
         
         self.hideSeenItems = UserDefaults.standard.bool(forKey: Self.hideSeenItemsKey)
+        self.hideSeenItemsInSearch = UserDefaults.standard.bool(forKey: Self.hideSeenItemsInSearchKey)
 
         let initialRawSubtitleActivationMode = UserDefaults.standard.integer(forKey: Self.subtitleActivationModeKey)
         self.subtitleActivationMode = SubtitleActivationMode(rawValue: initialRawSubtitleActivationMode) ?? .disabled
@@ -548,7 +556,8 @@ final class AppSettings {
         Self.logger.info("- feedType: \(self.feedType.displayName)")
         Self.logger.info("- showSFW: \(self.showSFW), showNSFW: \(self.showNSFW), showNSFL: \(self.showNSFL), showNSFP: \(self.showNSFP), showPOL: \(self.showPOL)")
         Self.logger.info("- apiFlags computed: \(self.apiFlags), apiPromoted computed: \(String(describing: self.apiPromoted)), apiShowJunk computed: \(self.apiShowJunk)")
-        Self.logger.info("- hideSeenItems (actual): \(self.hideSeenItems)")
+        Self.logger.info("- hideSeenItems (feed): \(self.hideSeenItems)")
+        Self.logger.info("- hideSeenItemsInSearch (actual): \(self.hideSeenItemsInSearch)")
         Self.logger.info("- subtitleActivationMode: \(self.subtitleActivationMode.displayName)")
         Self.logger.info("- selectedCollectionIdForFavorites: \(self.selectedCollectionIdForFavorites != nil ? String(self.selectedCollectionIdForFavorites!) : "nil")")
         Self.logger.info("- colorSchemeSetting: \(self.colorSchemeSetting.displayName)")
@@ -566,6 +575,7 @@ final class AppSettings {
         if UserDefaults.standard.object(forKey: Self.showSFWKey) == nil { UserDefaults.standard.set(self.showSFW, forKey: Self.showSFWKey) }
         if UserDefaults.standard.object(forKey: Self.showNSFPKey) == nil { UserDefaults.standard.set(self.showNSFP, forKey: Self.showNSFPKey) }
         if UserDefaults.standard.object(forKey: Self.hideSeenItemsKey) == nil { UserDefaults.standard.set(self.hideSeenItems, forKey: Self.hideSeenItemsKey) }
+        if UserDefaults.standard.object(forKey: Self.hideSeenItemsInSearchKey) == nil { UserDefaults.standard.set(self.hideSeenItemsInSearch, forKey: Self.hideSeenItemsInSearchKey) }
         if UserDefaults.standard.object(forKey: Self.subtitleActivationModeKey) == nil { UserDefaults.standard.set(self.subtitleActivationMode.rawValue, forKey: Self.subtitleActivationModeKey) }
         if UserDefaults.standard.object(forKey: Self.colorSchemeSettingKey) == nil { UserDefaults.standard.set(self.colorSchemeSetting.rawValue, forKey: Self.colorSchemeSettingKey) }
         if UserDefaults.standard.object(forKey: Self.gridSizeSettingKey) == nil { UserDefaults.standard.set(self.gridSize.rawValue, forKey: Self.gridSizeSettingKey) }

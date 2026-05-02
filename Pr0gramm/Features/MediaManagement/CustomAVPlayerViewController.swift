@@ -16,12 +16,72 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
     // Callbacks triggered by the delegate methods.
     var willBeginFullScreen: (() -> Void)?
     var willEndFullScreen: (() -> Void)?
+    
+    // Notification observer for layer refresh
+    private var bufferResumeObserver: NSObjectProtocol?
+    
+    // Override player setter to force layer refresh when player changes
+    override var player: AVPlayer? {
+        didSet {
+            guard self.player !== oldValue else { return }
+            Self.logger.debug("Player changed from \(String(describing: oldValue)) to \(String(describing: self.player)). Forcing layer refresh.")
+            
+            // CRITICAL FIX: Force the internal player layer to refresh
+            // When AVPlayerViewController.player changes, we need to ensure the layer rebinds
+            if isViewLoaded {
+                // Force view to re-layout, which triggers AVPlayerLayer refresh
+                view.setNeedsLayout()
+                view.layoutIfNeeded()
+                
+                // Also force the content overlay (where controls live) to refresh
+                contentOverlayView?.setNeedsLayout()
+                contentOverlayView?.layoutIfNeeded()
+                
+                Self.logger.debug("View hierarchy layout forced to rebind AVPlayerLayer.")
+            }
+        }
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         self.delegate = self // Set self as the delegate to receive fullscreen callbacks
         self.showsPlaybackControls = true
-        Self.logger.debug("viewDidLoad: Delegate set, showsPlaybackControls set to true.")
+        
+        // CRITICAL FIX: Disable Visual Intelligence / Live Image Analysis
+        // This prevents "Visual isTranslatable: NO" errors that cause video freezing
+        if #available(iOS 16.0, *) {
+            self.allowsVideoFrameAnalysis = false
+            Self.logger.debug("Disabled video frame analysis to prevent Visual Intelligence crashes.")
+        }
+        
+        // CRITICAL FIX: Listen for buffer resume notification to force layer refresh
+        // This replicates the fix that happens when Control Center is opened/closed
+        bufferResumeObserver = NotificationCenter.default.addObserver(
+            forName: .videoPlayerDidResumeFromBuffer,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self,
+                  let notificationPlayer = notification.object as? AVPlayer,
+                  notificationPlayer === self.player else {
+                return
+            }
+            
+            Self.logger.debug("Received videoPlayerDidResumeFromBuffer notification. Forcing layer refresh.")
+            
+            // Force the view hierarchy to re-layout, which rebinds the AVPlayerLayer
+            // This is what happens automatically when Control Center is opened/closed
+            self.view.setNeedsLayout()
+            self.view.layoutIfNeeded()
+            
+            // Also refresh the content overlay where controls live
+            self.contentOverlayView?.setNeedsLayout()
+            self.contentOverlayView?.layoutIfNeeded()
+            
+            Self.logger.debug("Layer refresh completed after buffer resume.")
+        }
+        
+        Self.logger.debug("viewDidLoad: Delegate set, showsPlaybackControls set to true, buffer resume observer added.")
     }
 
     /// Overrides the default key commands to remove the standard arrow key behaviors
@@ -123,7 +183,12 @@ class CustomAVPlayerViewController: AVPlayerViewController, AVPlayerViewControll
     }
 
     deinit {
-         Self.logger.debug("deinit")
+        if let observer = bufferResumeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            bufferResumeObserver = nil
+            Self.logger.debug("Removed buffer resume observer in deinit")
+        }
+        Self.logger.debug("deinit")
     }
 }
 // --- END OF COMPLETE FILE ---

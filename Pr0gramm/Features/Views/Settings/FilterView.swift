@@ -3,6 +3,11 @@
 
 import SwiftUI
 
+enum HideSeenItemsToggleContext {
+    case feed
+    case search
+}
+
 /// A view, typically presented as a sheet, allowing the user to configure
 /// feed type (New/Promoted) and content filters (SFW, NSFW, etc.).
 /// Can optionally hide the feed-specific options and the "hide seen items" toggle.
@@ -13,16 +18,15 @@ struct FilterView: View {
 
     let relevantFeedTypeForFilterBehavior: FeedType?
     let hideFeedOptions: Bool
-    let showHideSeenItemsToggle: Bool
+    let hideSeenItemsToggleContext: HideSeenItemsToggleContext?
     let showExcludedTagsSection: Bool
     
     @State private var newExcludedTag: String = ""
 
-
-    init(relevantFeedTypeForFilterBehavior: FeedType?, hideFeedOptions: Bool = false, showHideSeenItemsToggle: Bool = true, showExcludedTagsSection: Bool = true) {
+    init(relevantFeedTypeForFilterBehavior: FeedType?, hideFeedOptions: Bool = false, hideSeenItemsToggleContext: HideSeenItemsToggleContext? = .feed, showExcludedTagsSection: Bool = true) {
         self.relevantFeedTypeForFilterBehavior = relevantFeedTypeForFilterBehavior
         self.hideFeedOptions = hideFeedOptions
-        self.showHideSeenItemsToggle = showHideSeenItemsToggle
+        self.hideSeenItemsToggleContext = hideSeenItemsToggleContext
         self.showExcludedTagsSection = showExcludedTagsSection
     }
 
@@ -30,7 +34,7 @@ struct FilterView: View {
         @Bindable var settings = appSettings
         NavigationStack {
             Form {
-                if !hideFeedOptions || showHideSeenItemsToggle {
+                if !hideFeedOptions || hideSeenItemsToggleContext != nil {
                     Section {
                         if !hideFeedOptions {
                             Picker("Feed Typ", selection: $settings.feedType) {
@@ -42,8 +46,8 @@ struct FilterView: View {
                             .pickerStyle(.segmented)
                         }
 
-                        if showHideSeenItemsToggle {
-                            Toggle("Nur Frisches anzeigen", isOn: $settings.hideSeenItems)
+                        if let hideSeenItemsToggleContext {
+                            Toggle("Nur Frisches anzeigen", isOn: hideSeenItemsBinding(for: hideSeenItemsToggleContext))
                                 .font(UIConstants.bodyFont)
                                 .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
                         }
@@ -51,8 +55,8 @@ struct FilterView: View {
                     } header: {
                         Text("Anzeige")
                     } footer: {
-                        if showHideSeenItemsToggle {
-                             Text("Blendet Posts aus, die du bereits in der Detailansicht geöffnet hast.")
+                        if let hideSeenItemsToggleContext {
+                             Text(hideSeenItemsFooterText(for: hideSeenItemsToggleContext))
                                 .font(UIConstants.footnoteFont)
                         }
                     }
@@ -222,6 +226,36 @@ struct FilterView: View {
             appSettings.excludedTags.remove(atOffsets: offsets)
         }
     }
+
+    private func hideSeenItemsBinding(for context: HideSeenItemsToggleContext) -> Binding<Bool> {
+        Binding(
+            get: {
+                switch context {
+                case .feed:
+                    appSettings.hideSeenItems
+                case .search:
+                    appSettings.hideSeenItemsInSearch
+                }
+            },
+            set: { newValue in
+                switch context {
+                case .feed:
+                    appSettings.hideSeenItems = newValue
+                case .search:
+                    appSettings.hideSeenItemsInSearch = newValue
+                }
+            }
+        )
+    }
+
+    private func hideSeenItemsFooterText(for context: HideSeenItemsToggleContext) -> String {
+        switch context {
+        case .feed:
+            "Blendet Posts im Mainfeed aus, die du bereits in der Detailansicht geöffnet hast."
+        case .search:
+            "Blendet Posts in der Suche aus, die du bereits in der Detailansicht geöffnet hast."
+        }
+    }
 }
 
 // MARK: - Previews
@@ -230,7 +264,7 @@ struct FilterView: View {
     @Previewable @State var previewSettings = AppSettings()
     @Previewable @State var previewAuthService = AuthService(appSettings: AppSettings())
     
-    FilterView(relevantFeedTypeForFilterBehavior: .promoted, hideFeedOptions: false, showHideSeenItemsToggle: true)
+    FilterView(relevantFeedTypeForFilterBehavior: .promoted, hideFeedOptions: false, hideSeenItemsToggleContext: .feed)
         .environment(previewSettings)
         .environment(previewAuthService)
         .task {
@@ -246,7 +280,7 @@ struct FilterView: View {
     @Previewable @State var previewSettings = AppSettings()
     @Previewable @State var previewAuthService = AuthService(appSettings: AppSettings())
     
-    FilterView(relevantFeedTypeForFilterBehavior: .junk, hideFeedOptions: false, showHideSeenItemsToggle: true)
+    FilterView(relevantFeedTypeForFilterBehavior: .junk, hideFeedOptions: false, hideSeenItemsToggleContext: .feed)
         .environment(previewSettings)
         .environment(previewAuthService)
         .task {
@@ -262,7 +296,7 @@ struct FilterView: View {
     @Previewable @State var previewSettings = AppSettings()
     @Previewable @State var previewAuthService = AuthService(appSettings: AppSettings())
     
-    FilterView(relevantFeedTypeForFilterBehavior: .promoted, hideFeedOptions: false, showHideSeenItemsToggle: true)
+    FilterView(relevantFeedTypeForFilterBehavior: .promoted, hideFeedOptions: false, hideSeenItemsToggleContext: .feed)
         .environment(previewSettings)
         .environment(previewAuthService)
         .task {

@@ -137,7 +137,7 @@ struct FavoritesView: View {
                     Task { await performFavoritesLogic(isInitialLoad: true) }
                 }
                 .sheet(isPresented: $showingFilterSheet) {
-                    FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, showHideSeenItemsToggle: false, showExcludedTagsSection: false)
+                    FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, hideSeenItemsToggleContext: nil, showExcludedTagsSection: false)
                         .environment(settings)
                         .environment(authService)
                 }

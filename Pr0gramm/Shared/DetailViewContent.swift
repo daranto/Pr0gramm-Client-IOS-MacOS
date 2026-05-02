@@ -1280,7 +1280,6 @@ struct VideoPlayerWithMuteButton: View {
                 onWillEndFullScreen: onWillEndFullScreen,
                 horizontalSizeClass: horizontalSizeClass
             )
-            .id(itemID)
             .onContinuousHover { phase in
                 switch phase {
                 case .active(_):
