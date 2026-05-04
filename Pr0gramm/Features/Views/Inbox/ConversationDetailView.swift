@@ -11,6 +11,7 @@ struct ConversationDetailView: View {
     @Environment(AppSettings.self) var settings
     @Environment(AuthService.self) var authService
     @Environment(VideoPlayerManager.self) var playerManager
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var messages: [PrivateMessage] = []
     @State private var isLoading = false
@@ -41,10 +42,12 @@ struct ConversationDetailView: View {
     @State private var scrollViewContentOffset: CGFloat = 0
     @State private var isUserScrolling: Bool = false
     @State private var lastScrollTime: Date = Date()
+    @State private var pendingAutoScrollToBottom = false
     // --- END NEUE STATE VARIABLEN ---
 
     private let apiService = APIService()
     fileprivate static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ConversationDetailView")
+    private let bottomAnchorID = "ConversationBottomAnchor"
 
     @State private var scrollViewProxy: ScrollViewProxy? = nil
 
@@ -57,14 +60,18 @@ struct ConversationDetailView: View {
                 }
             messageInputView
         }
+        .background(chatBackground)
         .navigationTitle(partnerUsername)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .toolbarBackground(
-            Material.bar,
-            for: .navigationBar)
+        .toolbarBackground(Material.bar, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                conversationHeader
+            }
+        }
         .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading && !isSendingMessage)) {
             Button("OK") { clearErrors() }
         } message: { Text(errorMessage ?? "Unbekannter Fehler") }
@@ -103,6 +110,12 @@ struct ConversationDetailView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
             handleKeyboardDidHide()
+        }
+        .onChange(of: isTextEditorFocused) { _, focused in
+            if focused {
+                shouldScrollToBottom = true
+                scrollToBottomIfNeeded(force: true)
+            }
         }
         // --- END VERBESSERTE KEYBOARD NOTIFICATIONS ---
     }
@@ -156,21 +169,20 @@ struct ConversationDetailView: View {
         }
     }
     
-    private func scrollToBottomIfNeeded() {
-        guard let lastMessageId = messages.last?.id,
-              let proxy = self.scrollViewProxy else { return }
+    private func scrollToBottomIfNeeded(force: Bool = false) {
+        guard self.scrollViewProxy != nil else { return }
         
         // Nur scrollen wenn der User nicht gerade manuell scrollt
         let now = Date()
-        if now.timeIntervalSince(lastScrollTime) < 1.0 && isUserScrolling {
+        if !force, now.timeIntervalSince(lastScrollTime) < 1.0 && isUserScrolling {
             return
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             withAnimation(.smooth(duration: 0.3)) {
-                proxy.scrollTo(lastMessageId, anchor: .bottom)
+                self.scrollViewProxy?.scrollTo(bottomAnchorID, anchor: .bottom)
             }
-            ConversationDetailView.logger.debug("Scrolled to bottom message ID: \(lastMessageId)")
+            ConversationDetailView.logger.debug("Scrolled to bottom anchor.")
         }
     }
     
@@ -201,69 +213,60 @@ struct ConversationDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollViewReader { proxy in
-                List {
-                    if isLoadingMore {
-                        HStack { Spacer(); ProgressView("Lade ältere..."); Spacer() }
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets())
-                            .listRowBackground(Color.clear)
-                            .padding(.vertical, 8)
-                    }
-                    
-                    if messages.isEmpty && !isLoading && !isLoadingMore && errorMessage == nil {
-                        Section {
-                            Text("Keine Nachrichten in dieser Konversation.")
-                                .foregroundColor(.secondary)
-                                .padding()
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        if isLoadingMore {
+                            ProgressView("Lade ältere...")
+                                .font(.footnote)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .background(.thinMaterial, in: Capsule())
+                                .padding(.top, 8)
                         }
-                    } else {
-                        ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
-                            ConversationMessageRow(
-                                message: message,
-                                isSentByCurrentUser: message.sent == 1,
-                                currentUserMark: authService.currentUser?.mark ?? 0,
-                                currentUsername: authService.currentUser?.name ?? "Ich",
-                                partnerMark: conversationPartner?.mark ?? 0,
-                                partnerName: conversationPartner?.name ?? partnerUsername
-                            )
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(
-                                top: index == 0 ? 15 : 3,
-                                leading: 10,
-                                bottom: 3,
-                                trailing: 10
-                            ))
-                            .listRowBackground(Color.clear)
-                            .id(message.id)
-                            .onAppear {
-                                if message.id == messages.first?.id && canLoadMore && !isLoadingMore && !isLoading {
-                                    ConversationDetailView.logger.info("Near top of conversation (message \(message.id)), loading older messages.")
-                                    Task {
-                                        try? await Task.sleep(for: .milliseconds(200))
-                                        await loadMoreMessages()
+
+                        if messages.isEmpty && !isLoading && !isLoadingMore && errorMessage == nil {
+                            Text("Keine Nachrichten in dieser Konversation.")
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 14)
+                                .frame(maxWidth: .infinity)
+                                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22))
+                                .padding(.top, 24)
+                        } else {
+                            ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                                ConversationMessageRow(
+                                    message: message,
+                                    isSentByCurrentUser: message.sent == 1,
+                                    currentUserMark: authService.currentUser?.mark ?? 0,
+                                    currentUsername: authService.currentUser?.name ?? "Ich",
+                                    partnerMark: conversationPartner?.mark ?? 0,
+                                    partnerName: conversationPartner?.name ?? partnerUsername
+                                )
+                                .id(message.id)
+                                .onAppear {
+                                    if message.id == messages.first?.id && canLoadMore && !isLoadingMore && !isLoading {
+                                        ConversationDetailView.logger.info("Near top of conversation (message \(message.id)), loading older messages.")
+                                        Task {
+                                            try? await Task.sleep(for: .milliseconds(200))
+                                            await loadMoreMessages()
+                                        }
                                     }
                                 }
+                                .padding(.top, index == 0 ? 8 : 0)
                             }
                         }
+
+                        Color.clear
+                            .frame(height: max(textFieldHeight * 0.2, 10))
+                            .id(bottomAnchorID)
                     }
-                    
-                    // --- VERBESSERTER KEYBOARD SPACER MIT DYNAMISCHER HÖHE ---
-                    Color.clear
-                        .frame(height: max(keyboardHeight, 0))
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                        .id("KeyboardSpacer")
-                    // --- END VERBESSERTER KEYBOARD SPACER ---
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                 }
-                .listStyle(.plain)
-                .background(Color(UIColor.systemGroupedBackground))
-                .scrollContentBackground(.hidden)
+                .defaultScrollAnchor(.bottom)
+                .scrollIndicators(.hidden)
+                .scrollDismissesKeyboard(.interactively)
                 .refreshable { await refreshMessages() }
-                // --- VERBESSERTE SCROLL DETECTION ---
                 .simultaneousGesture(
                     DragGesture()
                         .onChanged { _ in
@@ -276,20 +279,17 @@ struct ConversationDetailView: View {
                             }
                         }
                 )
-                // --- END VERBESSERTE SCROLL DETECTION ---
                 .onAppear {
                     self.scrollViewProxy = proxy
-                    if let lastMessageId = messages.last?.id {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            proxy.scrollTo(lastMessageId, anchor: .bottom)
-                        }
-                    }
+                    pendingAutoScrollToBottom = true
+                    scrollToBottomIfNeeded(force: true)
                 }
-                .onChange(of: messages.count) { oldValue, newValue in
-                    // Nur bei neuen Nachrichten automatisch scrollen
-                    if newValue > oldValue {
+                .onChange(of: messages.last?.id) { oldValue, newValue in
+                    guard newValue != nil else { return }
+                    if pendingAutoScrollToBottom || (oldValue != newValue && oldValue != nil) {
                         shouldScrollToBottom = true
-                        scrollToBottomIfNeeded()
+                        scrollToBottomIfNeeded(force: true)
+                        pendingAutoScrollToBottom = false
                     }
                 }
                 .environment(\.openURL, OpenURLAction { url in
@@ -356,27 +356,23 @@ struct ConversationDetailView: View {
     private var messageInputView: some View {
         let bottomPaddingForInput: CGFloat = UIConstants.isRunningOnMac ? 0 : 5
 
-        VStack(spacing: 4) {
-             if let err = sendingError {
+        VStack(spacing: 8) {
+            if let err = sendingError {
                 Text("Senden fehlgeschlagen: \(err)")
                     .font(.caption)
-                    .foregroundColor(.red)
-                    .padding(.horizontal)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 18)
             }
             HStack(alignment: .bottom, spacing: 8) {
-                // --- VERBESSERTES TEXTFIELD MIT HÖHEN-TRACKING ---
                 TextField("Nachricht eingeben...", text: $newMessageText, axis: .vertical)
                     .focused($isTextEditorFocused)
                     .textFieldStyle(.plain)
-                    .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 8))
+                    .foregroundStyle(.primary)
+                    .tint(settings.accentColorChoice.swiftUIColor)
+                    .padding(EdgeInsets(top: 12, leading: 18, bottom: 12, trailing: 18))
                     .background(
                         GeometryReader { geometry in
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(Color(uiColor: .systemGray5))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 20)
-                                        .stroke(Color(uiColor: .systemGray3), lineWidth: 0.5)
-                                )
+                            textFieldGlassBackground
                                 .onAppear {
                                     textFieldHeight = geometry.size.height
                                 }
@@ -391,15 +387,13 @@ struct ConversationDetailView: View {
                     .lineLimit(1...6)
                     .accessibilityLabel("Nachricht eingeben")
                     .onChange(of: newMessageText) { oldValue, newValue in
-                        // Bei Textänderungen nach kurzer Verzögerung scrollen
                         if isTextEditorFocused && !newValue.isEmpty {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                scrollToBottomIfNeeded()
+                                scrollToBottomIfNeeded(force: true)
                             }
                         }
                     }
-                // --- END VERBESSERTES TEXTFIELD ---
-                
+
                 Button {
                     Task { await sendMessage() }
                 } label: {
@@ -407,21 +401,21 @@ struct ConversationDetailView: View {
                         ProgressView()
                             .frame(width: 36, height: 36)
                     } else {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 36, height: 36)
-                            .foregroundColor(newMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .gray : .accentColor)
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(sendButtonForegroundStyle)
+                            .frame(width: 45, height: 45)
+                            .background(sendButtonBackground)
                     }
                 }
+                .buttonStyle(.plain)
                 .disabled(newMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSendingMessage)
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 8)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
             .padding(.bottom, bottomPaddingForInput)
         }
-        // --- ÄNDERUNG: Material.bar statt .thinMaterial für konsistentes Liquid Glass Design ---
-        .background(Material.bar)
+        .background(inputBackground)
     }
 
     private func clearErrors() {
@@ -452,6 +446,7 @@ struct ConversationDetailView: View {
             self.messages = response.messages.sorted { $0.created < $1.created }
             self.canLoadMore = !response.atEnd
             self.conversationPartner = response.with
+            self.pendingAutoScrollToBottom = true
             ConversationDetailView.logger.info("Fetched \(response.messages.count) initial messages with \(partnerUsername). AtEnd: \(response.atEnd)")
         } catch let error as URLError where error.code == .userAuthenticationRequired {
             handleAuthError(error: error, context: "refreshing messages")
@@ -524,10 +519,9 @@ struct ConversationDetailView: View {
                 ConversationDetailView.logger.info("Successfully sent message to \(partnerUsername). API returned success. Updating messages from response.")
                 self.newMessageText = ""
                 self.messages = response.messages.sorted { $0.created < $1.created }
-                // Nach dem Senden automatisch nach unten scrollen
-                shouldScrollToBottom = true
+                self.pendingAutoScrollToBottom = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    self.scrollToBottomIfNeeded()
+                    self.scrollToBottomIfNeeded(force: true)
                 }
             } else {
                 let apiError = "Unbekannter Fehler beim Senden (API success:false)."
@@ -552,9 +546,76 @@ struct ConversationDetailView: View {
         self.canLoadMore = false
         Task { await authService.logout() }
     }
+
+    private var chatBackground: some View {
+        LinearGradient(
+            colors: [
+                Color(uiColor: .systemBackground),
+                settings.accentColorChoice.swiftUIColor.opacity(0.06),
+                Color(uiColor: .secondarySystemBackground)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private var conversationHeader: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(Mark(rawValue: conversationPartner?.mark ?? 0).displayColor)
+                .frame(width: 10, height: 10)
+            Text(conversationPartner?.name ?? partnerUsername)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .modifier(ConversationGlassCapsuleModifier())
+    }
+
+    private var inputBackground: some View {
+        Rectangle()
+            .fill(.clear)
+    }
+
+    private var sendButtonForegroundStyle: some ShapeStyle {
+        newMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(.white)
+    }
+
+    @ViewBuilder
+    private var textFieldGlassBackground: some View {
+        Capsule()
+            .fill(.clear)
+            .overlay {
+                Capsule()
+                    .strokeBorder(textFieldBorderColor, lineWidth: 0.8)
+            }
+    }
+
+    private var textFieldBorderColor: Color {
+        colorScheme == .light ? .black.opacity(0.22) : .white.opacity(0.18)
+    }
+
+    @ViewBuilder
+    private var sendButtonBackground: some View {
+        if #available(iOS 26.0, *) {
+            Circle()
+                .fill(.clear)
+                .glassEffect(
+                    newMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? .regular.tint(.white.opacity(0.08))
+                    : .regular.tint(settings.accentColorChoice.swiftUIColor).interactive(),
+                    in: .circle
+                )
+        } else {
+            Circle()
+                .fill(newMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color(uiColor: .systemGray4) : settings.accentColorChoice.swiftUIColor)
+        }
+    }
 }
 
-// MARK: - ConversationMessageRow bleibt unverändert
 struct ConversationMessageRow: View {
     let message: PrivateMessage
     let isSentByCurrentUser: Bool
@@ -565,8 +626,8 @@ struct ConversationMessageRow: View {
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "ConversationMessageRowLocal")
 
-    private var backgroundColor: Color {
-        isSentByCurrentUser ? Color.accentColor : Color(uiColor: .systemGray5)
+    private var bubbleTint: Color {
+        isSentByCurrentUser ? Color.accentColor : Mark(rawValue: senderMarkValue).displayColor.opacity(0.16)
     }
 
     private var textColorForBubble: Color {
@@ -671,29 +732,36 @@ struct ConversationMessageRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 6) {
+        HStack(alignment: .bottom, spacing: 8) {
             if !isSentByCurrentUser {
                 avatarView
             } else {
                 Spacer(minLength: 0)
             }
 
-            VStack(alignment: isSentByCurrentUser ? .trailing : .leading, spacing: 2) {
+            VStack(alignment: isSentByCurrentUser ? .trailing : .leading, spacing: 4) {
+                if !isSentByCurrentUser {
+                    Text(senderDisplayName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                }
+
                 Text(attributedMessageContent)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
                     .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
-                    .background(backgroundColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .background(bubbleBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .frame(minWidth: 50, maxWidth: UIScreen.main.bounds.width * 0.75,
                            alignment: isSentByCurrentUser ? .trailing : .leading)
                 
                 HStack(spacing: 4) {
                     Text(formattedTimestamp(for: message.created))
                         .font(.caption2)
-                        .foregroundColor(.gray)
+                        .foregroundStyle(.tertiary)
                 }
-                .padding(.horizontal, 0)
+                .padding(.horizontal, 6)
                 .frame(maxWidth: .infinity, alignment: isSentByCurrentUser ? .trailing : .leading)
             }
             
@@ -704,6 +772,39 @@ struct ConversationMessageRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: isSentByCurrentUser ? .trailing : .leading)
+    }
+
+    @ViewBuilder
+    private var bubbleBackground: some View {
+        if #available(iOS 26.0, *) {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(.clear)
+                .glassEffect(
+                    isSentByCurrentUser
+                    ? .regular.tint(bubbleTint).interactive()
+                    : .regular.tint(.white.opacity(0.6)),
+                    in: .rect(cornerRadius: 24)
+                )
+                .overlay {
+                    if !isSentByCurrentUser {
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .stroke(Color.white.opacity(0.35), lineWidth: 0.6)
+                    }
+                }
+        } else {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(isSentByCurrentUser ? bubbleTint : Color(uiColor: .secondarySystemBackground))
+        }
+    }
+}
+
+private struct ConversationGlassCapsuleModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: .capsule)
+        } else {
+            content.background(.thinMaterial, in: Capsule())
+        }
     }
 }
 

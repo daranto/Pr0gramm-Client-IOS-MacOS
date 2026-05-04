@@ -197,15 +197,30 @@ struct InboxView: View {
     
     var inboxContent: some View {
         VStack(spacing: 0) {
-            Picker("Nachrichten Typ", selection: $selectedMessageType) {
-                ForEach(InboxViewMessageType.allCases) { type in
-                    Text(type.displayNameForPicker(authService: authService))
-                        .tag(type)
+            if #available(iOS 26.0, *) {
+                Picker("Nachrichten Typ", selection: $selectedMessageType) {
+                    ForEach(InboxViewMessageType.allCases) { type in
+                        Text(type.displayNameForPicker(authService: authService))
+                            .tag(type)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                .padding(.horizontal)
+                .padding(.top, 8)
+            } else {
+                Picker("Nachrichten Typ", selection: $selectedMessageType) {
+                    ForEach(InboxViewMessageType.allCases) { type in
+                        Text(type.displayNameForPicker(authService: authService))
+                            .tag(type)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.vertical, 8)
             
             contentView
         }
@@ -748,32 +763,75 @@ struct InboxConversationRow: View {
     private var userMarkColor: Color { Mark(rawValue: conversation.mark).displayColor }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Circle().fill(userMarkColor)
-                .frame(width: 10, height: 10)
-                .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.5))
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(userMarkColor.opacity(0.18))
+                    .frame(width: 52, height: 52)
+                Circle()
+                    .fill(userMarkColor)
+                    .frame(width: 14, height: 14)
+            }
 
-            Text(conversation.name)
-                .font(.headline)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(conversation.name)
+                        .font(.headline)
+                        .lineLimit(1)
 
-            Spacer()
+                    if conversation.blocked != 0 {
+                        Text("Blockiert")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.red.opacity(0.10), in: Capsule())
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    Text(relativeTime)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if conversation.canReceiveMessages == 0 {
+                        Text("Empfang aus")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Spacer(minLength: 10)
 
             if conversation.unreadCount > 0 {
                 Text("\(conversation.unreadCount)")
                     .font(.caption.weight(.bold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.red)
-                    .clipShape(Capsule())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color.accentColor, in: Capsule())
             }
-            
-            Text(relativeTime)
-                .font(.caption)
-                .foregroundColor(.secondary)
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 8)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(rowBackground)
+    }
+
+    @ViewBuilder
+    private var rowBackground: some View {
+        if #available(iOS 26.0, *) {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(.clear)
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 26))
+        } else {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(.thinMaterial)
+        }
     }
 }
 

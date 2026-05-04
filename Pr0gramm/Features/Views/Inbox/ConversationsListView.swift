@@ -49,22 +49,24 @@ struct ConversationsListView: View {
     }
 
     private var listContent: some View {
-        List {
-            ForEach(conversations) { conversation in
-                Button {
-                    ConversationsListView.logger.info("Conversation with '\(conversation.name)' selected.")
-                    onSelectConversation(conversation.name)
-                } label: {
-                    InboxConversationRow(conversation: conversation)
-                        // --- MODIFIED: Ensure the whole row is tappable ---
-                        .contentShape(Rectangle())
-                        // --- END MODIFICATION ---
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                ForEach(conversations) { conversation in
+                    Button {
+                        ConversationsListView.logger.info("Conversation with '\(conversation.name)' selected.")
+                        onSelectConversation(conversation.name)
+                    } label: {
+                        InboxConversationRow(conversation: conversation)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-                .listRowInsets(EdgeInsets(top: 10, leading: 15, bottom: 10, trailing: 15))
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
         }
-        .listStyle(.plain)
+        .background(Color.clear)
+        .scrollIndicators(.hidden)
         .refreshable {
             await onRefresh()
         }
