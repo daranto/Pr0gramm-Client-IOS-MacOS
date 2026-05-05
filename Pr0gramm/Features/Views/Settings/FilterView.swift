@@ -21,7 +21,11 @@ struct FilterView: View {
     let hideSeenItemsToggleContext: HideSeenItemsToggleContext?
     let showExcludedTagsSection: Bool
     
-    @State private var newExcludedTag: String = ""
+    @State private var newBlockedTag: String = ""
+    @State private var blockedTags: [BlockedTag] = []
+    @State private var isLoadingBlockedTags = false
+    @State private var blockedTagsError: String?
+    private let apiService = APIService()
 
     init(relevantFeedTypeForFilterBehavior: FeedType?, hideFeedOptions: Bool = false, hideSeenItemsToggleContext: HideSeenItemsToggleContext? = .feed, showExcludedTagsSection: Bool = true) {
         self.relevantFeedTypeForFilterBehavior = relevantFeedTypeForFilterBehavior
@@ -125,66 +129,67 @@ struct FilterView: View {
                 // Neue Section für ausgeschlossene Tags
                 if showExcludedTagsSection {
                     Section {
-                        ForEach(Array(settings.excludedTags.enumerated()), id: \.element.id) { index, tag in
+                        if !authService.isLoggedIn {
+                            Text("Melde dich an, um geblockte Tags zu verwalten.")
+                                .foregroundColor(.secondary)
+                        } else if isLoadingBlockedTags && blockedTags.isEmpty {
                             HStack {
-                                Toggle(isOn: Binding(
-                                    get: { 
-                                        guard index < settings.excludedTags.count else { return false }
-                                        return settings.excludedTags[index].isEnabled 
-                                    },
-                                    set: { newValue in
-                                        guard index < settings.excludedTags.count else { return }
-                                        settings.excludedTags[index].isEnabled = newValue
-                                    }
-                                )) {
+                                ProgressView()
+                                Text("Lade geblockte Tags…")
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            ForEach(blockedTags) { tag in
+                                HStack {
                                     HStack(spacing: 8) {
                                         Image(systemName: "tag.fill")
                                             .foregroundColor(settings.accentColorChoice.swiftUIColor)
                                             .font(.caption)
-                                        
-                                        Text(tag.name)
+                                        Text(tag.tag)
                                             .font(UIConstants.bodyFont)
                                     }
+                                    Spacer()
+                                    Button {
+                                        Task { await unblockTag(tag.tag) }
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .foregroundColor(.red)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .toggleStyle(SwitchToggleStyle(tint: settings.accentColorChoice.swiftUIColor))
-                                
-                                Button(action: {
-                                    removeExcludedTag(withId: tag.id)
-                                }) {
-                                    Image(systemName: "trash")
-                                        .foregroundColor(.red)
-                                }
-                                .buttonStyle(.plain)
                             }
+                            .onDelete(perform: deleteBlockedTags)
                         }
-                        .onDelete(perform: deleteExcludedTags)
                         
                         HStack {
-                            TextField("Tag hinzufügen", text: $newExcludedTag)
+                            TextField("Tag blockieren", text: $newBlockedTag)
                                 .font(UIConstants.bodyFont)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                                 .onSubmit {
-                                    addExcludedTag()
+                                    Task { await addBlockedTag() }
                                 }
                             
-                            Button(action: addExcludedTag) {
+                            Button {
+                                Task { await addBlockedTag() }
+                            } label: {
                                 Image(systemName: "plus.circle.fill")
                                     .foregroundColor(settings.accentColorChoice.swiftUIColor)
                             }
                             .buttonStyle(.plain)
-                            .disabled(newExcludedTag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(newBlockedTag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !authService.isLoggedIn)
+                        }
+                        
+                        if let blockedTagsError {
+                            Text(blockedTagsError)
+                                .font(UIConstants.footnoteFont)
+                                .foregroundColor(.red)
                         }
                     } header: {
-                        Text("Tags ausschließen")
+                        Text("Tags blockieren")
                     } footer: {
-                        if relevantFeedTypeForFilterBehavior == .junk {
-                            Text("Ausgeschlossene Tags gelten nur für 'Neu' und 'Beliebt', nicht für 'Müll'.")
-                                .font(UIConstants.footnoteFont)
-                        } else {
-                            Text("Aktivierte Tags werden aus dem Feed gefiltert. Deaktiviere Tags, um sie temporär zu erlauben.")
-                                .font(UIConstants.footnoteFont)
-                        }
+                        Text("Geblockte Tags werden serverseitig in Feed und Suche ausgeblendet.")
+                            .font(UIConstants.footnoteFont)
                     }
                      .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
                 }
@@ -199,31 +204,63 @@ struct FilterView: View {
                         .font(UIConstants.bodyFont)
                 }
             }
+            .task(id: authService.isLoggedIn) {
+                if authService.isLoggedIn {
+                    await loadBlockedTags()
+                } else {
+                    blockedTags = []
+                }
+            }
         }
     }
     
-    private func addExcludedTag() {
-        let trimmedTag = newExcludedTag.trimmingCharacters(in: .whitespacesAndNewlines)
+    @MainActor
+    private func loadBlockedTags() async {
+        guard authService.isLoggedIn else { return }
+        isLoadingBlockedTags = true
+        blockedTagsError = nil
+        defer { isLoadingBlockedTags = false }
+        do {
+            let response = try await apiService.fetchBlockedTags()
+            blockedTags = response.blockedTags.sorted { $0.tag.lowercased() < $1.tag.lowercased() }
+        } catch {
+            blockedTagsError = "Fehler beim Laden: \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func addBlockedTag() async {
+        guard authService.isLoggedIn, let nonce = authService.userNonce else { return }
+        let trimmedTag = newBlockedTag.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTag.isEmpty else { return }
-        guard !appSettings.excludedTags.contains(where: { $0.name.lowercased() == trimmedTag.lowercased() }) else {
-            newExcludedTag = ""
-            return
-        }
-        withAnimation {
-            appSettings.excludedTags.append(ExcludedTag(name: trimmedTag, isEnabled: true))
-        }
-        newExcludedTag = ""
-    }
-    
-    private func removeExcludedTag(withId id: UUID) {
-        withAnimation {
-            appSettings.excludedTags.removeAll { $0.id == id }
+        blockedTagsError = nil
+        do {
+            try await apiService.blockTag(tag: trimmedTag, nonce: nonce)
+            newBlockedTag = ""
+            await loadBlockedTags()
+        } catch {
+            blockedTagsError = "Blockieren fehlgeschlagen: \(error.localizedDescription)"
         }
     }
-    
-    private func deleteExcludedTags(at offsets: IndexSet) {
-        withAnimation {
-            appSettings.excludedTags.remove(atOffsets: offsets)
+
+    @MainActor
+    private func unblockTag(_ tag: String) async {
+        guard authService.isLoggedIn, let nonce = authService.userNonce else { return }
+        blockedTagsError = nil
+        do {
+            try await apiService.unblockTag(tag: tag, nonce: nonce)
+            await loadBlockedTags()
+        } catch {
+            blockedTagsError = "Entblocken fehlgeschlagen: \(error.localizedDescription)"
+        }
+    }
+
+    private func deleteBlockedTags(at offsets: IndexSet) {
+        let tagsToRemove = offsets.compactMap { index in
+            blockedTags.indices.contains(index) ? blockedTags[index].tag : nil
+        }
+        for tag in tagsToRemove {
+            Task { await unblockTag(tag) }
         }
     }
 

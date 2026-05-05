@@ -12,6 +12,7 @@ enum ProfileNavigationTarget: Hashable {
     case userProfileComments(username: String) // Wieder hinzugefügt
     case postDetail(item: Item, targetCommentID: Int?)
     case userFollowList(username: String)
+    case blockedUsers
     case inbox
 }
 
@@ -140,6 +141,9 @@ struct ProfileView: View {
                         .environment(authService)
                         .environment(playerManager)
                         .environment(navigationService)
+                 case .blockedUsers:
+                     BlockedUsersListView()
+                        .environment(authService)
                  }
             }
             // --- MODIFICATION: Entfernt von hier ---
@@ -235,6 +239,16 @@ struct ProfileView: View {
                     } icon: {
                         Image(systemName: "person.2.fill")
                             .foregroundColor(.pink)
+                    }
+                }
+
+                NavigationLink(value: ProfileNavigationTarget.blockedUsers) {
+                    Label {
+                        Text("Blockierungen (\(authService.blockedUsers.count))")
+                            .font(UIConstants.bodyFont)
+                    } icon: {
+                        Image(systemName: "person.crop.circle.badge.xmark")
+                            .foregroundColor(.red)
                     }
                 }
 

@@ -366,6 +366,28 @@ struct FollowActionResponse: Codable {
     let ts: Int?
 }
 
+struct BlockedUser: Codable, Hashable, Identifiable {
+    var id: String { name.lowercased() }
+    let name: String
+    let mark: Int
+}
+
+struct BlockedUsersResponse: Codable {
+    let blockedUsers: [BlockedUser]
+    let ts: Int?
+}
+
+struct BlockedTag: Codable, Hashable, Identifiable {
+    var id: String { tag.lowercased() }
+    let tag: String
+    let created: Int?
+}
+
+struct BlockedTagsResponse: Codable {
+    let blockedTags: [BlockedTag]
+    let ts: Int?
+}
+
 struct CalendarEventsResponse: Codable {
     let success: Bool
     let events: [CalendarEvent]
@@ -1273,6 +1295,78 @@ class APIService {
             APIService.logger.error("Error unsubscribing from user \(name): \(error.localizedDescription)")
             throw error
         }
+    }
+
+    func fetchBlockedUsers() async throws -> BlockedUsersResponse {
+        let endpoint = "/user/blocklist"
+        let url = baseURL.appendingPathComponent(endpoint)
+        let request = URLRequest(url: url)
+        APIService.logger.info("Fetching blocked users.")
+        logRequestDetails(request, for: endpoint)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return try handleApiResponse(data: data, response: response, endpoint: endpoint)
+    }
+
+    func blockUser(name: String, nonce: String) async throws {
+        let endpoint = "/profile/block"
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = formURLEncode(parameters: ["name": name, "_nonce": nonce])
+        APIService.logger.info("Blocking user: \(name)")
+        logRequestDetails(request, for: endpoint)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        try handleApiResponseVoid(response: response, endpoint: endpoint)
+    }
+
+    func unblockUser(name: String, nonce: String) async throws {
+        let endpoint = "/profile/unblock"
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = formURLEncode(parameters: ["name": name, "_nonce": nonce])
+        APIService.logger.info("Unblocking user: \(name)")
+        logRequestDetails(request, for: endpoint)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        try handleApiResponseVoid(response: response, endpoint: endpoint)
+    }
+
+    func fetchBlockedTags() async throws -> BlockedTagsResponse {
+        let endpoint = "/user/blockedTags"
+        let url = baseURL.appendingPathComponent(endpoint)
+        let request = URLRequest(url: url)
+        APIService.logger.info("Fetching blocked tags.")
+        logRequestDetails(request, for: endpoint)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return try handleApiResponse(data: data, response: response, endpoint: endpoint)
+    }
+
+    func blockTag(tag: String, nonce: String) async throws {
+        let endpoint = "/profile/blockTag"
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = formURLEncode(parameters: ["tag": tag, "_nonce": nonce])
+        APIService.logger.info("Blocking tag: \(tag)")
+        logRequestDetails(request, for: endpoint)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        try handleApiResponseVoid(response: response, endpoint: endpoint)
+    }
+
+    func unblockTag(tag: String, nonce: String) async throws {
+        let endpoint = "/profile/unblockTag"
+        let url = baseURL.appendingPathComponent(endpoint)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = formURLEncode(parameters: ["tag": tag, "_nonce": nonce])
+        APIService.logger.info("Unblocking tag: \(tag)")
+        logRequestDetails(request, for: endpoint)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        try handleApiResponseVoid(response: response, endpoint: endpoint)
     }
     
     func fetchCalendarEvents(startTimestamp: Int, endTimestamp: Int) async throws -> CalendarEventsResponse {

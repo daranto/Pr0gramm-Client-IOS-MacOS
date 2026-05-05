@@ -44,6 +44,11 @@ struct MainView: View {
 
     @State private var feedPopToRootTrigger = UUID()
     @State private var selectedTab: Tab = .feed
+    @State private var showTagMigrationPrompt = false
+    @State private var isMigratingTags = false
+    @State private var migrationResultMessage: String?
+    @AppStorage("blockedTagsMigrationPromptShown_v1") private var blockedTagsMigrationPromptShown = false
+    private let apiService = APIService()
     // --- MODIFIED: Bestimmen, ob Pr0Tok angezeigt werden soll ---
     private var shouldShowPr0Tok: Bool {
         // Pr0Tok anzeigen, wenn:
@@ -127,6 +132,87 @@ struct MainView: View {
             if navigationService.pendingSearchTag != nil && newValue != .search {
                 navigationService.pendingSearchTag = nil
             }
+        }
+        .task(id: "\(authService.isLoggedIn)-\(settings.excludedTags.count)-\(blockedTagsMigrationPromptShown)") {
+            evaluateTagMigrationPrompt()
+        }
+        .alert("Tags migrieren?", isPresented: $showTagMigrationPrompt) {
+            Button("Jo, migrieren") {
+                Task { await migrateLocalExcludedTagsToBlockedTags() }
+            }
+            Button("Später, du Lauch", role: .cancel) {
+                showTagMigrationPrompt = false
+            }
+            Button("Nö, weg damit", role: .destructive) {
+                settings.excludedTags = []
+                blockedTagsMigrationPromptShown = true
+                migrationResultMessage = "Lokale Tags wurden verworfen."
+            }
+        } message: {
+            Text("Du hast lokal ausgeschlossene Tags. Sollen diese in die neue serverseitige Blockliste übernommen werden?")
+        }
+        .alert("Tag-Migration", isPresented: Binding(
+            get: { migrationResultMessage != nil },
+            set: { if !$0 { migrationResultMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { migrationResultMessage = nil }
+        } message: {
+            Text(migrationResultMessage ?? "")
+        }
+    }
+
+    private func evaluateTagMigrationPrompt() {
+        guard !blockedTagsMigrationPromptShown else { return }
+        guard authService.isLoggedIn else { return }
+        guard !settings.excludedTags.isEmpty else {
+            blockedTagsMigrationPromptShown = true
+            return
+        }
+        showTagMigrationPrompt = true
+    }
+
+    @MainActor
+    private func migrateLocalExcludedTagsToBlockedTags() async {
+        guard !isMigratingTags else { return }
+        guard authService.isLoggedIn, let nonce = authService.userNonce else {
+            migrationResultMessage = "Migration nicht möglich: Bitte zuerst einloggen."
+            return
+        }
+
+        isMigratingTags = true
+        defer {
+            isMigratingTags = false
+            blockedTagsMigrationPromptShown = true
+        }
+
+        let tagsToMigrate = settings.excludedTags
+            .filter { $0.isEnabled }
+            .map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        if tagsToMigrate.isEmpty {
+            settings.excludedTags = []
+            migrationResultMessage = "Keine aktiven lokalen Tags zum Migrieren gefunden."
+            return
+        }
+
+        var failedTags: [String] = []
+        for tag in tagsToMigrate {
+            do {
+                try await apiService.blockTag(tag: tag, nonce: nonce)
+            } catch {
+                failedTags.append(tag)
+            }
+        }
+
+        if failedTags.isEmpty {
+            settings.excludedTags = []
+            migrationResultMessage = "Migration abgeschlossen. \(tagsToMigrate.count) Tag(s) wurden übernommen."
+        } else {
+            settings.excludedTags.removeAll { tag in
+                !failedTags.contains { $0.caseInsensitiveCompare(tag.name) == .orderedSame }
+            }
+            migrationResultMessage = "Teilweise migriert. Fehlgeschlagen: \(failedTags.joined(separator: ", "))."
         }
     }
 }

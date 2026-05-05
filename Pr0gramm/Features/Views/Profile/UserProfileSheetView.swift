@@ -74,6 +74,10 @@ struct UserProfileSheetView: View {
         return authService.subscribedUsernames.contains(username)
     }
 
+    private var isBlockedThisUser: Bool {
+        authService.isUserBlocked(username)
+    }
+
 
     var body: some View {
         NavigationStack {
@@ -241,34 +245,64 @@ struct UserProfileSheetView: View {
                 }
                 
                 if authService.isLoggedIn && !isCurrentUserProfile {
-                    HStack(spacing: 0) {
-                        Button {
-                            UserProfileSheetView.logger.info("Nachricht senden an \(username) getippt.")
-                            showConversationSheet = true
-                        } label: {
-                            Label("Nachricht senden", systemImage: "paperplane.fill")
-                                .font(UIConstants.bodyFont)
-                                .padding(.vertical, 8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(spacing: 10) {
+                        HStack(spacing: 10) {
+                            Button {
+                                UserProfileSheetView.logger.info("Nachricht senden an \(username) getippt.")
+                                showConversationSheet = true
+                            } label: {
+                                Label("Nachricht senden", systemImage: "paperplane.fill")
+                                    .font(UIConstants.bodyFont)
+                                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .center)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(Color.accentColor)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.accentColor.opacity(0.10))
+                            )
+                            .disabled((info.user.banned != nil && info.user.banned == 1) || isBlockedThisUser)
+
+                            Button {
+                                UserProfileSheetView.logger.info("Follow/Subscribe Aktionen für \(username) getippt.")
+                                showingFollowActions = true
+                            } label: {
+                                Label(isFollowingThisUser ? "Gefolgt" : "Folgen", systemImage: isFollowingThisUser ? "person.fill.checkmark" : "person.badge.plus")
+                                    .font(UIConstants.bodyFont)
+                                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .center)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(isFollowingThisUser ? .green : Color.accentColor)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill((isFollowingThisUser ? Color.green : Color.accentColor).opacity(0.10))
+                            )
+                            .disabled(authService.isModifyingFollowStatus[username] ?? false)
                         }
-                        .buttonStyle(.borderless)
-                        .foregroundColor(Color.accentColor)
-                        .disabled(info.user.banned != nil && info.user.banned == 1)
 
                         Button {
-                            UserProfileSheetView.logger.info("Follow/Subscribe Aktionen für \(username) getippt.")
-                            showingFollowActions = true
+                            Task {
+                                if isBlockedThisUser {
+                                    await authService.unblockUser(name: username)
+                                } else {
+                                    await authService.blockUser(name: username)
+                                }
+                                await loadProfileInfo(forceRefresh: true)
+                            }
                         } label: {
-                            Label(isFollowingThisUser ? "Gefolgt" : "Folgen", systemImage: isFollowingThisUser ? "person.fill.checkmark" : "person.badge.plus")
+                            Label(isBlockedThisUser ? "User entblocken" : "User blockieren", systemImage: isBlockedThisUser ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.xmark")
                                 .font(UIConstants.bodyFont)
-                                .padding(.vertical, 8)
-                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .center)
                         }
-                        .buttonStyle(.borderless)
-                        .foregroundColor(isFollowingThisUser ? .green : Color.accentColor)
-                        .disabled(authService.isModifyingFollowStatus[username] ?? false)
+                        .buttonStyle(.plain)
+                        .foregroundColor(isBlockedThisUser ? .green : .red)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill((isBlockedThisUser ? Color.green : Color.red).opacity(0.10))
+                        )
+                        .disabled(authService.isModifyingBlockStatus[username] ?? false)
                     }
-                    .padding(.vertical, 5)
+                    .padding(.vertical, 6)
                 }
 
             } else {
@@ -609,4 +643,3 @@ struct UserProfileSheetView: View {
     private func formatDateGerman(date: Date) -> String { germanDateFormatter.string(from: date) }
 }
 // --- END OF COMPLETE FILE ---
-

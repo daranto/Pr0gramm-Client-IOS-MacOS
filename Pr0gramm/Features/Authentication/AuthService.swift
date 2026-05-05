@@ -36,6 +36,7 @@ final class AuthService {
             if isLoggedIn {
                 startUnreadCountSyncTimer()
                 Task { await fetchFollowList() }
+                Task { await fetchBlockedUsers() }
             } else {
                 stopUnreadCountSyncTimer()
                 unreadCommentCount = 0
@@ -46,6 +47,7 @@ final class AuthService {
                 unreadInboxTotal = 0
                 followedUsers = []
                 subscribedUsernames = []
+                blockedUsers = []
             }
         }
     }
@@ -84,6 +86,9 @@ final class AuthService {
     private(set) var isLoadingFollowList: Bool = false
     private(set) var followListError: String? = nil
     private(set) var isModifyingFollowStatus: [String: Bool] = [:]
+    var blockedUsers: [BlockedUser] = []
+    private(set) var isLoadingBlockedUsers: Bool = false
+    private(set) var isModifyingBlockStatus: [String: Bool] = [:]
 
 
     private var unreadCountSyncTimer: Timer?
@@ -524,6 +529,61 @@ final class AuthService {
                 isLoadingFollowList = false
             }
         }
+    }
+
+    func fetchBlockedUsers() async {
+        guard isLoggedIn else {
+            await MainActor.run { self.blockedUsers = [] }
+            return
+        }
+        await MainActor.run { isLoadingBlockedUsers = true }
+        do {
+            let response = try await apiService.fetchBlockedUsers()
+            await MainActor.run {
+                self.blockedUsers = response.blockedUsers.sorted { $0.name.lowercased() < $1.name.lowercased() }
+                self.isLoadingBlockedUsers = false
+            }
+        } catch let error as URLError where error.code == .userAuthenticationRequired {
+            await MainActor.run {
+                self.blockedUsers = []
+                self.isLoadingBlockedUsers = false
+            }
+            await logout()
+        } catch {
+            await MainActor.run { self.isLoadingBlockedUsers = false }
+        }
+    }
+
+    func isUserBlocked(_ name: String) -> Bool {
+        blockedUsers.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    func blockUser(name: String) async {
+        guard isLoggedIn, let nonce = userNonce else { return }
+        await MainActor.run { self.isModifyingBlockStatus[name] = true }
+        do {
+            try await apiService.blockUser(name: name, nonce: nonce)
+            await fetchBlockedUsers()
+        } catch {
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                await logout()
+            }
+        }
+        await MainActor.run { self.isModifyingBlockStatus[name] = nil }
+    }
+
+    func unblockUser(name: String) async {
+        guard isLoggedIn, let nonce = userNonce else { return }
+        await MainActor.run { self.isModifyingBlockStatus[name] = true }
+        do {
+            try await apiService.unblockUser(name: name, nonce: nonce)
+            await fetchBlockedUsers()
+        } catch {
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                await logout()
+            }
+        }
+        await MainActor.run { self.isModifyingBlockStatus[name] = nil }
     }
 
     func followUser(name: String) async {
