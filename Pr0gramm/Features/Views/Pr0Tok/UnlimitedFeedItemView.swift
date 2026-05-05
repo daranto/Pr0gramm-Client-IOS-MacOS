@@ -29,7 +29,7 @@ fileprivate struct UnlimitedVotableTagView: View {
     private let tagVoteButtonFont: Font = .caption
     
     private var isTagAlreadyExcluded: Bool {
-        settings.excludedTags.contains { $0.name.lowercased() == tag.tag.lowercased() }
+        authService.isTagBlocked(tag.tag)
     }
 
     var body: some View {
@@ -100,21 +100,17 @@ fileprivate struct UnlimitedVotableTagView: View {
     
     private func excludeTag() {
         guard !isTagAlreadyExcluded else { return }
-        
-        withAnimation {
-            let newTag = ExcludedTag(name: tag.tag, isEnabled: true)
-            settings.excludedTags.append(newTag)
+        Task {
+            await authService.blockTag(tag.tag)
         }
-        
-        Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UnlimitedFeedItemView").info("Tag '\(tag.tag)' wurde zur Ausschlussliste hinzugefügt.")
+        Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UnlimitedFeedItemView").info("Tag '\(tag.tag)' wurde per API blockiert.")
     }
     
     private func removeTagFromExcludedList() {
-        withAnimation {
-            settings.excludedTags.removeAll { $0.name.lowercased() == tag.tag.lowercased() }
+        Task {
+            await authService.unblockTag(tag.tag)
         }
-        
-        Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UnlimitedFeedItemView").info("Tag '\(tag.tag)' wurde von der Ausschlussliste entfernt.")
+        Logger(subsystem: Bundle.main.bundleIdentifier!, category: "UnlimitedFeedItemView").info("Tag '\(tag.tag)' wurde per API entblockt.")
     }
 }
 
@@ -551,4 +547,3 @@ struct UnlimitedFeedItemView: View {
         }
     }
 }
-

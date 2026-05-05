@@ -37,6 +37,7 @@ final class AuthService {
                 startUnreadCountSyncTimer()
                 Task { await fetchFollowList() }
                 Task { await fetchBlockedUsers() }
+                Task { await fetchBlockedTags() }
             } else {
                 stopUnreadCountSyncTimer()
                 unreadCommentCount = 0
@@ -48,6 +49,7 @@ final class AuthService {
                 followedUsers = []
                 subscribedUsernames = []
                 blockedUsers = []
+                blockedTags = []
             }
         }
     }
@@ -89,6 +91,9 @@ final class AuthService {
     var blockedUsers: [BlockedUser] = []
     private(set) var isLoadingBlockedUsers: Bool = false
     private(set) var isModifyingBlockStatus: [String: Bool] = [:]
+    var blockedTags: [BlockedTag] = []
+    private(set) var isLoadingBlockedTags: Bool = false
+    private(set) var isModifyingBlockedTagStatus: [String: Bool] = [:]
 
 
     private var unreadCountSyncTimer: Timer?
@@ -584,6 +589,63 @@ final class AuthService {
             }
         }
         await MainActor.run { self.isModifyingBlockStatus[name] = nil }
+    }
+
+    func fetchBlockedTags() async {
+        guard isLoggedIn else {
+            await MainActor.run { self.blockedTags = [] }
+            return
+        }
+        await MainActor.run { isLoadingBlockedTags = true }
+        do {
+            let response = try await apiService.fetchBlockedTags()
+            await MainActor.run {
+                self.blockedTags = response.blockedTags.sorted { $0.tag.lowercased() < $1.tag.lowercased() }
+                self.isLoadingBlockedTags = false
+            }
+        } catch let error as URLError where error.code == .userAuthenticationRequired {
+            await MainActor.run {
+                self.blockedTags = []
+                self.isLoadingBlockedTags = false
+            }
+            await logout()
+        } catch {
+            await MainActor.run { self.isLoadingBlockedTags = false }
+        }
+    }
+
+    func isTagBlocked(_ tag: String) -> Bool {
+        blockedTags.contains { $0.tag.caseInsensitiveCompare(tag) == .orderedSame }
+    }
+
+    func blockTag(_ tag: String) async {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isLoggedIn, let nonce = userNonce, !trimmed.isEmpty else { return }
+        await MainActor.run { self.isModifyingBlockedTagStatus[trimmed] = true }
+        do {
+            try await apiService.blockTag(tag: trimmed, nonce: nonce)
+            await fetchBlockedTags()
+        } catch {
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                await logout()
+            }
+        }
+        await MainActor.run { self.isModifyingBlockedTagStatus[trimmed] = nil }
+    }
+
+    func unblockTag(_ tag: String) async {
+        let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isLoggedIn, let nonce = userNonce, !trimmed.isEmpty else { return }
+        await MainActor.run { self.isModifyingBlockedTagStatus[trimmed] = true }
+        do {
+            try await apiService.unblockTag(tag: trimmed, nonce: nonce)
+            await fetchBlockedTags()
+        } catch {
+            if let urlError = error as? URLError, urlError.code == .userAuthenticationRequired {
+                await logout()
+            }
+        }
+        await MainActor.run { self.isModifyingBlockedTagStatus[trimmed] = nil }
     }
 
     func followUser(name: String) async {

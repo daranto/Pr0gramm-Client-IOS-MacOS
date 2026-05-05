@@ -610,7 +610,7 @@ struct UnlimitedStyleFeedView: View {
                     .scrollTargetLayout()
                 }
                 .frame(height: geometry.size.height)
-                .scrollTargetBehavior(.viewAligned)
+                .scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
                 .scrollIndicators(.hidden)
                 .background(KeyCommandView(handler: keyboardActionHandlerInstance))
                 .scrollPosition(id: $scrolledItemID)

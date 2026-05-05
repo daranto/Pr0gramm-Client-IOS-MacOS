@@ -115,14 +115,13 @@ fileprivate struct SheetVotableTagView: View {
     let onTapTag: () -> Void
 
     @Environment(AuthService.self) var authService
-    @Environment(AppSettings.self) var settings
     
     @State private var showExcludeConfirmation = false
     
     private let tagVoteButtonFont: Font = .callout // Etwas größer für bessere Tappability im Sheet
     
     private var isTagAlreadyExcluded: Bool {
-        settings.excludedTags.contains { $0.name.lowercased() == tag.tag.lowercased() }
+        authService.isTagBlocked(tag.tag)
     }
 
     var body: some View {
@@ -193,21 +192,17 @@ fileprivate struct SheetVotableTagView: View {
     
     private func excludeTag() {
         guard !isTagAlreadyExcluded else { return }
-        
-        withAnimation {
-            let newTag = ExcludedTag(name: tag.tag, isEnabled: true)
-            settings.excludedTags.append(newTag)
+        Task {
+            await authService.blockTag(tag.tag)
         }
-        
-        Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AllTagsSheetView").info("Tag '\(tag.tag)' wurde zur Ausschlussliste hinzugefügt.")
+        Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AllTagsSheetView").info("Tag '\(tag.tag)' wurde per API blockiert.")
     }
     
     private func removeTagFromExcludedList() {
-        withAnimation {
-            settings.excludedTags.removeAll { $0.name.lowercased() == tag.tag.lowercased() }
+        Task {
+            await authService.unblockTag(tag.tag)
         }
-        
-        Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AllTagsSheetView").info("Tag '\(tag.tag)' wurde von der Ausschlussliste entfernt.")
+        Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AllTagsSheetView").info("Tag '\(tag.tag)' wurde per API entblockt.")
     }
 }
 

@@ -539,7 +539,6 @@ struct DetailViewContent: View {
         let onTapTag: () -> Void
 
         @Environment(AuthService.self) var authService
-        @Environment(AppSettings.self) var settings
         
         @State private var showExcludeConfirmation = false
 
@@ -548,7 +547,7 @@ struct DetailViewContent: View {
         private let tagVoteButtonFont: Font = .caption
         
         private var isTagAlreadyExcluded: Bool {
-            settings.excludedTags.contains { $0.name.lowercased() == tag.tag.lowercased() }
+            authService.isTagBlocked(tag.tag)
         }
 
         var body: some View {
@@ -619,21 +618,17 @@ struct DetailViewContent: View {
         
         private func excludeTag() {
             guard !isTagAlreadyExcluded else { return }
-            
-            withAnimation {
-                let newTag = ExcludedTag(name: tag.tag, isEnabled: true)
-                settings.excludedTags.append(newTag)
+            Task {
+                await authService.blockTag(tag.tag)
+                DetailViewContent.logger.info("Tag '\(tag.tag)' wurde per API blockiert.")
             }
-            
-            DetailViewContent.logger.info("Tag '\(tag.tag)' wurde zur Ausschlussliste hinzugefügt.")
         }
         
         private func removeTagFromExcludedList() {
-            withAnimation {
-                settings.excludedTags.removeAll { $0.name.lowercased() == tag.tag.lowercased() }
+            Task {
+                await authService.unblockTag(tag.tag)
+                DetailViewContent.logger.info("Tag '\(tag.tag)' wurde per API entblockt.")
             }
-            
-            DetailViewContent.logger.info("Tag '\(tag.tag)' wurde von der Ausschlussliste entfernt.")
         }
     }
 
@@ -1385,4 +1380,3 @@ class PlayerMuteObserver: ObservableObject {
 }
 
 // --- END OF COMPLETE FILE ---
-
