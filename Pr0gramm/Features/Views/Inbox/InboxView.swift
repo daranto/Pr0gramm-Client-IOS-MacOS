@@ -90,6 +90,7 @@ struct InboxView: View {
     @State private var navigationTargetId: Int? = nil
 
     @State private var previewLinkTargetFromMessage: PreviewLinkTarget? = nil
+    @State private var selectedSystemNotification: InboxMessage? = nil
 
     @State private var playerManager = VideoPlayerManager()
 
@@ -181,6 +182,18 @@ struct InboxView: View {
                 }
                 .environment(settings)
                 .environment(authService)
+            }
+            .sheet(item: $selectedSystemNotification) { notification in
+                NavigationStack {
+                    SystemNotificationDetailView(message: notification)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Fertig") {
+                                    selectedSystemNotification = nil
+                                }
+                            }
+                        }
+                }
             }
             .overlay {
                 if isLoadingNavigationTarget {
@@ -496,8 +509,9 @@ struct InboxView: View {
             } else {
                  InboxView.logger.warning("Follow message (type: \(message.type ?? "")) tapped but no itemId and no senderName for profile navigation.")
             }
-        } else if message.type == "notification" {
-             InboxView.logger.debug("Tapped on a 'notification' type message. No specific navigation action defined.")
+        } else if message.type?.lowercased() == "notification" {
+            InboxView.logger.debug("Tapped on a 'notification' type message. Presenting full system notification.")
+            selectedSystemNotification = message
         } else {
             InboxView.logger.warning("Tapped on message with unhandled type '\(message.type ?? "nil")' or missing itemId. ItemId: \(message.itemId ?? -1)")
         }
@@ -944,6 +958,76 @@ struct InboxMessageRow: View {
             }
         }
         .padding(.vertical, 5)
+    }
+}
+
+struct SystemNotificationDetailView: View {
+    let message: InboxMessage
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private var formattedDate: String {
+        let date = Date(timeIntervalSince1970: TimeInterval(message.created))
+        return Self.dateFormatter.string(from: date)
+    }
+
+    private var messageText: String {
+        let trimmedMessage = message.message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmedMessage.isEmpty ? "Keine Nachricht vorhanden." : trimmedMessage
+    }
+
+    private var attributedMessageContent: AttributedString {
+        var attributedString = AttributedString(messageText)
+        let baseUIFont = UIFont.uiFont(from: UIConstants.bodyFont)
+        attributedString.font = baseUIFont
+
+        do {
+            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+            let matches = detector.matches(in: messageText, options: [], range: NSRange(location: 0, length: messageText.utf16.count))
+            for match in matches {
+                guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
+                attributedString[range].link = url
+                attributedString[range].foregroundColor = .accentColor
+                attributedString[range].font = baseUIFont
+            }
+        } catch {
+            InboxView.logger.error("Error creating NSDataDetector in SystemNotificationDetailView: \(error.localizedDescription)")
+        }
+
+        return attributedString
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: "bell.circle.fill")
+                        .font(.system(size: 42))
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Systemnachricht")
+                            .font(.headline)
+                        Text(formattedDate)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text(attributedMessageContent)
+                    .font(.body)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding()
+        }
+        .navigationTitle("System")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

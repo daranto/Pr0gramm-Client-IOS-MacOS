@@ -51,6 +51,8 @@ struct Pr0grammApp: App {
     var body: some Scene {
         WindowGroup {
             AppRootView()
+                .tint(appSettings.accentColorChoice.swiftUIColor)
+                .accentColor(appSettings.accentColorChoice.swiftUIColor)
                 .environment(appSettings)
                 .environment(authService)
                 .environment(navigationService)
@@ -67,6 +69,7 @@ struct Pr0grammApp: App {
                     )
                     .environment(appSettings)
                     .environment(authService)
+                    .environment(navigationService)
                 }
         }
         .onChange(of: scenePhase) { oldPhase, newPhase in
@@ -172,6 +175,7 @@ struct AppRootView: View {
     }
 }
 
+@MainActor
 struct DeepLinkItemLoaderView: View {
     let itemID: Int
     let targetCommentID: Int?
@@ -179,6 +183,7 @@ struct DeepLinkItemLoaderView: View {
 
     @Environment(AppSettings.self) var settings
     @Environment(AuthService.self) var authService
+    @Environment(NavigationService.self) var navigationService
     @State private var playerManager = VideoPlayerManager()
     
     @State private var fetchedItem: Item? = nil
@@ -236,6 +241,7 @@ struct DeepLinkItemLoaderView: View {
                     )
                     .environment(settings)
                     .environment(authService)
+                    .environment(navigationService)
                     .navigationTitle("Post \(item.id)")
                     #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)
@@ -248,6 +254,8 @@ struct DeepLinkItemLoaderView: View {
                     }
             }
         }
+        .tint(settings.accentColorChoice.swiftUIColor)
+        .accentColor(settings.accentColorChoice.swiftUIColor)
         .task {
             playerManager.configure(settings: settings)
             await loadItem()
@@ -272,7 +280,7 @@ struct DeepLinkItemLoaderView: View {
                 DeepLinkItemLoaderView.logger.info("Item \(itemID) found with current filters.")
                 fetchedItem = item
                 isFilterMismatch = false
-            } else {
+            } else if authService.isLoggedIn {
                 DeepLinkItemLoaderView.logger.warning("Item \(itemID) not found with flags \(flagsToFetchWith). Retrying with flags 31.")
                 let itemWithAllFlags = try await apiService.fetchItem(id: itemID, flags: 31)
 
@@ -284,6 +292,9 @@ struct DeepLinkItemLoaderView: View {
                     DeepLinkItemLoaderView.logger.warning("Item \(itemID) could not be fetched for deep link, even with broad flags.")
                     errorMessage = "Post konnte nicht gefunden werden."
                 }
+            } else {
+                DeepLinkItemLoaderView.logger.warning("Item \(itemID) not found with public flags and user is not logged in. Skipping broad flags retry.")
+                errorMessage = "Post konnte nicht gefunden werden oder ist nur angemeldet sichtbar."
             }
         } catch {
             DeepLinkItemLoaderView.logger.error("Error loading item ID \(itemID) for deep link: \(error.localizedDescription)")
