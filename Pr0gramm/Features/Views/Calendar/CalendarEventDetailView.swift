@@ -24,7 +24,7 @@ struct CalendarEventDetailView: View {
             if isLoading && fullEvent == nil {
                 ProgressView("Lade Details...")
             } else if let error = errorMessage {
-                Text("Fehler: \(error)").foregroundColor(.red)
+                Text(error).foregroundColor(.red)
             } else {
                 Section {
                     Text(displayEvent.description.htmlToAttributedString())

@@ -42,10 +42,6 @@ struct UserFavoritedCommentsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading)) {
-            Button("OK") { errorMessage = nil; isLoadingNavigationTarget = false; navigationTargetItemId = nil }
-        } message: { Text(errorMessage ?? "Unbekannter Fehler") }
-        
         .onChange(of: settings.apiFlags) { _, _ in Task { await refreshComments() } }
         .navigationDestination(item: $itemNavigationValue) { navValue in
              PagedDetailViewWrapperForItem(
@@ -111,6 +107,10 @@ struct UserFavoritedCommentsView: View {
 
     private var listContent: some View {
         List {
+            if let error = errorMessage {
+                inlineErrorSection(error)
+            }
+
             ForEach(comments) { comment in
                 Button {
                     Task { await prepareAndNavigateToItem(comment.itemId, targetCommentID: comment.id) }
@@ -153,6 +153,33 @@ struct UserFavoritedCommentsView: View {
             }
         })
         // --- END MODIFICATION ---
+    }
+
+    @ViewBuilder
+    private func inlineErrorSection(_ message: String) -> some View {
+        Section {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button {
+                    errorMessage = nil
+                    isLoadingNavigationTarget = false
+                    navigationTargetItemId = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Fehler ausblenden")
+            }
+            .padding(.vertical, 4)
+        }
+        .listRowSeparator(.hidden)
     }
 
     // --- MODIFIED: parsePr0grammLink gibt jetzt (Int, Int?)? zurück ---
@@ -284,7 +311,7 @@ struct UserFavoritedCommentsView: View {
             await authService.logout()
         } catch {
             UserFavoritedCommentsView.logger.error("API fetch failed: \(error.localizedDescription)")
-            self.errorMessage = "Fehler: \(error.localizedDescription)"
+            self.errorMessage = error.localizedDescription
             self.comments = []
             self.canLoadMore = false
         }

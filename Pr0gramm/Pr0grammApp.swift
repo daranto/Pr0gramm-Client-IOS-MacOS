@@ -28,6 +28,7 @@ struct Pr0grammApp: App {
     @State private var navigationService = NavigationService()
     @State private var scenePhaseObserver: ScenePhaseObserver
     @State private var appOrientationManager = AppOrientationManager()
+    @State private var networkMonitor = NetworkMonitor()
 
 
     @State private var activeDeepLinkData: DeepLinkData? = nil
@@ -58,6 +59,7 @@ struct Pr0grammApp: App {
                 .environment(navigationService)
                 .environment(scenePhaseObserver)
                 .environment(appOrientationManager)
+                .environment(networkMonitor)
                 .onOpenURL { url in
                     Pr0grammApp.logger.info("App opened with URL: \(url.absoluteString)")
                     handleIncomingURL(url)
@@ -160,18 +162,57 @@ struct AppRootView: View {
     @Environment(NavigationService.self) var navigationService
     @Environment(ScenePhaseObserver.self) var scenePhaseObserver
     @Environment(AppOrientationManager.self) var appOrientationManager
+    @Environment(NetworkMonitor.self) var networkMonitor
     @Environment(\.scenePhase) var scenePhase
 
     var body: some View {
-        MainView()
-            .accentColor(appSettings.accentColorChoice.swiftUIColor)
-            .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
-            .task {
-                await authService.checkInitialLoginStatus()
+        ZStack(alignment: .top) {
+            MainView()
+
+            if !networkMonitor.isConnected {
+                OfflineConnectionBanner()
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(10)
             }
-            .onChange(of: scenePhase, initial: true) { oldPhase, newPhase in
-                scenePhaseObserver.handleScenePhaseChange(newPhase: newPhase, oldPhase: oldPhase)
-            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: networkMonitor.isConnected)
+        .accentColor(appSettings.accentColorChoice.swiftUIColor)
+        .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
+        .task {
+            networkMonitor.start()
+            await authService.checkInitialLoginStatus()
+        }
+        .onChange(of: scenePhase, initial: true) { oldPhase, newPhase in
+            scenePhaseObserver.handleScenePhaseChange(newPhase: newPhase, oldPhase: oldPhase)
+        }
+    }
+}
+
+struct OfflineConnectionBanner: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "wifi.slash")
+                .font(.headline)
+                .foregroundStyle(.orange)
+
+            Text("Keine Internetverbindung. Einige Funktionen stehen derzeit nur eingeschränkt zur Verfügung.")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .accessibilityElement(children: .combine)
     }
 }
 

@@ -506,7 +506,7 @@ struct UnlimitedStyleFeedView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = errorMessage, items.count <= 1 && (items.first?.id == dummyStartItemID || items.isEmpty) {
             VStack {
-                Text("Fehler: \(error)").foregroundColor(.red)
+                Text(error).foregroundColor(.red)
                 Button("Erneut versuchen") { Task { await refreshItems() } }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1192,7 +1192,7 @@ struct UnlimitedStyleFeedView: View {
                     .padding(.horizontal)
                 
                 if let error = addTagErrorForSheet {
-                    Text("Fehler: \(error)")
+                    Text(error)
                         .font(.caption)
                         .foregroundColor(.red)
                         .padding(.horizontal)

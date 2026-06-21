@@ -473,7 +473,7 @@ struct SearchView: View {
                             .frame(maxWidth: .infinity, minHeight: 300)
                     } else if let error = errorMessage, items.isEmpty {
                         VStack {
-                            Text("Fehler: \(error)").foregroundColor(.red)
+                            Text(error).foregroundColor(.red)
                             Button("Erneut versuchen") { Task { await performSearchLogic(isInitialSearch: true) } }
                         }
                         .frame(maxWidth: .infinity, minHeight: 300)
@@ -733,7 +733,7 @@ struct SearchView: View {
         catch is CancellationError { SearchView.logger.info("API call cancelled.") }
         catch {
             SearchView.logger.error("API fetch failed: \(error.localizedDescription)")
-            if self.items.isEmpty { self.errorMessage = "Fehler: \(error.localizedDescription)" }
+            if self.items.isEmpty { self.errorMessage = error.localizedDescription }
             self.canLoadMore = false
         }
     }
@@ -873,7 +873,7 @@ struct SearchView: View {
         catch is CancellationError { SearchView.logger.info("Load more cancelled.") }
         catch {
             SearchView.logger.error("API fetch failed: \(error.localizedDescription)")
-            if items.isEmpty { errorMessage = "Fehler: \(error.localizedDescription)" }
+            if items.isEmpty { errorMessage = error.localizedDescription }
             self.canLoadMore = false
         }
     }

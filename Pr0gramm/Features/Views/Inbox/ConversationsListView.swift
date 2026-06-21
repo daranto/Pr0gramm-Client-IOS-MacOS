@@ -51,6 +51,10 @@ struct ConversationsListView: View {
     private var listContent: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
+                if let error = errorMessage {
+                    inlineErrorBanner(error)
+                }
+
                 ForEach(conversations) { conversation in
                     Button {
                         ConversationsListView.logger.info("Conversation with '\(conversation.name)' selected.")
@@ -70,6 +74,29 @@ struct ConversationsListView: View {
         .refreshable {
             await onRefresh()
         }
+    }
+
+    private func inlineErrorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button {
+                errorMessage = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Fehler ausblenden")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 

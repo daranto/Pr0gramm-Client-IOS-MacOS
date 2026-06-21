@@ -267,7 +267,7 @@ struct TagSearchView: View {
             TagSearchView.logger.error("Search for tag '\(tagToSearch)' failed due to rate limit: \(error.localizedDescription)")
         }
         catch {
-            errorMessage = "Fehler: \(error.localizedDescription)"; if isInitialSearch { items = [] }; canLoadMore = false
+            errorMessage = error.localizedDescription; if isInitialSearch { items = [] }; canLoadMore = false
             TagSearchView.logger.error("Search for tag '\(tagToSearch)' failed: \(error.localizedDescription)")
         }
     }

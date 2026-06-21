@@ -72,9 +72,6 @@ struct ConversationDetailView: View {
                 conversationHeader
             }
         }
-        .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoading && !isSendingMessage)) {
-            Button("OK") { clearErrors() }
-        } message: { Text(errorMessage ?? "Unbekannter Fehler") }
         .task {
             await refreshMessages()
         }
@@ -222,6 +219,10 @@ struct ConversationDetailView: View {
                                 .padding(.vertical, 10)
                                 .background(.thinMaterial, in: Capsule())
                                 .padding(.top, 8)
+                        }
+
+                        if let error = errorMessage {
+                            inlineErrorBanner(error)
                         }
 
                         if messages.isEmpty && !isLoading && !isLoadingMore && errorMessage == nil {
@@ -418,6 +419,29 @@ struct ConversationDetailView: View {
         .background(inputBackground)
     }
 
+    private func inlineErrorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button {
+                clearErrors()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Fehler ausblenden")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
     private func clearErrors() {
         errorMessage = nil
         sendingError = nil
@@ -452,7 +476,7 @@ struct ConversationDetailView: View {
             handleAuthError(error: error, context: "refreshing messages")
         } catch {
             ConversationDetailView.logger.error("Failed to refresh messages with \(partnerUsername): \(error.localizedDescription)")
-            self.errorMessage = "Fehler: \(error.localizedDescription)"
+            self.errorMessage = error.localizedDescription
         }
     }
 

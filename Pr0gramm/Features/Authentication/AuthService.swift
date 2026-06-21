@@ -98,6 +98,7 @@ final class AuthService {
 
     private var unreadCountSyncTimer: Timer?
     private let unreadCountSyncInterval: TimeInterval = 300
+    private var lastProfileInfoLoadError: Error?
 
 
     nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AuthService")
@@ -243,6 +244,11 @@ final class AuthService {
             unreadCountSyncTimer?.invalidate()
             unreadCountSyncTimer = nil
         }
+    }
+
+    private func isAuthenticationRequired(_ error: Error?) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        return urlError.code == .userAuthenticationRequired
     }
 
 
@@ -435,11 +441,15 @@ final class AuthService {
              nonceAvailable = (self.userNonce != nil)
             
             if nonceAvailable {
-                await MainActor.run { self.isLoggedIn = true }
+                let restoredUser = UserInfo(id: 0, name: username, registered: 0, score: 0, mark: 0, badges: nil, collections: nil)
+                await MainActor.run {
+                    self.currentUser = restoredUser
+                    self.isLoggedIn = true
+                }
             }
 
 
-             profileAndCollectionsLoaded = await loadProfileInfoAndCollections(username: username, setLoadingState: false)
+             profileAndCollectionsLoaded = await loadProfileInfoAndCollections(username: username, setLoadingState: false, clearExistingProfile: false)
              if profileAndCollectionsLoaded && nonceAvailable {
                  finalIsLoggedIn = true
 
@@ -464,7 +474,13 @@ final class AuthService {
                      AuthService.logger.info("Skipping initial favorites load as no collection ID is selected during initial check.")
                  }
                  
-                 finalIsLoggedIn = profileAndCollectionsLoaded && favoritesLoaded && nonceAvailable
+                 if !favoritesLoaded {
+                     AuthService.logger.warning("Initial favorites could not be loaded during session restore. Keeping login because profile and nonce are valid.")
+                 }
+                 finalIsLoggedIn = profileAndCollectionsLoaded && nonceAvailable
+             } else if nonceAvailable, !isAuthenticationRequired(lastProfileInfoLoadError) {
+                 finalIsLoggedIn = true
+                 AuthService.logger.warning("Initial login check could not validate session online, but restored local cookie and nonce. Keeping user logged in until a real authentication failure occurs.")
              } else {
                  finalIsLoggedIn = false
              }
@@ -1174,10 +1190,17 @@ final class AuthService {
     }
 
     @discardableResult
-    private func loadProfileInfoAndCollections(username: String, setLoadingState: Bool = true) async -> Bool {
+    private func loadProfileInfoAndCollections(username: String, setLoadingState: Bool = true, clearExistingProfile: Bool = true) async -> Bool {
         AuthService.logger.debug("Attempting to load profile info and collections for \(username)...")
+        lastProfileInfoLoadError = nil
         if setLoadingState { await MainActor.run { isLoading = true } }
-        await MainActor.run { loginError = nil; self.currentUser = nil; self.userCollections = [] }
+        await MainActor.run {
+            loginError = nil
+            if clearExistingProfile {
+                self.currentUser = nil
+                self.userCollections = []
+            }
+        }
 
         do {
             let profileInfoResponse = try await apiService.getProfileInfo(username: username, flags: 31) // Flags 31 für alle Infos
@@ -1201,8 +1224,15 @@ final class AuthService {
             if setLoadingState { await MainActor.run { isLoading = false } }
             return true
         } catch {
+            lastProfileInfoLoadError = error
             AuthService.logger.warning("Failed to load or create profile info/collections for \(username): \(error.localizedDescription).")
-            await MainActor.run { self.currentUser = nil; self.userCollections = []; if setLoadingState { isLoading = false } }
+            await MainActor.run {
+                if clearExistingProfile || isAuthenticationRequired(error) {
+                    self.currentUser = nil
+                    self.userCollections = []
+                }
+                if setLoadingState { isLoading = false }
+            }
             return false
         }
     }

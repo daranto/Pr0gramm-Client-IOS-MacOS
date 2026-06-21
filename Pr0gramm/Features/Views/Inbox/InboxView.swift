@@ -246,9 +246,6 @@ struct InboxView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-            .alert("Fehler", isPresented: .constant(alertErrorMessage != nil && !isLoading && !isLoadingConversations && !isCancellationError(alertErrorMessage))) {
-                Button("OK") { clearErrors() }
-            } message: { Text(alertErrorMessage ?? "Unbekannter Fehler") }
             .task {
                 playerManager.configure(settings: settings)
             }
@@ -348,13 +345,6 @@ struct InboxView: View {
         }
     }
     
-    private var alertErrorMessage: String? {
-        if selectedMessageType == .privateMessages {
-            return conversationsError
-        }
-        return errorMessage
-    }
-
     private func clearErrors() {
         errorMessage = nil
         conversationsError = nil
@@ -411,6 +401,10 @@ struct InboxView: View {
              .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List {
+                if let error = errorMessage, !isCancellationError(error) {
+                    inlineErrorSection(error)
+                }
+
                 if messages.isEmpty && !isLoading && !isLoadingMore && errorMessage == nil {
                      Section {
                          Text(emptyListMessage())
@@ -473,6 +467,31 @@ struct InboxView: View {
                 }
             })
         }
+    }
+
+    @ViewBuilder
+    private func inlineErrorSection(_ message: String) -> some View {
+        Section {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button {
+                    clearErrors()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Fehler ausblenden")
+            }
+            .padding(.vertical, 4)
+        }
+        .listRowSeparator(.hidden)
     }
         
     private func emptyListMessage() -> String {
@@ -629,7 +648,7 @@ struct InboxView: View {
             } catch {
                 InboxView.logger.error("Inbox API fetch failed for \(type.baseDisplayName): \(error.localizedDescription)")
                 await MainActor.run {
-                    self.errorMessage = "Fehler: \(error.localizedDescription)"; self.messages = []; self.canLoadMore = false
+                    self.errorMessage = error.localizedDescription; self.messages = []; self.canLoadMore = false
                 }
             }
         }
@@ -751,7 +770,7 @@ struct InboxView: View {
             } catch {
                 InboxView.logger.error("Conversations API fetch failed: \(error.localizedDescription)")
                 await MainActor.run {
-                    self.conversationsError = "Fehler: \(error.localizedDescription)"
+                    self.conversationsError = error.localizedDescription
                     self.conversations = []
                 }
             }

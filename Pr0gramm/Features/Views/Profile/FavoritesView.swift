@@ -294,7 +294,7 @@ struct FavoritesView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = errorMessage, items.isEmpty {
                 VStack {
-                    Text("Fehler: \(error)")
+                    Text(error)
                         .foregroundColor(.red)
                         .multilineTextAlignment(.center)
                     Button("Erneut versuchen") { 
@@ -539,7 +539,7 @@ struct FavoritesView: View {
         catch {
             FavoritesView.logger.error("API fetch failed: \(error.localizedDescription)")
             if self.items.isEmpty { 
-                self.errorMessage = "Fehler: \(error.localizedDescription)" 
+                self.errorMessage = error.localizedDescription 
             }
             self.canLoadMore = false
         }
@@ -613,7 +613,7 @@ struct FavoritesView: View {
         catch {
             FavoritesView.logger.error("API fetch failed: \(error.localizedDescription)")
             if items.isEmpty { 
-                errorMessage = "Fehler: \(error.localizedDescription)" 
+                errorMessage = error.localizedDescription 
             }
             self.canLoadMore = false
         }

@@ -29,7 +29,7 @@ struct CommentInputView: View {
 
                 // Error message display
                 if let error = submissionError {
-                    Text("Fehler: \(error)")
+                    Text(error)
                         .font(.footnote)
                         .foregroundColor(.red)
                         .padding(.horizontal)

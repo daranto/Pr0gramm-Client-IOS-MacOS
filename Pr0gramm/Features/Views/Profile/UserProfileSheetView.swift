@@ -227,7 +227,7 @@ struct UserProfileSheetView: View {
             if isLoadingProfileInfo && profileInfo == nil {
                 HStack { Spacer(); ProgressView(); Text("Lade Profil...").font(.footnote); Spacer() }
             } else if let error = profileInfoError {
-                Text("Fehler: \(error)").foregroundColor(.red)
+                Text(error).foregroundColor(.red)
             } else if let info = profileInfo {
                 userInfoRow(label: "Rang", valueView: {
                     HStack { UserMarkView(markValue: info.user.mark) }
@@ -388,7 +388,7 @@ struct UserProfileSheetView: View {
             if isLoadingUploads && userUploads.isEmpty {
                 HStack { Spacer(); ProgressView(); Text("Lade Uploads...").font(.footnote); Spacer() }
             } else if let error = uploadsError {
-                Text("Fehler: \(error)").foregroundColor(.red)
+                Text(error).foregroundColor(.red)
             } else if userUploads.isEmpty && profileInfo?.uploadCount ?? 0 > 0 {
                  Text("\(username) hat keine Uploads, die deinen aktuellen Filtern entsprechen.")
                     .foregroundColor(.secondary)
@@ -460,7 +460,7 @@ struct UserProfileSheetView: View {
             if isLoadingComments && userComments.isEmpty {
                 HStack { Spacer(); ProgressView(); Text("Lade Kommentare...").font(.footnote); Spacer() }
             } else if let error = commentsError {
-                Text("Fehler: \(error)").foregroundColor(.red)
+                Text(error).foregroundColor(.red)
             } else if userComments.isEmpty && profileInfo?.commentCount ?? 0 > 0 {
                 Text("\(username) hat keine Kommentare, die deinen aktuellen Filtern entsprechen.")
                     .foregroundColor(.secondary)
