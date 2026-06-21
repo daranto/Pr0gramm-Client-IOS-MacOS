@@ -362,7 +362,7 @@ struct UnlimitedFeedItemView: View {
                     .scaleEffect(0.7)
                     .background(Color.clear)
                     
-            case .error(let msg):
+            case .error:
                 VStack(alignment: .leading) {
                     Text("Tags nicht geladen.")
                         .font(.caption)

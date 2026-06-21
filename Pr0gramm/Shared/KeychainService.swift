@@ -154,10 +154,8 @@ class KeychainService {
         } else {
             Self.logger.error("Failed to save data to keychain for key '\(key)' (Error: \(addStatus))")
             // --- NEW: Log detailed error for kSecAttrAccessible ---
-            if let osStatusError = addStatus as? OSStatus {
-                 let errorDescription = SecCopyErrorMessageString(osStatusError, nil) as String? ?? "Unknown OSStatus error"
-                 Self.logger.error("Detailed OSStatus error for keychain save failure: \(errorDescription) (Code: \(osStatusError))")
-            }
+            let errorDescription = SecCopyErrorMessageString(addStatus, nil) as String? ?? "Unknown OSStatus error"
+            Self.logger.error("Detailed OSStatus error for keychain save failure: \(errorDescription) (Code: \(addStatus))")
             // --- END NEW ---
             return false
         }
@@ -191,10 +189,8 @@ class KeychainService {
         } else {
             Self.logger.error("Failed to load data from keychain for key '\(key)' (Error: \(status))")
              // --- NEW: Log detailed error for kSecAttrAccessible ---
-            if let osStatusError = status as? OSStatus {
-                 let errorDescription = SecCopyErrorMessageString(osStatusError, nil) as String? ?? "Unknown OSStatus error"
-                 Self.logger.error("Detailed OSStatus error for keychain load failure: \(errorDescription) (Code: \(osStatusError))")
-            }
+            let errorDescription = SecCopyErrorMessageString(status, nil) as String? ?? "Unknown OSStatus error"
+            Self.logger.error("Detailed OSStatus error for keychain load failure: \(errorDescription) (Code: \(status))")
             // --- END NEW ---
             return nil
         }
@@ -221,10 +217,8 @@ class KeychainService {
         } else {
             Self.logger.error("Failed to delete data from keychain for key '\(key)' (Error: \(status))")
              // --- NEW: Log detailed error for kSecAttrAccessible ---
-            if let osStatusError = status as? OSStatus {
-                 let errorDescription = SecCopyErrorMessageString(osStatusError, nil) as String? ?? "Unknown OSStatus error"
-                 Self.logger.error("Detailed OSStatus error for keychain delete failure: \(errorDescription) (Code: \(osStatusError))")
-            }
+            let errorDescription = SecCopyErrorMessageString(status, nil) as String? ?? "Unknown OSStatus error"
+            Self.logger.error("Detailed OSStatus error for keychain delete failure: \(errorDescription) (Code: \(status))")
             // --- END NEW ---
             return false
         }

@@ -9,7 +9,7 @@ import os
 
 @MainActor
 class BackgroundNotificationManager {
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "BackgroundNotificationManager")
+    private nonisolated static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "BackgroundNotificationManager")
     static let shared = BackgroundNotificationManager()
 
     let taskIdentifier = "com.aetherium.Pr0gramm.fetchNewMessages"

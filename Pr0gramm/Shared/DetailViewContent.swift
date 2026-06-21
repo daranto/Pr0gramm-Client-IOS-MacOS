@@ -51,6 +51,11 @@ struct ShareableItemWrapper: Identifiable {
     }
 }
 
+struct SheetTagSearchTarget: Identifiable, Equatable {
+    let value: String
+    var id: String { value }
+}
+
 struct ShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
     let applicationActivities: [UIActivity]? = nil
@@ -134,7 +139,7 @@ struct DetailViewContent: View {
     @State private var addTagError: String? = nil
     @State private var isAddingTags: Bool = false
 
-    @State private var tagForSheetSearch: String? = nil
+    @State private var tagForSheetSearch: SheetTagSearchTarget? = nil
     @State private var wasPlayingBeforeAnySheet: Bool = false
     
     // Feedback States
@@ -463,7 +468,7 @@ struct DetailViewContent: View {
                         } else {
                             DetailViewContent.logger.info("Tag '\(tag.tag)' tapped (standard). Setting tagForSheetSearch.")
                             pausePlayerForSheet()
-                            self.tagForSheetSearch = tag.tag
+                            self.tagForSheetSearch = SheetTagSearchTarget(value: tag.tag)
                         }
                     }
                 )
@@ -862,11 +867,11 @@ struct DetailViewContent: View {
             .sheet(isPresented: $showingAddTagSheet) {
                 addTagSheetContent()
             }
-            .sheet(item: $tagForSheetSearch, onDismiss: resumePlayerIfNeeded) { tappedTagString in
-                 TagSearchViewWrapper(initialTag: tappedTagString, onNewTagSelected: { newTagFromSheet in
+            .sheet(item: $tagForSheetSearch, onDismiss: resumePlayerIfNeeded) { tappedTagTarget in
+                 TagSearchViewWrapper(initialTag: tappedTagTarget.value, onNewTagSelected: { newTagFromSheet in
                      DetailViewContent.logger.info("Received new tag '\(newTagFromSheet)' from TagSearchViewWrapper. Updating tagForSheetSearch.")
                      pausePlayerForSheet()
-                     self.tagForSheetSearch = newTagFromSheet
+                     self.tagForSheetSearch = SheetTagSearchTarget(value: newTagFromSheet)
                  })
                  .environment(settings)
                  .environment(authService)
@@ -1010,8 +1015,6 @@ struct DetailViewContent: View {
 
         isPreparingShare = true
         sharePreparationError = nil
-        var temporaryFileToDelete: URL? = nil
-
         defer {
             isPreparingShare = false
         }
@@ -1022,8 +1025,6 @@ struct DetailViewContent: View {
                 let temporaryDirectory = FileManager.default.temporaryDirectory
                 let fileName = mediaUrl.lastPathComponent
                 let localUrl = temporaryDirectory.appendingPathComponent(fileName)
-                temporaryFileToDelete = localUrl
-
                 let (downloadedUrl, response) = try await URLSession.shared.download(from: mediaUrl)
                 
                 guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
@@ -1312,10 +1313,12 @@ struct VideoPlayerWithMuteButton: View {
         hideTimer?.invalidate()
         
         hideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            // Nur ausblenden wenn Maus noch über Video ist (bei Inaktivität)
-            if isMouseOver {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    showControls = false
+            Task { @MainActor in
+                // Nur ausblenden wenn Maus noch über Video ist (bei Inaktivität)
+                if isMouseOver {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        showControls = false
+                    }
                 }
             }
         }

@@ -291,11 +291,6 @@ struct CommentView: View {
     // --- END MODIFICATION ---
 }
 
-extension String: Identifiable {
-    public var id: String { self }
-}
-
-
 // MARK: - Preview
 #Preview("Normal with Reply & Voted") {
     struct PreviewWrapperNormal: View {

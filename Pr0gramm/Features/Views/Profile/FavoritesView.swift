@@ -261,7 +261,7 @@ struct FavoritesView: View {
                         }
                     } else {
                         // Different item or no player, need to recreate
-                        if let item = items.first(where: { $0.id == savedState.itemID }) {
+                        if items.contains(where: { $0.id == savedState.itemID }) {
                             FavoritesView.logger.info("Recreating player for item \(savedState.itemID) after modal")
                             // The VideoPlayerManager should handle recreating the player
                             // This might require additional logic depending on your implementation

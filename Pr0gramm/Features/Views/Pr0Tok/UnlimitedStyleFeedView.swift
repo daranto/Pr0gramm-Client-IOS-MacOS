@@ -100,6 +100,43 @@ struct UnlimitedStyleFeedView: View {
         return items.first(where: { $0.id == id })
     }
 
+    private var errorAlertPresented: Binding<Bool> {
+        Binding(
+            get: { errorMessage != nil && !isLoadingFeed },
+            set: { isPresented in
+                if !isPresented {
+                    errorMessage = nil
+                }
+            }
+        )
+    }
+
+    private var currentErrorMessage: String {
+        errorMessage ?? "Unbekannter Fehler"
+    }
+
+    private var tagSearchSheetPresented: Binding<Bool> {
+        Binding(
+            get: { tagForSearchSheet != nil },
+            set: { isPresented in
+                if !isPresented {
+                    tagForSearchSheet = nil
+                }
+            }
+        )
+    }
+
+    private var userProfileSheetPresented: Binding<Bool> {
+        Binding(
+            get: { userProfileSheetUsername != nil },
+            set: { isPresented in
+                if !isPresented {
+                    userProfileSheetUsername = nil
+                }
+            }
+        )
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ZStack {
@@ -292,13 +329,15 @@ struct UnlimitedStyleFeedView: View {
         }
         .onChange(of: showingFilterSheet) { if $1 { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
 
-        .sheet(item: $tagForSearchSheet, onDismiss: { tagForSearchSheet = nil; resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) { tag in
-            NavigationStack {
-                TagSearchView(currentSearchTag: .constant(tag))
-                    .environment(settings)
-                    .environment(authService)
-                    .navigationTitle("\(tag)")
-                    .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: tagSearchSheetPresented, onDismiss: { tagForSearchSheet = nil; resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) {
+            if let tag = tagForSearchSheet {
+                NavigationStack {
+                    TagSearchView(currentSearchTag: .constant(tag))
+                        .environment(settings)
+                        .environment(authService)
+                        .navigationTitle("\(tag)")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
             }
         }
         .onChange(of: tagForSearchSheet) { if $1 != nil { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
@@ -355,16 +394,18 @@ struct UnlimitedStyleFeedView: View {
         }
         .onChange(of: collectionSelectionSheetTarget) { if $1 != nil { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
             
-        .sheet(item: $userProfileSheetUsername, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) { usernameToDisplay in
-            UserProfileSheetView(username: usernameToDisplay)
-                .environment(authService)
-                .environment(settings)
-                .environment(playerManager)
+        .sheet(isPresented: userProfileSheetPresented, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) {
+            if let usernameToDisplay = userProfileSheetUsername {
+                UserProfileSheetView(username: usernameToDisplay)
+                    .environment(authService)
+                    .environment(settings)
+                    .environment(playerManager)
+            }
         }
         .onChange(of: userProfileSheetUsername) { if $1 != nil { pausePlayerForAppSheet(activeItem: currentActiveItem) } }
-        .alert("Fehler", isPresented: .constant(errorMessage != nil && !isLoadingFeed)) {
+        .alert("Fehler", isPresented: errorAlertPresented) {
              Button("OK") { errorMessage = nil }
-        } message: { Text(errorMessage ?? "Unbekannter Fehler") }
+        } message: { Text(currentErrorMessage) }
         .confirmationDialog( "Teilen & Kopieren", isPresented: $isShareConfirmationDialogPresented, presenting: itemIDForShareActions ) { itemIDForDialogActions in
             Button("Medium teilen/speichern") { Task { await prepareAndShareMedia(for: itemIDForDialogActions) } }
             Button("Post-URL") { copyPostLink(for: itemIDForDialogActions) }
@@ -1093,7 +1134,7 @@ struct UnlimitedStyleFeedView: View {
             Self.logger.warning("Item Vote: No active item.")
             return
         }
-        guard let itemIndex = items.firstIndex(where: { $0.id == activeId }) else {
+        guard items.contains(where: { $0.id == activeId }) else {
             Self.logger.warning("Item Vote: Active item \(activeId) not found in local items list.")
             return
         }

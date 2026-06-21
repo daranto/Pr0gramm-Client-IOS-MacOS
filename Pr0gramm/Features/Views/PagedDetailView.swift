@@ -851,7 +851,7 @@ struct PagedDetailView: View {
         let newVoteState = authService.votedCommentStates[commentId] ?? 0
 
         if previousVoteStateForRevert != newVoteState {
-            if var cachedItemDetail = cachedDetails[currentItemId] {
+            if let cachedItemDetail = cachedDetails[currentItemId] {
                 var mutableComments = cachedItemDetail.info.comments
                 if let commentIndex = mutableComments.firstIndex(where: { $0.id == commentId }) {
                     var mutableComment = mutableComments[commentIndex]

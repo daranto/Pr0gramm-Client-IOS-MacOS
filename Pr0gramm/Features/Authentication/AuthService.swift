@@ -720,7 +720,7 @@ final class AuthService {
         await MainActor.run { self.isModifyingFollowStatus[name] = true }
 
         let wasSubscribed = self.subscribedUsernames.contains(name)
-        await MainActor.run { self.subscribedUsernames.insert(name) }
+        subscribedUsernames.insert(name)
         if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
             let oldItem = self.followedUsers[index]
             let newItem = FollowListItem(subscribed: 1, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
@@ -736,7 +736,7 @@ final class AuthService {
             } else {
                 AuthService.logger.warning("API indicated subscribe action for \(name) did not result in subscribed=true. Response: \(String(describing: response))")
                 if !wasSubscribed {
-                    await MainActor.run { self.subscribedUsernames.remove(name) }
+                    subscribedUsernames.remove(name)
                     if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
                          let oldItem = self.followedUsers[index]
                          let newItem = FollowListItem(subscribed: 0, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
@@ -748,7 +748,7 @@ final class AuthService {
         } catch {
             AuthService.logger.error("Error subscribing to notifications for user \(name): \(error.localizedDescription)")
             if !wasSubscribed {
-                await MainActor.run { self.subscribedUsernames.remove(name) }
+                subscribedUsernames.remove(name)
                  if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
                      let oldItem = self.followedUsers[index]
                      let newItem = FollowListItem(subscribed: 0, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
@@ -769,11 +769,11 @@ final class AuthService {
         let wasSubscribed = self.subscribedUsernames.contains(name)
         let originalFollowedItem = self.followedUsers.first(where: { $0.name == name })
 
-        await MainActor.run { self.subscribedUsernames.remove(name) }
+        subscribedUsernames.remove(name)
         if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
             let oldItem = self.followedUsers[index]
             if !keepFollow {
-                 await MainActor.run { self.followedUsers.remove(at: index) }
+                 await MainActor.run { _ = self.followedUsers.remove(at: index) }
             } else {
                  let newItem = FollowListItem(subscribed: 0, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
                  await MainActor.run { self.followedUsers[index] = newItem }
@@ -798,7 +798,7 @@ final class AuthService {
             } else {
                 AuthService.logger.warning("API indicated unsubscribe action for \(name) did not result in subscribed=false. Response: \(String(describing: response))")
                 if wasSubscribed {
-                    await MainActor.run { self.subscribedUsernames.insert(name) }
+                    subscribedUsernames.insert(name)
                      if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
                         let oldItem = self.followedUsers[index]
                         let newItem = FollowListItem(subscribed: 1, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)
@@ -812,7 +812,7 @@ final class AuthService {
         } catch {
             AuthService.logger.error("Error unsubscribing from notifications for user \(name): \(error.localizedDescription)")
             if wasSubscribed {
-                await MainActor.run { self.subscribedUsernames.insert(name) }
+                subscribedUsernames.insert(name)
                  if let index = self.followedUsers.firstIndex(where: { $0.name == name }) {
                     let oldItem = self.followedUsers[index]
                     let newItem = FollowListItem(subscribed: 1, name: oldItem.name, mark: oldItem.mark, followCreated: oldItem.followCreated, itemId: oldItem.itemId, thumb: oldItem.thumb, preview: oldItem.preview, lastPost: oldItem.lastPost)

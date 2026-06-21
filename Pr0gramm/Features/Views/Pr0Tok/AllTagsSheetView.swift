@@ -208,24 +208,25 @@ fileprivate struct SheetVotableTagView: View {
 
 // Preview für AllTagsSheetView
 #Preview("AllTagsSheetView Preview") {
+    @Previewable @State var previewCachedDetails: [Int: ItemsInfoResponse] = [
+        1: ItemsInfoResponse(
+            tags: [
+                ItemTag(id: 1, confidence: 0.9, tag: "Lustig"),
+                ItemTag(id: 2, confidence: 0.8, tag: "Katze"),
+                ItemTag(id: 3, confidence: 0.7, tag: "Sehr langer Tag um Umbruch zu testen"),
+                ItemTag(id: 4, confidence: 0.6, tag: "Programmieren"),
+                ItemTag(id: 5, confidence: 0.5, tag: "SwiftUI"),
+                ItemTag(id: 6, confidence: 0.4, tag: "Apple"),
+                ItemTag(id: 7, confidence: 0.3, tag: "Mobile"),
+                ItemTag(id: 8, confidence: 0.2, tag: "Entwicklung"),
+            ],
+            comments: []
+        )
+    ]
+    @Previewable @State var previewInfoLoadingStatus: [Int: InfoLoadingStatus] = [1: .loaded]
+
     // Erstelle Dummy-Daten für die Preview
     let sampleItem = Item(id: 1, promoted: nil, userId: 1, down: 0, up: 100, created: Int(Date().timeIntervalSince1970), image: "test.jpg", thumb: "thumb.jpg", fullsize: nil, preview: nil, width: 100, height: 100, audio: false, source: nil, flags: 1, user: "TestUser", mark: 1, repost: false, variants: nil, subtitles: nil)
-    
-    let sampleTags = [
-        ItemTag(id: 1, confidence: 0.9, tag: "Lustig"),
-        ItemTag(id: 2, confidence: 0.8, tag: "Katze"),
-        ItemTag(id: 3, confidence: 0.7, tag: "Sehr langer Tag um Umbruch zu testen"),
-        ItemTag(id: 4, confidence: 0.6, tag: "Programmieren"),
-        ItemTag(id: 5, confidence: 0.5, tag: "SwiftUI"),
-        ItemTag(id: 6, confidence: 0.4, tag: "Apple"),
-        ItemTag(id: 7, confidence: 0.3, tag: "Mobile"),
-        ItemTag(id: 8, confidence: 0.2, tag: "Entwicklung"),
-    ]
-    let sampleComments: [ItemComment] = []
-    let sampleInfoResponse = ItemsInfoResponse(tags: sampleTags, comments: sampleComments)
-
-    @State var previewCachedDetails: [Int: ItemsInfoResponse] = [sampleItem.id: sampleInfoResponse]
-    @State var previewInfoLoadingStatus: [Int: InfoLoadingStatus] = [sampleItem.id: .loaded]
     
     let settings = AppSettings()
     let authService = AuthService(appSettings: settings)

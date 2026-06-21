@@ -18,9 +18,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                             windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: orientationLock)) { error in
                                 Self.logger.error("Error requesting geometry update: \(error.localizedDescription)")
                             }
+                            windowScene.windows.forEach { window in
+                                window.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+                            }
                         }
-                        // Nach dem Request kann man versuchen, die Rotation zu erzwingen, falls nötig
-                        UIViewController.attemptRotationToDeviceOrientation()
                     }
                 } else {
                     Self.logger.debug("iOS <16: Setting orientation via UIDevice.")
@@ -34,8 +35,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
                         Self.logger.info("Set device orientation to: portrait")
                     }
-                    // Manchmal ist ein erneuter Versuch nötig, die Rotation anzuwenden
-                    UIViewController.attemptRotationToDeviceOrientation()
+                    // Manchmal ist ein erneuter Versuch nötig, die Rotation auf alten iOS-Versionen anzuwenden
+                    if #unavailable(iOS 16.0) {
+                        UIViewController.attemptRotationToDeviceOrientation()
+                    }
                 }
             } else {
                  Self.logger.debug("Orientation lock did not actually change. Skipping update.")

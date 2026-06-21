@@ -1424,7 +1424,7 @@ class APIService {
                  }
                  throw NSError(domain: "APIService.\(endpoint.replacingOccurrences(of: "/", with: "."))", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: apiError])
             }
-            if let followErrorResponse = try? decoder.decode(FollowActionResponse.self, from: data) {
+            if (try? decoder.decode(FollowActionResponse.self, from: data)) != nil {
                 let errorDetail = "Follow/Subscribe action might have failed or returned unexpected boolean."
                 APIService.logger.warning("API for \(endpoint) returned non-2xx status but decoded as FollowActionResponse. Detail: \(errorDetail)")
                 throw NSError(domain: "APIService.FollowAction", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Aktion fehlgeschlagen (Status: \(httpResponse.statusCode)). \(errorDetail)"])

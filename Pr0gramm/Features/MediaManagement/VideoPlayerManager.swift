@@ -281,7 +281,7 @@ final class VideoPlayerManager {
 
         removeObservers()
 
-        self.muteObserver = player.observe(\.isMuted, options: [.new]) { [weak self, weak settings, itemCopy = item] _, change in
+        self.muteObserver = player.observe(\.isMuted, options: [.new]) { [weak self, weak settings] _, change in
             guard let strongSelf = self, let strongSettings = settings, let newMutedState = change.newValue else { return }
             Task { @MainActor in
                  if strongSettings.transientSessionMuteState != newMutedState {
@@ -377,7 +377,9 @@ final class VideoPlayerManager {
         // CRITICAL FIX: Run time observer on main queue to prevent Task flooding
         // Using DispatchQueue.main instead of nil prevents creating 4 Tasks per second
         self.timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            self?.updateSubtitle(for: time)
+            Task { @MainActor [weak self] in
+                self?.updateSubtitle(for: time)
+            }
         }
         VideoPlayerManager.logger.debug("[Manager] Added periodic time observer for item \(item.id).")
     }
