@@ -17,23 +17,37 @@ struct DetailImageView: View {
     @Binding var fullscreenImageTarget: FullscreenImageTarget?
 
     var body: some View {
-        KFImage(item.imageUrl)
-            .placeholder { Rectangle().fill(.secondary.opacity(0.1)).overlay(ProgressView()) }
-            .onFailure { error in logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)") }
-            .cancelOnDisappear(false)
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-            .id(item.id)
-            .background(Color.black)
-            .clipped()
-            .onTapGesture { 
-                if !item.isVideo { 
-                    logger.info("Image tapped for item \(item.id), setting fullscreen target.")
-                    fullscreenImageTarget = FullscreenImageTarget(item: item) 
-                } 
+        Group {
+            if item.image.lowercased().hasSuffix(".gif") {
+                KFAnimatedImage(item.imageUrl)
+                    .placeholder { Rectangle().fill(.secondary.opacity(0.1)).overlay(ProgressView()) }
+                    .onFailure { error in logger.error("Failed to load animated image for item \(item.id): \(error.localizedDescription)") }
+                    .cancelOnDisappear(false)
+                    .configure { view in
+                        view.contentMode = .scaleAspectFit
+                        view.framePreloadCount = 3
+                    }
+                    .scaledToFit()
+            } else {
+                KFImage(item.imageUrl)
+                    .placeholder { Rectangle().fill(.secondary.opacity(0.1)).overlay(ProgressView()) }
+                    .onFailure { error in logger.error("Failed to load image for item \(item.id): \(error.localizedDescription)") }
+                    .cancelOnDisappear(false)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
             }
-            .accessibilityAddTraits(item.isVideo ? [] : .isButton)
-            .disabled(item.isVideo)
+        }
+        .id(item.id)
+        .background(Color.black)
+        .clipped()
+        .onTapGesture {
+            if !item.isVideo {
+                logger.info("Image tapped for item \(item.id), setting fullscreen target.")
+                fullscreenImageTarget = FullscreenImageTarget(item: item)
+            }
+        }
+        .accessibilityAddTraits(item.isVideo ? [] : .isButton)
+        .disabled(item.isVideo)
     }
 }
 
