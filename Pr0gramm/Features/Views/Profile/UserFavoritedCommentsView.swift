@@ -184,7 +184,7 @@ struct UserFavoritedCommentsView: View {
 
     // --- MODIFIED: parsePr0grammLink gibt jetzt (Int, Int?)? zurück ---
     private func parsePr0grammLink(url: URL) -> (itemID: Int, commentID: Int?)? {
-        guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else { return nil }
+        guard let host = url.host, Pr0grammLinkParser.isSupportedHost(host) else { return nil }
 
         let path = url.path
         let components = path.components(separatedBy: "/")

@@ -3,15 +3,20 @@
 import Foundation
 import os
 
-/// Utility for parsing pr0gramm.com URLs to extract item IDs and comment IDs
+/// Utility for parsing pr0gramm URLs to extract item IDs and comment IDs
 struct Pr0grammLinkParser {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Pr0grammLinkParser")
+    private static let supportedHosts: Set<String> = ["pr0gramm.com", "www.pr0gramm.com", "pr0.app", "www.pr0.app"]
+
+    static func isSupportedHost(_ host: String) -> Bool {
+        supportedHosts.contains(host.lowercased())
+    }
     
-    /// Parses a pr0gramm.com URL and extracts the item ID and optional comment ID
+    /// Parses a pr0gramm URL and extracts the item ID and optional comment ID
     /// - Parameter url: The URL to parse
     /// - Returns: A tuple containing the item ID and optional comment ID, or nil if parsing fails
     static func parse(url: URL) -> (itemID: Int, commentID: Int?)? {
-        guard let host = url.host?.lowercased(), (host == "pr0gramm.com" || host == "www.pr0gramm.com") else {
+        guard let host = url.host, isSupportedHost(host) else {
             return nil
         }
 

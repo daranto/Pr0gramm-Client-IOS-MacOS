@@ -2,7 +2,7 @@
   "content_scripts": [
     {
       "js": ["content.js"],
-      "matches": ["https://pr0gramm.com/*"],
+      "matches": ["https://pr0gramm.com/*", "https://pr0.app/*"],
       "run_at": "document_start"
     }
   ],
