@@ -45,7 +45,9 @@ struct MainView: View {
     @State private var feedPopToRootTrigger = UUID()
     @State private var selectedTab: Tab = .feed
     @State private var showTagMigrationPrompt = false
+    @State private var showLocalSeenMigrationPrompt = false
     @State private var isMigratingTags = false
+    @State private var isMigratingLocalSeenItems = false
     @State private var migrationResultMessage: String?
     @AppStorage("blockedTagsMigrationPromptShown_v1") private var blockedTagsMigrationPromptShown = false
     private let apiService = APIService()
@@ -133,8 +135,24 @@ struct MainView: View {
                 navigationService.pendingSearchTag = nil
             }
         }
-        .task(id: "\(authService.isLoggedIn)-\(settings.excludedTags.count)-\(blockedTagsMigrationPromptShown)") {
+        .task(id: "\(authService.isLoggedIn)-\(settings.excludedTags.count)-\(blockedTagsMigrationPromptShown)-\(settings.pendingLocalSeenItemIDsForServerMigration.count)") {
+            evaluateLocalSeenMigrationPrompt()
             evaluateTagMigrationPrompt()
+        }
+        .alert("Lokale Gesehen-Markierungen übernehmen?", isPresented: $showLocalSeenMigrationPrompt) {
+            Button("Zum Server übertragen") {
+                Task { await migratePendingLocalSeenItemsToServer() }
+            }
+            .disabled(isMigratingLocalSeenItems)
+            Button("Verwerfen", role: .destructive) {
+                settings.discardPendingLocalSeenItemsForServerMigration()
+                migrationResultMessage = "Lokale Gesehen-Markierungen wurden verworfen."
+            }
+            Button("Später", role: .cancel) {
+                showLocalSeenMigrationPrompt = false
+            }
+        } message: {
+            Text("Es gibt \(settings.pendingLocalSeenItemIDsForServerMigration.count) lokal gesehene Posts aus der Nutzung ohne Login. Sollen diese zu deinem Server-Status hinzugefügt werden?")
         }
         .alert("Tags migrieren?", isPresented: $showTagMigrationPrompt) {
             Button("Jo, migrieren") {
@@ -161,7 +179,33 @@ struct MainView: View {
         }
     }
 
+    private func evaluateLocalSeenMigrationPrompt() {
+        guard authService.isLoggedIn else { return }
+        guard !settings.pendingLocalSeenItemIDsForServerMigration.isEmpty else { return }
+        showLocalSeenMigrationPrompt = true
+    }
+
+    @MainActor
+    private func migratePendingLocalSeenItemsToServer() async {
+        guard !isMigratingLocalSeenItems else { return }
+        guard let nonce = authService.userNonce else {
+            migrationResultMessage = "Migration nicht möglich: Bitte zuerst einloggen."
+            return
+        }
+
+        isMigratingLocalSeenItems = true
+        defer { isMigratingLocalSeenItems = false }
+
+        do {
+            let migratedCount = try await settings.migratePendingLocalSeenItemsToServer(nonce: nonce)
+            migrationResultMessage = "Migration abgeschlossen. \(migratedCount) lokal gesehene Post(s) wurden übernommen."
+        } catch {
+            migrationResultMessage = "Migration fehlgeschlagen: \(error.localizedDescription)"
+        }
+    }
+
     private func evaluateTagMigrationPrompt() {
+        guard !showLocalSeenMigrationPrompt else { return }
         guard !blockedTagsMigrationPromptShown else { return }
         guard authService.isLoggedIn else { return }
         guard !settings.excludedTags.isEmpty else {

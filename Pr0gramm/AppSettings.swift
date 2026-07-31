@@ -163,6 +163,7 @@ final class AppSettings {
 
     private nonisolated static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AppSettings")
     private let cacheService = CacheService()
+    private let seenAPIService = APIService()
     private let cloudStore = NSUbiquitousKeyValueStore.default
 
 
@@ -385,6 +386,12 @@ final class AppSettings {
 
     private var saveSeenItemsTask: Task<Void, Never>?
     private let saveSeenItemsDebounceDelay: Duration = .seconds(1)
+    private var serverSeenBits: Data?
+    private var serverSeenBitsVersion: Int?
+    private var pendingServerSeenItemIDs: Set<Int> = []
+    private(set) var pendingLocalSeenItemIDsForServerMigration: Set<Int> = []
+    private var syncServerSeenItemsTask: Task<Void, Never>?
+    private let syncServerSeenItemsDebounceDelay: Duration = .seconds(2)
 
     // Note: With @Observable, views automatically track changes to individual properties.
     // This publisher is kept for backward compatibility where needed.
@@ -635,6 +642,8 @@ final class AppSettings {
         Self.logger.warning("Clearing Seen Items Cache (Local & iCloud) requested.")
         await MainActor.run {
             self.seenItemIDs = []
+            self.pendingLocalSeenItemIDsForServerMigration = []
+            self.invalidateServerSeenItemsCache()
         }
         Self.logger.info("Cleared in-memory seen items set.")
         
@@ -644,6 +653,12 @@ final class AppSettings {
         cloudStore.removeObject(forKey: Self.iCloudSeenItemsKey)
         let syncSuccess = cloudStore.synchronize()
         Self.logger.info("Removed seen items key from iCloud KVS. Synchronize requested: \(syncSuccess).")
+    }
+
+    func resetSeenItemsAfterLogout() async {
+        syncServerSeenItemsTask?.cancel()
+        pendingServerSeenItemIDs = []
+        await clearSeenItemsCache()
     }
     func clearAllAppCache() async {
         Self.logger.warning("Clearing ALL Data Cache, Kingfisher Image Cache, Seen Items Cache (Local & iCloud) requested.")
@@ -707,7 +722,12 @@ final class AppSettings {
         await updateDataCacheSize()
     }
 
-    func markItemAsSeen(id: Int) {
+    func markItemAsSeen(id: Int, nonce: String? = nil) {
+        guard id >= 0 else {
+            Self.logger.warning("Ignoring invalid seen item ID: \(id).")
+            return
+        }
+
         guard !seenItemIDs.contains(id) else {
             Self.logger.trace("Item \(id) was already marked as seen (in-memory).")
             return
@@ -719,10 +739,14 @@ final class AppSettings {
         Self.logger.debug("Marked item \(id) as seen (in-memory). Total seen: \(self.seenItemIDs.count). Scheduling save.")
 
         scheduleSaveSeenItems()
+        if let nonce {
+            scheduleServerSeenItemsSync(ids: [id], nonce: nonce)
+        }
     }
 
-    func markItemsAsSeen(ids: Set<Int>) {
-        let newIDs = ids.subtracting(seenItemIDs)
+    func markItemsAsSeen(ids: Set<Int>, nonce: String? = nil) {
+        let validIDs = ids.filter { $0 >= 0 }
+        let newIDs = Set(validIDs).subtracting(seenItemIDs)
         guard !newIDs.isEmpty else {
             Self.logger.trace("No new items to mark as seen from the provided batch.")
             return
@@ -735,6 +759,150 @@ final class AppSettings {
         Self.logger.info("Marked \(newIDs.count) items as seen (in-memory). Total seen: \(self.seenItemIDs.count). Scheduling save.")
         
         scheduleSaveSeenItems()
+        if let nonce {
+            scheduleServerSeenItemsSync(ids: newIDs, nonce: nonce)
+        }
+    }
+
+    private func scheduleServerSeenItemsSync(ids: Set<Int>, nonce: String) {
+        pendingServerSeenItemIDs.formUnion(ids)
+        syncServerSeenItemsTask?.cancel()
+        let debounceDelay = syncServerSeenItemsDebounceDelay
+
+        syncServerSeenItemsTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: debounceDelay)
+                guard !Task.isCancelled else { return }
+                await self?.flushPendingServerSeenItems(nonce: nonce)
+            } catch is CancellationError {
+                Self.logger.info("Debounced server seen-items sync cancelled.")
+            } catch {
+                Self.logger.error("Error while scheduling server seen-items sync: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func flushPendingServerSeenItems(nonce: String) async {
+        let idsToSync = pendingServerSeenItemIDs
+        pendingServerSeenItemIDs = []
+        guard !idsToSync.isEmpty else { return }
+
+        do {
+            try await syncSeenItemsToServer(ids: idsToSync, nonce: nonce)
+        } catch {
+            pendingServerSeenItemIDs.formUnion(idsToSync)
+            Self.logger.error("Server seen-items sync failed for \(idsToSync.count) item(s): \(error.localizedDescription)")
+        }
+    }
+
+    @discardableResult
+    func refreshSeenItemsFromServer() async throws -> Int {
+        let response = try await seenAPIService.fetchSeenData()
+        serverSeenBits = response.bits
+        serverSeenBitsVersion = response.version
+
+        let serverIDs = decodeSeenIDs(from: response.bits)
+        let previousIDs = seenItemIDs
+        seenItemIDs = serverIDs
+        await performActualSaveOfSeenIDs(ids: serverIDs)
+
+        let changedCount = previousIDs.symmetricDifference(serverIDs).count
+        Self.logger.info("Server seen-items refresh loaded \(serverIDs.count) ID(s). Changed local set by \(changedCount) ID(s).")
+        return changedCount
+    }
+
+    @discardableResult
+    func prepareLocalSeenItemsForServerMigrationDecision() async -> Int {
+        let localIDs = seenItemIDs
+        guard !localIDs.isEmpty else { return 0 }
+
+        pendingLocalSeenItemIDsForServerMigration = localIDs
+        seenItemIDs = []
+        invalidateServerSeenItemsCache()
+        await performActualSaveOfSeenIDs(ids: [])
+        Self.logger.info("Prepared \(localIDs.count) local seen ID(s) for migration decision and cleared active local seen state.")
+        return localIDs.count
+    }
+
+    func discardPendingLocalSeenItemsForServerMigration() {
+        let discardedCount = pendingLocalSeenItemIDsForServerMigration.count
+        pendingLocalSeenItemIDsForServerMigration = []
+        Self.logger.info("Discarded \(discardedCount) pending local seen ID(s) for server migration.")
+    }
+
+    @discardableResult
+    func migratePendingLocalSeenItemsToServer(nonce: String) async throws -> Int {
+        let idsToMigrate = pendingLocalSeenItemIDsForServerMigration
+        guard !idsToMigrate.isEmpty else {
+            Self.logger.info("Pending seen-items migration skipped because there are no IDs waiting for a decision.")
+            return 0
+        }
+
+        try await syncSeenItemsToServer(ids: idsToMigrate, nonce: nonce)
+        pendingLocalSeenItemIDsForServerMigration = []
+        _ = try await refreshSeenItemsFromServer()
+        return idsToMigrate.count
+    }
+
+    @discardableResult
+    func migrateLocalSeenItemsToServer(nonce: String) async throws -> Int {
+        let idsToMigrate = seenItemIDs
+        guard !idsToMigrate.isEmpty else {
+            Self.logger.info("Seen-items migration skipped because there are no local seen IDs.")
+            return 0
+        }
+
+        try await syncSeenItemsToServer(ids: idsToMigrate, nonce: nonce)
+        return idsToMigrate.count
+    }
+
+    private func invalidateServerSeenItemsCache() {
+        serverSeenBits = nil
+        serverSeenBitsVersion = nil
+    }
+
+    private func syncSeenItemsToServer(ids: Set<Int>, nonce: String) async throws {
+        if serverSeenBits == nil || serverSeenBitsVersion == nil {
+            let response = try await seenAPIService.fetchSeenData()
+            serverSeenBits = response.bits
+            serverSeenBitsVersion = response.version
+            Self.logger.info("Loaded server seen bitset with version \(response.version) and \(response.bits.count) bytes.")
+        }
+
+        guard var bits = serverSeenBits, let version = serverSeenBitsVersion else {
+            throw URLError(.cannotParseResponse)
+        }
+
+        for id in ids {
+            setSeenBit(for: id, in: &bits)
+        }
+
+        let response = try await seenAPIService.updateSeenData(bits: bits, version: version, nonce: nonce)
+        serverSeenBits = bits
+        serverSeenBitsVersion = response.version
+        Self.logger.info("Server seen-items sync succeeded for \(ids.count) item(s). New version: \(response.version).")
+    }
+
+    private func decodeSeenIDs(from bits: Data) -> Set<Int> {
+        var ids = Set<Int>()
+        ids.reserveCapacity(min(bits.count * 2, 20_000))
+
+        for (byteIndex, byte) in bits.enumerated() where byte != 0 {
+            for bitOffset in 0..<8 where (byte & UInt8(1 << (7 - bitOffset))) != 0 {
+                ids.insert(byteIndex * 8 + bitOffset)
+            }
+        }
+
+        return ids
+    }
+
+    private func setSeenBit(for id: Int, in bits: inout Data) {
+        let byteIndex = id / 8
+        let bitIndex = 7 - (id % 8)
+        if byteIndex >= bits.count {
+            bits.append(Data(repeating: 0, count: byteIndex - bits.count + 1))
+        }
+        bits[byteIndex] = bits[byteIndex] | UInt8(1 << bitIndex)
     }
     
     private func scheduleSaveSeenItems() {

@@ -99,6 +99,7 @@ final class AuthService {
     private var unreadCountSyncTimer: Timer?
     private let unreadCountSyncInterval: TimeInterval = 300
     private var lastProfileInfoLoadError: Error?
+    private var isRefreshingSeenItemsFromServer = false
 
 
     nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "AuthService")
@@ -339,6 +340,12 @@ final class AuthService {
                 await MainActor.run { self.isLoggedIn = finalLoginSuccess }
 
                 if finalLoginSuccess {
+                    let pendingLocalSeenCount = await self.appSettings.prepareLocalSeenItemsForServerMigrationDecision()
+                    if pendingLocalSeenCount > 0 {
+                        AuthService.logger.info("Prepared \(pendingLocalSeenCount) local seen item ID(s) for user migration decision after login.")
+                    }
+                    await refreshSeenItemsFromServer()
+
                     AuthService.logger.debug("[LOGIN SUCCESS] Cookies BEFORE saving to Keychain:")
                     await logAllCookiesForPr0gramm()
                     let meCookieSaved = await findAndSaveSpecificCookie(cookieName: sessionCookieName, keychainKey: sessionCookieKey)
@@ -491,6 +498,10 @@ final class AuthService {
         
         await MainActor.run { self.isLoggedIn = finalIsLoggedIn }
 
+        if finalIsLoggedIn {
+            await refreshSeenItemsFromServer()
+        }
+
         if !finalIsLoggedIn {
             AuthService.logger.info("Initial login check determined user is NOT logged in or session data incomplete.")
             await performLogoutCleanup()
@@ -577,6 +588,27 @@ final class AuthService {
 
     func isUserBlocked(_ name: String) -> Bool {
         blockedUsers.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    func refreshSeenItemsFromServer() async {
+        while isRefreshingSeenItemsFromServer {
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                return
+            }
+        }
+
+        guard isLoggedIn else { return }
+        isRefreshingSeenItemsFromServer = true
+        defer { isRefreshingSeenItemsFromServer = false }
+
+        do {
+            let addedCount = try await appSettings.refreshSeenItemsFromServer()
+            AuthService.logger.info("Server seen-items refresh completed. Added \(addedCount) local ID(s).")
+        } catch {
+            AuthService.logger.error("Server seen-items refresh failed: \(error.localizedDescription)")
+        }
     }
 
     func blockUser(name: String) async {
@@ -1324,7 +1356,8 @@ final class AuthService {
         UserDefaults.standard.removeObject(forKey: followedUsersCacheKey)
         
         await self.appSettings.clearFavoritesCache(username: usernameToClearCache, collectionId: collectionIdToClearCache)
-        AuthService.logger.info("Cleared all session data including cookies, keychain entries, and user defaults for votes/favorites/follows.")
+        await self.appSettings.resetSeenItemsAfterLogout()
+        AuthService.logger.info("Cleared all session data including cookies, keychain entries, seen status, and user defaults for votes/favorites/follows.")
     }
 
     private func clearCookies() async {

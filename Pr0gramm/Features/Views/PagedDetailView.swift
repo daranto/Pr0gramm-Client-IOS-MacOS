@@ -304,7 +304,7 @@ struct PagedDetailView: View {
         .onChange(of: selectedIndex) { oldValue, newValue in
             if oldValue >= 0 && oldValue < items.count {
                 let previousItem = items[oldValue]
-                settings.markItemAsSeen(id: previousItem.id)
+                settings.markItemAsSeen(id: previousItem.id, nonce: authService.userNonce)
                 PagedDetailView.logger.info("Marked PREVIOUS item \(previousItem.id) as seen due to swipe.")
             }
             if newValue >= 0 && newValue < items.count {
@@ -521,7 +521,7 @@ struct PagedDetailView: View {
         showAllTagsForItem = []
         
         if let itemToMark = previouslySelectedItemForMarking {
-            settings.markItemAsSeen(id: itemToMark.id)
+            settings.markItemAsSeen(id: itemToMark.id, nonce: authService.userNonce)
             PagedDetailView.logger.info("Marked last active item \(itemToMark.id) as seen on disappear.")
             previouslySelectedItemForMarking = nil
         }

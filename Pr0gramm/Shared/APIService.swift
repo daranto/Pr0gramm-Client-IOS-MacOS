@@ -84,6 +84,20 @@ struct CaptchaResponse: Codable {
     let captcha: String
 }
 
+struct SeenDataResponse {
+    let bits: Data
+    let version: Int
+}
+
+struct SeenUpdateResponse: Codable {
+    let success: Bool
+    let version: Int
+    let ts: Int?
+    let cache: String?
+    let rt: Int?
+    let qc: Int?
+}
+
 struct ApiBadge: Codable, Identifiable, Hashable {
     var id: String { image }
     let image: String
@@ -434,6 +448,7 @@ class APIService {
 
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "APIService")
     private let baseURL = URL(string: "https://pr0gramm.com/api")!
+    private let seenBaseURL = URL(string: "https://pr0.app/api")!
     private let decoder = JSONDecoder()
 
     private func formURLEncode(parameters: [String: String]) -> Data? {
@@ -1410,6 +1425,66 @@ class APIService {
         }
     }
 
+    func fetchSeenData() async throws -> SeenDataResponse {
+        let endpoint = "/seen/data"
+        guard var urlComponents = URLComponents(url: seenBaseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        urlComponents.queryItems = [URLQueryItem(name: "compressed", value: "false")]
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+
+        var request = URLRequest(url: url)
+        addPr0grammSessionCookies(to: &request)
+
+        APIService.logger.info("Fetching server-side seen data bitset.")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            APIService.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse.")
+            throw URLError(.cannotParseResponse)
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            APIService.logger.error("API Error (\(endpoint)): Invalid HTTP status code: \(httpResponse.statusCode).")
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                throw URLError(.userAuthenticationRequired, userInfo: [NSLocalizedDescriptionKey: "Authentication failed for \(endpoint)"])
+            }
+            throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(httpResponse.statusCode) for \(endpoint)."])
+        }
+        guard let versionString = httpResponse.value(forHTTPHeaderField: "x-pr0gramm-bits-version"),
+              let version = Int(versionString) else {
+            APIService.logger.error("API Error (\(endpoint)): Missing x-pr0gramm-bits-version response header.")
+            throw URLError(.cannotParseResponse)
+        }
+
+        return SeenDataResponse(bits: data, version: version)
+    }
+
+    func updateSeenData(bits: Data, version: Int, nonce: String) async throws -> SeenUpdateResponse {
+        let endpoint = "/seen/update"
+        guard var urlComponents = URLComponents(url: seenBaseURL.appendingPathComponent(endpoint), resolvingAgainstBaseURL: false) else {
+            throw URLError(.badURL)
+        }
+        urlComponents.queryItems = [URLQueryItem(name: "compressed", value: "false")]
+        guard let url = urlComponents.url else { throw URLError(.badURL) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/problem+json,application/json", forHTTPHeaderField: "Accept")
+        request.setValue(String(version), forHTTPHeaderField: "X-pr0gramm-Bits-Version")
+        request.setValue(nonce, forHTTPHeaderField: "X-pr0gramm-Nonce")
+        addPr0grammSessionCookies(to: &request)
+        request.httpBody = bits
+
+        APIService.logger.info("Updating server-side seen data bitset with version \(version).")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let updateResponse: SeenUpdateResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint)
+        guard updateResponse.success else {
+            APIService.logger.error("API Error (\(endpoint)): Server returned success=false.")
+            throw URLError(.badServerResponse)
+        }
+        return updateResponse
+    }
+
     private func handleApiResponse<T: Decodable>(data: Data, response: URLResponse, endpoint: String) throws -> T {
         guard let httpResponse = response as? HTTPURLResponse else { APIService.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }
         guard (200..<300).contains(httpResponse.statusCode) else {
@@ -1438,6 +1513,21 @@ class APIService {
     private func handleApiResponseVoid(response: URLResponse, endpoint: String) throws {
          guard let httpResponse = response as? HTTPURLResponse else { APIService.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }
          guard (200..<300).contains(httpResponse.statusCode) else { APIService.logger.error("API Error (\(endpoint)): Invalid HTTP status code: \(httpResponse.statusCode)."); if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 { throw URLError(.userAuthenticationRequired, userInfo: [NSLocalizedDescriptionKey: "Authentication failed for \(endpoint)"]) }; throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(httpResponse.statusCode) for \(endpoint)."]) }
+    }
+
+    private func addPr0grammSessionCookies(to request: inout URLRequest) {
+        guard let cookieSourceURL = URL(string: "https://pr0gramm.com"),
+              let cookies = HTTPCookieStorage.shared.cookies(for: cookieSourceURL),
+              !cookies.isEmpty else {
+            APIService.logger.warning("No pr0gramm.com session cookies available for pr0.app seen request.")
+            return
+        }
+
+        let cookieHeaderFields = HTTPCookie.requestHeaderFields(with: cookies)
+        if let cookieHeader = cookieHeaderFields["Cookie"] {
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            APIService.logger.debug("Added \(cookies.count) pr0gramm.com session cookie(s) to pr0.app seen request.")
+        }
     }
 
     private func logRequestDetails(_ request: URLRequest, for endpoint: String) {

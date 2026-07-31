@@ -294,9 +294,6 @@ struct FeedView: View {
     private func refreshItems() async {
         guard !isLoading else { return }
         
-        items = []
-        nextOlderThanIdForApiCall = nil
-        canLoadMore = true
         errorMessage = nil
         showNoFilterMessage = !appSettings.hasActiveContentFilter
         
@@ -304,6 +301,15 @@ struct FeedView: View {
 
         isLoading = true
         defer { isLoading = false }
+
+        if authService.isLoggedIn {
+            await authService.refreshSeenItemsFromServer()
+            guard !Task.isCancelled else { return }
+        }
+
+        items = []
+        nextOlderThanIdForApiCall = nil
+        canLoadMore = true
 
         do {
             let result = try await findUnseenItems(startingFrom: nil)

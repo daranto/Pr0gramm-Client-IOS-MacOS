@@ -11,9 +11,17 @@ struct SettingsView: View {
     @Environment(AuthService.self) var authService
     @State private var showingClearAllCacheAlert = false
     @State private var showingClearSeenItemsAlert = false
+    @State private var isMigratingSeenItems = false
+    @State private var seenItemsMigrationMessage: String?
+    @State private var seenItemsMigrationDismissTask: Task<Void, Never>?
+    @AppStorage("lastSeenWhatsNewBuildIdentifier_v1") private var lastSeenWhatsNewBuildIdentifier = ""
 
     let cacheSizeOptions = [50, 100, 250, 500, 1000] // In MB
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "SettingsView")
+
+    private var isDeveloperOptionsVisible: Bool {
+        authService.currentUser?.name.caseInsensitiveCompare("Daranto") == .orderedSame
+    }
 
     var body: some View {
         @Bindable var settings = appSettings
@@ -190,15 +198,42 @@ struct SettingsView: View {
 
             
                 Section {
-                    Button("Gesehene Posts zurücksetzen", role: .destructive) {
+                    HStack {
+                        Text("Lokal markierte Posts")
+                            .font(UIConstants.bodyFont)
+                        Spacer()
+                        Text("\(settings.seenItemIDs.count)")
+                            .font(UIConstants.bodyFont)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if authService.isLoggedIn {
+                        Button {
+                            migrateLocalSeenItemsToServer()
+                        } label: {
+                            HStack {
+                                Label("Lokale IDs zum Server übertragen", systemImage: "arrow.up.arrow.down")
+                                Spacer()
+                                if isMigratingSeenItems {
+                                    ProgressView()
+                                }
+                            }
+                        }
+                        .font(UIConstants.bodyFont)
+                        .disabled(isMigratingSeenItems || authService.userNonce == nil || settings.seenItemIDs.isEmpty)
+                    }
+
+                    Button(role: .destructive) {
                         showingClearSeenItemsAlert = true
+                    } label: {
+                        Label("Lokalen Gesehen-Cache zurücksetzen", systemImage: "trash.circle")
                     }
                     .font(UIConstants.bodyFont)
                     .frame(maxWidth: .infinity, alignment: .center)
                 } header: {
                      Text("Anzeige-Verlauf")
                 } footer: {
-                     Text("Entfernt die Markierungen für bereits angesehene Bilder und Videos. Die Posts erscheinen wieder als 'neu', wenn 'Nur Frisches anzeigen' deaktiviert ist, oder werden wieder im Feed berücksichtigt, wenn es aktiv ist.")
+                     Text("Die App lädt den Gesehen-Status nach dem Login und bei Feed-Refreshes vom Server und merged ihn lokal. Der Cache-Reset löscht nur lokale/iCloud-Daten; der serverseitige Status bleibt erhalten.")
                         .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
@@ -245,6 +280,23 @@ struct SettingsView: View {
                  .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
                 
 
+                if isDeveloperOptionsVisible {
+                    Section {
+                        Button {
+                            lastSeenWhatsNewBuildIdentifier = ""
+                        } label: {
+                            Label("Neuigkeiten erneut anzeigen", systemImage: "newspaper")
+                        }
+                        .font(UIConstants.bodyFont)
+                    } header: {
+                        Text("Developer")
+                    } footer: {
+                        Text("Setzt nur lokal zurück, welche Build-News bereits gesehen wurden.")
+                            .font(UIConstants.footnoteFont)
+                    }
+                    .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
+                }
+
                 Section {
                     NavigationLink(destination: LicenseAndDependenciesView()) {
                         Text("Lizenzen & Abhängigkeiten")
@@ -268,11 +320,31 @@ struct SettingsView: View {
                     .frame(height: 32 + 40 + (UIApplication.shared.safeAreaInsets.bottom > 0 ? 4 : 8))
             }
             .navigationTitle("Einstellungen")
-            .alert("Gesehene Posts zurücksetzen?", isPresented: $showingClearSeenItemsAlert) {
+            .overlay(alignment: .top) {
+                if let seenItemsMigrationMessage {
+                    Label(seenItemsMigrationMessage, systemImage: "info.circle.fill")
+                        .font(UIConstants.footnoteFont.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(settings.accentColorChoice.swiftUIColor.opacity(0.35), lineWidth: 1)
+                        }
+                        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(10)
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: seenItemsMigrationMessage)
+            .alert("Lokalen Gesehen-Cache zurücksetzen?", isPresented: $showingClearSeenItemsAlert) {
                 Button("Abbrechen", role: .cancel) { }
-                Button("Zurücksetzen", role: .destructive) { Task { await settings.clearSeenItemsCache() } }
+                Button("Lokalen Cache löschen", role: .destructive) { Task { await settings.clearSeenItemsCache() } }
             } message: {
-                Text("Dadurch werden alle Markierungen für gesehene Bilder und Videos entfernt. Die Posts erscheinen wieder als 'neu'.")
+                Text("Dadurch werden nur die lokalen und iCloud-gespeicherten Markierungen entfernt. Der serverseitige Gesehen-Status bleibt erhalten und wird beim nächsten Sync wieder geladen.")
             }
             .alert("Gesamten App-Cache leeren?", isPresented: $showingClearAllCacheAlert) {
                 Button("Abbrechen", role: .cancel) { }
@@ -282,6 +354,55 @@ struct SettingsView: View {
             }
             .onAppear { Task { await settings.updateCacheSizes() } }
         }
+    }
+
+    private func migrateLocalSeenItemsToServer() {
+        guard !isMigratingSeenItems else { return }
+        guard let nonce = authService.userNonce else {
+            showSeenItemsMigrationOverlay("Migration nicht möglich: Login-Token fehlt.")
+            return
+        }
+
+        isMigratingSeenItems = true
+        hideSeenItemsMigrationOverlay()
+
+        Task {
+            do {
+                let migratedCount = try await appSettings.migrateLocalSeenItemsToServer(nonce: nonce)
+                await MainActor.run {
+                    showSeenItemsMigrationOverlay("\(migratedCount) lokale Markierungen wurden zum Server übertragen.")
+                    isMigratingSeenItems = false
+                }
+            } catch {
+                await MainActor.run {
+                    showSeenItemsMigrationOverlay("Migration fehlgeschlagen: \(error.localizedDescription)")
+                    isMigratingSeenItems = false
+                }
+            }
+        }
+    }
+
+    private func showSeenItemsMigrationOverlay(_ message: String) {
+        seenItemsMigrationDismissTask?.cancel()
+        seenItemsMigrationMessage = message
+        seenItemsMigrationDismissTask = Task {
+            do {
+                try await Task.sleep(for: .seconds(3))
+            } catch {
+                return
+            }
+
+            await MainActor.run {
+                if seenItemsMigrationMessage == message {
+                    seenItemsMigrationMessage = nil
+                }
+            }
+        }
+    }
+
+    private func hideSeenItemsMigrationOverlay() {
+        seenItemsMigrationDismissTask?.cancel()
+        seenItemsMigrationMessage = nil
     }
 }
 

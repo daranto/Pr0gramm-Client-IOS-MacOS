@@ -165,9 +165,24 @@ struct AppRootView: View {
     @Environment(NetworkMonitor.self) var networkMonitor
     @Environment(\.scenePhase) var scenePhase
 
+    @AppStorage("lastSeenWhatsNewBuildIdentifier_v1") private var lastSeenWhatsNewBuildIdentifier = ""
+    @State private var didPrepareInitialAppState = false
+    @State private var isShowingWhatsNew = false
+
+    private var currentBuildIdentifier: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return "\(version)-\(build)"
+    }
+
     var body: some View {
         ZStack(alignment: .top) {
-            MainView()
+            if didPrepareInitialAppState {
+                MainView()
+            } else {
+                ProgressView("Lade...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
 
             if !networkMonitor.isConnected {
                 OfflineConnectionBanner()
@@ -180,14 +195,114 @@ struct AppRootView: View {
         .animation(.easeInOut(duration: 0.2), value: networkMonitor.isConnected)
         .accentColor(appSettings.accentColorChoice.swiftUIColor)
         .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
+        .sheet(isPresented: $isShowingWhatsNew, onDismiss: markCurrentWhatsNewAsSeen) {
+            WhatsNewView(buildIdentifier: currentBuildIdentifier) {
+                markCurrentWhatsNewAsSeen()
+                isShowingWhatsNew = false
+            }
+            .tint(appSettings.accentColorChoice.swiftUIColor)
+            .accentColor(appSettings.accentColorChoice.swiftUIColor)
+        }
         .task {
             networkMonitor.start()
             await authService.checkInitialLoginStatus()
+            didPrepareInitialAppState = true
+            presentWhatsNewIfNeeded()
         }
         .onChange(of: scenePhase, initial: true) { oldPhase, newPhase in
             scenePhaseObserver.handleScenePhaseChange(newPhase: newPhase, oldPhase: oldPhase)
         }
+        .onChange(of: lastSeenWhatsNewBuildIdentifier) { _, _ in
+            guard didPrepareInitialAppState else { return }
+            presentWhatsNewIfNeeded()
+        }
     }
+
+    private func presentWhatsNewIfNeeded() {
+        guard lastSeenWhatsNewBuildIdentifier != currentBuildIdentifier else { return }
+        isShowingWhatsNew = true
+    }
+
+    private func markCurrentWhatsNewAsSeen() {
+        lastSeenWhatsNewBuildIdentifier = currentBuildIdentifier
+    }
+}
+
+struct WhatsNewView: View {
+    let buildIdentifier: String
+    let onDone: () -> Void
+
+    private let features: [WhatsNewFeature] = [
+        WhatsNewFeature(
+            iconName: "eye.circle.fill",
+            title: "Gesehen-Status vom Server",
+            description: "Die App lädt den aktuellen Gesehen-Status beim Start und bei Feed-Refreshes vom Server."
+        ),
+        WhatsNewFeature(
+            iconName: "arrow.up.arrow.down.circle.fill",
+            title: "Migration lokaler Markierungen",
+            description: "Alte lokale Gesehen-Markierungen können in den Einstellungen einmalig zum Server übertragen werden."
+        ),
+        WhatsNewFeature(
+            iconName: "link.circle.fill",
+            title: "pr0.app-Links",
+            description: "pr0.app-Links werden jetzt von App und Safari-Erweiterung erkannt."
+        )
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Neu in dieser Version")
+                            .font(.title.bold())
+                        Text("Build \(buildIdentifier)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 18) {
+                        ForEach(features) { feature in
+                            HStack(alignment: .top, spacing: 14) {
+                                Image(systemName: feature.iconName)
+                                    .font(.title2)
+                                    .foregroundStyle(.tint)
+                                    .frame(width: 30)
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(feature.title)
+                                        .font(.headline)
+                                    Text(feature.description)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(24)
+            }
+            .navigationTitle("Neuigkeiten")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Fertig", action: onDone)
+                }
+            }
+        }
+    }
+}
+
+private struct WhatsNewFeature: Identifiable {
+    let id = UUID()
+    let iconName: String
+    let title: String
+    let description: String
 }
 
 struct OfflineConnectionBanner: View {

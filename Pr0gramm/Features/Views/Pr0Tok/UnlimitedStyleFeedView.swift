@@ -674,7 +674,7 @@ struct UnlimitedStyleFeedView: View {
 
                         if oldValue != newId || (oldValue == nil && newId != items.first(where: {$0.id != dummyStartItemID})?.id && previousActiveItemID == nil) {
                             if currentItemFromScroll.id != dummyStartItemID {
-                                settings.markItemAsSeen(id: currentItemFromScroll.id)
+                                settings.markItemAsSeen(id: currentItemFromScroll.id, nonce: authService.userNonce)
                             }
                         }
                         
@@ -834,6 +834,11 @@ struct UnlimitedStyleFeedView: View {
             }
             Self.logger.info("Refresh (Unlimited) aborted: No active content filter (apiFlags: \(currentApiFlagsForThisRefresh)). UI shows dummy item.")
             return
+        }
+
+        if currentLoggedInForThisRefresh {
+            await authService.refreshSeenItemsFromServer()
+            guard !Task.isCancelled else { return }
         }
         
         var allFetchedUnseenItems: [Item] = []
