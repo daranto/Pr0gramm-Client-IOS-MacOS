@@ -54,6 +54,9 @@ struct FeedView: View {
     @State private var showingFilterSheet = false
     @State private var navigationPath = NavigationPath()
     @State private var didLoadInitially = false
+    @State private var feedAnimationGeneration = 0
+    @GestureState private var pullRefreshDistance: CGFloat = 0
+    @Namespace private var feedItemNamespace
     
     @State private var playerManager = VideoPlayerManager()
     @State private var refreshTask: Task<Void, Never>?
@@ -66,6 +69,19 @@ struct FeedView: View {
     private let initialLoadDelay: Duration = .milliseconds(300)
     private let refreshIndicatorDelay: Duration = .milliseconds(250)
     private let preloadRowsAhead: Int = 5
+    private let pullRefreshThreshold: CGFloat = 70
+    private var feedUpdateAnimation: Animation {
+        .spring(response: 0.48, dampingFraction: 0.9, blendDuration: 0.12)
+    }
+
+    private func feedSnakeAnimation(for index: Int) -> Animation {
+        let columns = max(1, gridColumns.count)
+        let row = index / columns
+        let column = index % columns
+        let snakeColumn = row.isMultiple(of: 2) ? column : max(0, columns - 1 - column)
+        let delay = min(Double(row) * 0.045 + Double(snakeColumn) * 0.012, 0.34)
+        return feedUpdateAnimation.delay(delay)
+    }
     
     // --- KORREKTUR: Zurück zur berechneten Eigenschaft ---
     // Dies stellt sicher, dass die View neu gezeichnet wird, wenn sich die gridSize in den Einstellungen ändert.
@@ -88,6 +104,8 @@ struct FeedView: View {
                 
                 // Eigentlicher Content
                 feedContentView
+
+                pullToRefreshHintOverlay
                 
                 // Header-Bar als fixiertes Overlay oben
                 VStack {
@@ -215,12 +233,14 @@ struct FeedView: View {
     private var scrollViewContent: some View {
         ScrollView {
             LazyVGrid(columns: gridColumns, spacing: 3) {
-                ForEach(items.indices, id: \.self) { index in
-                    let item = items[index]
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     NavigationLink(value: item) {
                         FeedItemThumbnail(item: item, isSeen: appSettings.seenItemIDs.contains(item.id))
                     }
                     .buttonStyle(.plain)
+                    .matchedGeometryEffect(id: item.id, in: feedItemNamespace)
+                    .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .scale(scale: 0.94).combined(with: .opacity)))
+                    .animation(feedSnakeAnimation(for: index), value: feedAnimationGeneration)
                     .onAppear {
                         // Prefetch thumbnails for the next rows when we reach the beginning of a row
                         if gridColumns.count > 0, index % gridColumns.count == 0 {
@@ -263,7 +283,41 @@ struct FeedView: View {
             .padding(.top, 76) // Angepasst für höhere Bar
             .padding(.bottom)
         }
-        .refreshable { await refreshItems() }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 4)
+                .updating($pullRefreshDistance) { value, state, _ in
+                    state = max(0, value.translation.height)
+                }
+        )
+        .refreshable { await performPullToRefresh() }
+    }
+    
+    @ViewBuilder private var pullToRefreshHintOverlay: some View {
+        let progress = min(max(pullRefreshDistance / pullRefreshThreshold, 0), 1)
+        if pullRefreshDistance > 12 && !isLoading {
+            VStack {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .font(.system(size: 18, weight: .semibold))
+
+                    Text("Zum Aktualisieren ziehen")
+                        .font(.caption.weight(.medium))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.thinMaterial, in: Capsule())
+                .scaleEffect(0.92 + progress * 0.08)
+                .opacity(Double(progress))
+                .padding(.top, 96 + min(pullRefreshDistance * 0.18, 26))
+
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(.snappy(duration: 0.2), value: progress >= 1)
+            .allowsHitTesting(false)
+        }
     }
     
     @ViewBuilder private var noFilterContentView: some View {
@@ -276,10 +330,18 @@ struct FeedView: View {
              Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .refreshable { await refreshItems() }
+        .refreshable { await performPullToRefresh() }
     }
 
     // MARK: - Data Loading
+    
+    @MainActor
+    private func performPullToRefresh() async {
+        refreshTask?.cancel()
+        let task = Task { await refreshItems() }
+        refreshTask = task
+        await task.value
+    }
     
     private func triggerRefreshTask() {
         refreshTask?.cancel()
@@ -299,23 +361,31 @@ struct FeedView: View {
         
         if showNoFilterMessage { return }
 
-        isLoading = true
-        defer { isLoading = false }
+        withAnimation(.snappy(duration: 0.24)) {
+            isLoading = true
+        }
+        defer {
+            withAnimation(.snappy(duration: 0.24)) {
+                isLoading = false
+            }
+        }
 
         if authService.isLoggedIn {
             await authService.refreshSeenItemsFromServer()
             guard !Task.isCancelled else { return }
         }
 
-        items = []
         nextOlderThanIdForApiCall = nil
         canLoadMore = true
 
         do {
-            let result = try await findUnseenItems(startingFrom: nil)
+            let result = try await findUnseenItems(startingFrom: nil, excludingItemIDs: [])
             guard !Task.isCancelled else { return }
             
-            items = result.items
+            withAnimation(feedUpdateAnimation) {
+                items = result.items
+                feedAnimationGeneration += 1
+            }
             nextOlderThanIdForApiCall = result.nextOlderThanId
             canLoadMore = !result.apiReachedEnd
             didLoadInitially = true
@@ -340,11 +410,15 @@ struct FeedView: View {
         defer { isLoadingMore = false }
 
         do {
-            let result = try await findUnseenItems(startingFrom: nextOlderThanIdForApiCall)
+            let currentItemIDs = Set(items.map { $0.id })
+            let result = try await findUnseenItems(startingFrom: nextOlderThanIdForApiCall, excludingItemIDs: currentItemIDs)
             guard !Task.isCancelled else { return }
 
             if !result.items.isEmpty {
-                items.append(contentsOf: result.items)
+                withAnimation(feedUpdateAnimation) {
+                    items.append(contentsOf: result.items)
+                    feedAnimationGeneration += 1
+                }
             }
             nextOlderThanIdForApiCall = result.nextOlderThanId
             canLoadMore = !result.apiReachedEnd
@@ -367,7 +441,7 @@ struct FeedView: View {
         let apiReachedEnd: Bool
     }
     
-    private func findUnseenItems(startingFrom olderThanId: Int?) async throws -> FetchResult {
+    private func findUnseenItems(startingFrom olderThanId: Int?, excludingItemIDs excludedItemIDs: Set<Int>) async throws -> FetchResult {
         var fetchedItems: [Item] = []
         var lastRawItemFromApiResponse: Item?
         var apiSaysNoMoreItems = false
@@ -380,15 +454,17 @@ struct FeedView: View {
                 pagesAttempted += 1
                 
                 let apiResponse = try await apiService.fetchItems(
-                    flags: appSettings.apiFlags, promoted: appSettings.apiPromoted,
-                    olderThanId: currentOlderForLoop, showJunkParameter: appSettings.apiShowJunk
+                    flags: appSettings.apiFlags,
+                    promoted: appSettings.apiPromoted,
+                    tags: appSettings.apiExcludedTagsString,
+                    olderThanId: currentOlderForLoop,
+                    showJunkParameter: appSettings.apiShowJunk
                 )
 
                 let rawPageItems = apiResponse.items
                 lastRawItemFromApiResponse = rawPageItems.last
                 
-                let currentItemIDs = await MainActor.run { Set(self.items.map { $0.id }) }
-                let uniqueUnseenItems = rawPageItems.filter { !appSettings.seenItemIDs.contains($0.id) && !currentItemIDs.contains($0.id) }
+                let uniqueUnseenItems = rawPageItems.filter { !appSettings.seenItemIDs.contains($0.id) && !excludedItemIDs.contains($0.id) }
                 
                 fetchedItems.append(contentsOf: uniqueUnseenItems)
                 apiSaysNoMoreItems = apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil)
@@ -401,11 +477,13 @@ struct FeedView: View {
             }
         } else {
             let apiResponse = try await apiService.fetchItems(
-                flags: appSettings.apiFlags, promoted: appSettings.apiPromoted,
-                olderThanId: olderThanId, showJunkParameter: appSettings.apiShowJunk
+                flags: appSettings.apiFlags,
+                promoted: appSettings.apiPromoted,
+                tags: appSettings.apiExcludedTagsString,
+                olderThanId: olderThanId,
+                showJunkParameter: appSettings.apiShowJunk
             )
-            let currentItemIDs = await MainActor.run { Set(self.items.map { $0.id }) }
-            fetchedItems = apiResponse.items.filter { !currentItemIDs.contains($0.id) }
+            fetchedItems = apiResponse.items.filter { !excludedItemIDs.contains($0.id) }
             lastRawItemFromApiResponse = apiResponse.items.last
             apiSaysNoMoreItems = apiResponse.atEnd == true || (apiResponse.hasOlder == false && apiResponse.hasOlder != nil)
         }

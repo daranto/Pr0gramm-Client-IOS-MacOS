@@ -803,11 +803,12 @@ final class AppSettings {
 
         let serverIDs = decodeSeenIDs(from: response.bits)
         let previousIDs = seenItemIDs
-        seenItemIDs = serverIDs
-        await performActualSaveOfSeenIDs(ids: serverIDs)
+        let mergedIDs = serverIDs.union(previousIDs).union(pendingServerSeenItemIDs)
+        seenItemIDs = mergedIDs
+        await performActualSaveOfSeenIDs(ids: mergedIDs)
 
-        let changedCount = previousIDs.symmetricDifference(serverIDs).count
-        Self.logger.info("Server seen-items refresh loaded \(serverIDs.count) ID(s). Changed local set by \(changedCount) ID(s).")
+        let changedCount = previousIDs.symmetricDifference(mergedIDs).count
+        Self.logger.info("Server seen-items refresh loaded \(serverIDs.count) ID(s), preserved \(mergedIDs.count - serverIDs.count) local pending ID(s). Changed local set by \(changedCount) ID(s).")
         return changedCount
     }
 

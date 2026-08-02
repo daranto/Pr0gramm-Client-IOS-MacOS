@@ -14,7 +14,7 @@ struct SettingsView: View {
     @State private var isMigratingSeenItems = false
     @State private var seenItemsMigrationMessage: String?
     @State private var seenItemsMigrationDismissTask: Task<Void, Never>?
-    @AppStorage("lastSeenWhatsNewBuildIdentifier_v1") private var lastSeenWhatsNewBuildIdentifier = ""
+    @AppStorage("lastSeenWhatsNewContentVersion_v1") private var lastSeenWhatsNewContentVersion = 0
 
     let cacheSizeOptions = [50, 100, 250, 500, 1000] // In MB
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "SettingsView")
@@ -283,7 +283,7 @@ struct SettingsView: View {
                 if isDeveloperOptionsVisible {
                     Section {
                         Button {
-                            lastSeenWhatsNewBuildIdentifier = ""
+                            lastSeenWhatsNewContentVersion = 0
                         } label: {
                             Label("Neuigkeiten erneut anzeigen", systemImage: "newspaper")
                         }
@@ -291,7 +291,7 @@ struct SettingsView: View {
                     } header: {
                         Text("Developer")
                     } footer: {
-                        Text("Setzt nur lokal zurück, welche Build-News bereits gesehen wurden.")
+                        Text("Setzt nur lokal zurück, welche Neuigkeiten bereits gesehen wurden.")
                             .font(UIConstants.footnoteFont)
                     }
                     .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)

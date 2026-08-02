@@ -165,14 +165,14 @@ struct AppRootView: View {
     @Environment(NetworkMonitor.self) var networkMonitor
     @Environment(\.scenePhase) var scenePhase
 
-    @AppStorage("lastSeenWhatsNewBuildIdentifier_v1") private var lastSeenWhatsNewBuildIdentifier = ""
+    @AppStorage("lastSeenWhatsNewContentVersion_v1") private var lastSeenWhatsNewContentVersion = 0
     @State private var didPrepareInitialAppState = false
     @State private var isShowingWhatsNew = false
 
-    private var currentBuildIdentifier: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
-        return "\(version)-\(build)"
+    private let whatsNewContentVersion = 2
+
+    private var currentAppVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
     }
 
     var body: some View {
@@ -196,7 +196,7 @@ struct AppRootView: View {
         .accentColor(appSettings.accentColorChoice.swiftUIColor)
         .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
         .sheet(isPresented: $isShowingWhatsNew, onDismiss: markCurrentWhatsNewAsSeen) {
-            WhatsNewView(buildIdentifier: currentBuildIdentifier) {
+            WhatsNewView(appVersion: currentAppVersion) {
                 markCurrentWhatsNewAsSeen()
                 isShowingWhatsNew = false
             }
@@ -212,38 +212,47 @@ struct AppRootView: View {
         .onChange(of: scenePhase, initial: true) { oldPhase, newPhase in
             scenePhaseObserver.handleScenePhaseChange(newPhase: newPhase, oldPhase: oldPhase)
         }
-        .onChange(of: lastSeenWhatsNewBuildIdentifier) { _, _ in
+        .onChange(of: lastSeenWhatsNewContentVersion) { _, _ in
             guard didPrepareInitialAppState else { return }
             presentWhatsNewIfNeeded()
         }
     }
 
     private func presentWhatsNewIfNeeded() {
-        guard lastSeenWhatsNewBuildIdentifier != currentBuildIdentifier else { return }
+        guard lastSeenWhatsNewContentVersion < whatsNewContentVersion else { return }
         isShowingWhatsNew = true
     }
 
     private func markCurrentWhatsNewAsSeen() {
-        lastSeenWhatsNewBuildIdentifier = currentBuildIdentifier
+        lastSeenWhatsNewContentVersion = whatsNewContentVersion
     }
 }
 
 struct WhatsNewView: View {
-    let buildIdentifier: String
+    let appVersion: String
     let onDone: () -> Void
 
     private let features: [WhatsNewFeature] = [
         WhatsNewFeature(
+            date: "02.08.2026",
+            iconName: "arrow.clockwise.circle.fill",
+            title: "Bugfix: Pull to Refresh",
+            description: "Pull to Refresh funktioniert wieder zuverlässig und aktualisiert den Feed korrekt."
+        ),
+        WhatsNewFeature(
+            date: "31.07.2026",
             iconName: "eye.circle.fill",
             title: "Gesehen-Status vom Server",
             description: "Die App lädt den aktuellen Gesehen-Status beim Start und bei Feed-Refreshes vom Server."
         ),
         WhatsNewFeature(
+            date: "31.07.2026",
             iconName: "arrow.up.arrow.down.circle.fill",
             title: "Migration lokaler Markierungen",
             description: "Alte lokale Gesehen-Markierungen können in den Einstellungen einmalig zum Server übertragen werden."
         ),
         WhatsNewFeature(
+            date: "31.07.2026",
             iconName: "link.circle.fill",
             title: "pr0.app-Links",
             description: "pr0.app-Links werden jetzt von App und Safari-Erweiterung erkannt."
@@ -257,33 +266,22 @@ struct WhatsNewView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Neu in dieser Version")
                             .font(.title.bold())
-                        Text("Build \(buildIdentifier)")
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Version \(appVersion)")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
 
                     VStack(alignment: .leading, spacing: 18) {
                         ForEach(features) { feature in
-                            HStack(alignment: .top, spacing: 14) {
-                                Image(systemName: feature.iconName)
-                                    .font(.title2)
-                                    .foregroundStyle(.tint)
-                                    .frame(width: 30)
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(feature.title)
-                                        .font(.headline)
-                                    Text(feature.description)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
+                            WhatsNewFeatureRow(feature: feature)
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(24)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 24)
             }
             .navigationTitle("Neuigkeiten")
             #if os(iOS)
@@ -298,8 +296,42 @@ struct WhatsNewView: View {
     }
 }
 
+private struct WhatsNewFeatureRow: View {
+    let feature: WhatsNewFeature
+
+    private let iconWidth: CGFloat = 30
+    private let iconSpacing: CGFloat = 14
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(feature.date)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Text(feature.title)
+                    .font(.headline)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            WhatsNewDescriptionText(text: feature.description)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.leading, iconWidth + iconSpacing)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .topLeading) {
+            Image(systemName: feature.iconName)
+                .font(.title2)
+                .foregroundStyle(.tint)
+                .frame(width: iconWidth)
+        }
+    }
+}
+
 private struct WhatsNewFeature: Identifiable {
     let id = UUID()
+    let date: String
     let iconName: String
     let title: String
     let description: String
