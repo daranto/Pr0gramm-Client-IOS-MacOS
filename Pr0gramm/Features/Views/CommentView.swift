@@ -48,7 +48,6 @@ struct CommentView: View {
             for match in matches {
                 guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
                 attributedString[range].link = url
-                attributedString[range].foregroundColor = .accentColor
                 attributedString[range].font = baseUIFont
             }
         } catch {
@@ -119,10 +118,8 @@ struct CommentView: View {
             }
 
             if !isCollapsed {
-                Text(attributedCommentContent)
-                    .foregroundColor(.primary)
-                    .lineLimit(nil)
-                    .fixedSize(horizontal: false, vertical: true)
+                CommentTextView(attributedText: attributedCommentContent)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, hasChildren ? 20 : 20)
             }
         }
@@ -432,5 +429,3 @@ struct CommentView: View {
     return PreviewWrapperNoChildren()
 }
 // --- END OF COMPLETE FILE ---
-
-
