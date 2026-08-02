@@ -176,8 +176,17 @@ struct AppRootView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(10)
             }
+
+            #if os(iOS)
+            if scenePhase != .active {
+                PrivacyCoverView()
+                    .transition(.opacity)
+                    .zIndex(100)
+            }
+            #endif
         }
         .animation(.easeInOut(duration: 0.2), value: networkMonitor.isConnected)
+        .animation(.easeInOut(duration: 0.15), value: scenePhase)
         .accentColor(appSettings.accentColorChoice.swiftUIColor)
         .preferredColorScheme(appSettings.colorSchemeSetting.swiftUIScheme)
         .task {
@@ -189,6 +198,20 @@ struct AppRootView: View {
         }
     }
 }
+
+#if os(iOS)
+private struct PrivacyCoverView: View {
+    var body: some View {
+        Color(.systemBackground)
+            .ignoresSafeArea()
+            .overlay {
+                Image(systemName: "eye.slash.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.secondary)
+            }
+    }
+}
+#endif
 
 struct OfflineConnectionBanner: View {
     var body: some View {
