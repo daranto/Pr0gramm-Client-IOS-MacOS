@@ -178,7 +178,7 @@ struct AppRootView: View {
             }
 
             #if os(iOS)
-            if scenePhase != .active {
+            if appSettings.disableAppSwitcherPreview && scenePhase != .active {
                 PrivacyCoverView()
                     .transition(.opacity)
                     .zIndex(100)
