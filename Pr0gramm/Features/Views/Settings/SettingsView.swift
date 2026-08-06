@@ -79,13 +79,24 @@ struct SettingsView: View {
                             .font(UIConstants.bodyFont)
                             .tint(settings.accentColorChoice.swiftUIColor)
                     }
+
+                    #if os(iOS)
+                    Toggle("Deaktiviere Thumbnail im App-Umschalter", isOn: $settings.disableAppSwitcherPreview)
+                        .font(UIConstants.bodyFont)
+                        .tint(settings.accentColorChoice.swiftUIColor)
+                    #endif
                 } header: {
                     Text("Darstellung")
                 } footer: {
-                    if UIConstants.isPadOrMac {
-                        Text("Zeigt in der Detailansicht eine zentrierte Einzelspalten-Ansicht anstelle der optimierten Mehrspalten-Ansicht.")
-                            .font(UIConstants.footnoteFont)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if UIConstants.isPadOrMac {
+                            Text("Zeigt in der Detailansicht eine zentrierte Einzelspalten-Ansicht anstelle der optimierten Mehrspalten-Ansicht.")
+                        }
+                        #if os(iOS)
+                        Text("Verbirgt Inhalte hinter einer neutralen Fläche, sobald die App im App-Umschalter oder während des Wechsels in den Hintergrund als Vorschau angezeigt würde.")
+                        #endif
                     }
+                    .font(UIConstants.footnoteFont)
                 }
                 .headerProminence(UIConstants.isRunningOnMac ? .increased : .standard)
 

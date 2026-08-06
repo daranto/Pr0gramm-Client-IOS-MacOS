@@ -196,6 +196,7 @@ final class AppSettings {
     private static let backgroundFetchIntervalKey = "backgroundFetchInterval_v1"
     private static let forcePhoneLayoutOnPadAndMacKey = "forcePhoneLayoutOnPadAndMac_v1" // Neuer Key
     private static let excludedTagsKey = "excludedTags_v1" // Neue Key für ausgeschlossene Tags
+    private static let disableAppSwitcherPreviewKey = "disableAppSwitcherPreview_v1"
     private var keyValueStoreChangeObserver: NSObjectProtocol?
 
     var isVideoMuted: Bool { didSet { UserDefaults.standard.set(isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) } }
@@ -348,6 +349,16 @@ final class AppSettings {
             Self.logger.info("Background Fetch Interval setting changed to: \(self.backgroundFetchInterval.displayName)")
             if enableBackgroundFetchForNotifications {
                 BackgroundNotificationManager.shared.scheduleAppRefresh()
+            }
+        }
+    }
+
+    // Blendet die Vorschau der App im App-Umschalter (App Switcher) aus
+    var disableAppSwitcherPreview: Bool {
+        didSet {
+            if oldValue != disableAppSwitcherPreview {
+                UserDefaults.standard.set(disableAppSwitcherPreview, forKey: Self.disableAppSwitcherPreviewKey)
+                Self.logger.info("Disable app switcher preview setting changed to: \(self.disableAppSwitcherPreview)")
             }
         }
     }
@@ -553,7 +564,8 @@ final class AppSettings {
         let initialRawFetchInterval = UserDefaults.standard.integer(forKey: Self.backgroundFetchIntervalKey)
         self.backgroundFetchInterval = BackgroundFetchInterval(rawValue: initialRawFetchInterval) ?? .minutes60
         self.forcePhoneLayoutOnPadAndMac = UserDefaults.standard.bool(forKey: Self.forcePhoneLayoutOnPadAndMacKey)
-        
+        self.disableAppSwitcherPreview = UserDefaults.standard.bool(forKey: Self.disableAppSwitcherPreviewKey)
+
         // Load excluded tags - iCloud ist die primäre Datenquelle
         // Wir laden NICHT von UserDefaults beim Start, sondern warten auf iCloud
         self.excludedTags = []
@@ -576,6 +588,7 @@ final class AppSettings {
         Self.logger.info("- enableBackgroundFetchForNotifications: \(self.enableBackgroundFetchForNotifications)")
         Self.logger.info("- backgroundFetchInterval: \(self.backgroundFetchInterval.displayName)")
         Self.logger.info("- forcePhoneLayoutOnPadAndMac: \(self.forcePhoneLayoutOnPadAndMac)")
+        Self.logger.info("- disableAppSwitcherPreview: \(self.disableAppSwitcherPreview)")
 
         if UserDefaults.standard.object(forKey: Self.isVideoMutedPreferenceKey) == nil { UserDefaults.standard.set(self.isVideoMuted, forKey: Self.isVideoMutedPreferenceKey) }
         if UserDefaults.standard.object(forKey: Self.feedTypeKey) == nil { UserDefaults.standard.set(self.feedType.rawValue, forKey: Self.feedTypeKey) }
@@ -596,6 +609,7 @@ final class AppSettings {
         if UserDefaults.standard.object(forKey: Self.enableBackgroundFetchForNotificationsKey) == nil { UserDefaults.standard.set(self.enableBackgroundFetchForNotifications, forKey: Self.enableBackgroundFetchForNotificationsKey) }
         if UserDefaults.standard.object(forKey: Self.backgroundFetchIntervalKey) == nil { UserDefaults.standard.set(self.backgroundFetchInterval.rawValue, forKey: Self.backgroundFetchIntervalKey) }
         if UserDefaults.standard.object(forKey: Self.forcePhoneLayoutOnPadAndMacKey) == nil { UserDefaults.standard.set(self.forcePhoneLayoutOnPadAndMac, forKey: Self.forcePhoneLayoutOnPadAndMacKey) }
+        if UserDefaults.standard.object(forKey: Self.disableAppSwitcherPreviewKey) == nil { UserDefaults.standard.set(self.disableAppSwitcherPreview, forKey: Self.disableAppSwitcherPreviewKey) }
 
 
         updateKingfisherCacheLimit()
