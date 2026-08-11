@@ -81,7 +81,7 @@ struct SettingsView: View {
                     }
 
                     #if os(iOS)
-                    Toggle("Deaktiviere Thumbnail im App-Umschalter", isOn: $settings.disableAppSwitcherPreview)
+                    Toggle("App-Vorschau verbergen", isOn: $settings.disableAppSwitcherPreview)
                         .font(UIConstants.bodyFont)
                         .tint(settings.accentColorChoice.swiftUIColor)
                     #endif
@@ -93,7 +93,7 @@ struct SettingsView: View {
                             Text("Zeigt in der Detailansicht eine zentrierte Einzelspalten-Ansicht anstelle der optimierten Mehrspalten-Ansicht.")
                         }
                         #if os(iOS)
-                        Text("Verbirgt Inhalte hinter einer neutralen Fläche, sobald die App im App-Umschalter oder während des Wechsels in den Hintergrund als Vorschau angezeigt würde.")
+                        Text("Zeigt eine neutrale Ansicht, wenn iOS die App im App-Umschalter oder beim Wechsel in den Hintergrund als Vorschau darstellt.")
                         #endif
                     }
                     .font(UIConstants.footnoteFont)

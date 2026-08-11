@@ -169,7 +169,7 @@ struct AppRootView: View {
     @State private var didPrepareInitialAppState = false
     @State private var isShowingWhatsNew = false
 
-    private let whatsNewContentVersion = 2
+    private let whatsNewContentVersion = 3
 
     private var currentAppVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
@@ -242,6 +242,12 @@ struct WhatsNewView: View {
     let onDone: () -> Void
 
     private let features: [WhatsNewFeature] = [
+        WhatsNewFeature(
+            date: "11.08.2026",
+            iconName: "rectangle.on.rectangle.slash.fill",
+            title: "App-Vorschau verbergen",
+            description: "In den Einstellungen kann jetzt eine neutrale Ansicht für den App-Umschalter aktiviert werden, damit sensible Inhalte dort nicht sichtbar sind. Danke @fwillo."
+        ),
         WhatsNewFeature(
             date: "02.08.2026",
             iconName: "arrow.clockwise.circle.fill",
