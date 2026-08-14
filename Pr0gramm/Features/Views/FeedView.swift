@@ -114,7 +114,7 @@ struct FeedView: View {
                     Spacer()
                 }
             }
-            .sheet(isPresented: $showingFilterSheet) {
+            .sheet(isPresented: $showingFilterSheet, onDismiss: triggerRefreshTask) {
                  FilterView(relevantFeedTypeForFilterBehavior: appSettings.feedType, hideFeedOptions: true, hideSeenItemsToggleContext: .feed)
                      .environment(appSettings)
                      .environment(authService)
@@ -137,7 +137,6 @@ struct FeedView: View {
                 }
             }
             .onChange(of: appSettings.feedType) { _, _ in triggerRefreshTask() }
-            .onChange(of: appSettings.hideSeenItems) { _, _ in triggerRefreshTask() }
             .task {
                  FeedView.logger.debug("FeedView task started.")
                  playerManager.configure(settings: appSettings)

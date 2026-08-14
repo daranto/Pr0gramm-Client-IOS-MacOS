@@ -169,7 +169,7 @@ struct AppRootView: View {
     @State private var didPrepareInitialAppState = false
     @State private var isShowingWhatsNew = false
 
-    private let whatsNewContentVersion = 3
+    private let whatsNewContentVersion = 4
 
     private var currentAppVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
@@ -242,6 +242,18 @@ struct WhatsNewView: View {
     let onDone: () -> Void
 
     private let features: [WhatsNewFeature] = [
+        WhatsNewFeature(
+            date: "14.08.2026",
+            iconName: "line.3.horizontal.decrease.circle.fill",
+            title: "Filter zuverlässig anwenden",
+            description: "Feed und Suche werden nach dem Schließen der Filterauswahl mit den neuen Einstellungen aktualisiert."
+        ),
+        WhatsNewFeature(
+            date: "14.08.2026",
+            iconName: "tag.circle.fill",
+            title: "Verbesserte Tag-Ansicht",
+            description: "Scrollposition und iOS-Scrollverhalten bleiben erhalten; Überschriften und Bildtitel laden stabil und lesbar."
+        ),
         WhatsNewFeature(
             date: "11.08.2026",
             iconName: "rectangle.on.rectangle.slash.fill",

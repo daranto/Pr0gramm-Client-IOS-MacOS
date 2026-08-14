@@ -153,7 +153,7 @@ final class AuthService {
             
             if self.userNonce == nil, let nonceFromSync = syncResponse.likeNonce {
                 await MainActor.run { self.userNonce = nonceFromSync }
-                 AuthService.logger.info("Updated userNonce from sync (BG Task): \(nonceFromSync)")
+                 AuthService.logger.info("Updated userNonce from sync (BG Task): <redacted>")
             }
 
             await MainActor.run {
@@ -198,7 +198,7 @@ final class AuthService {
             
             if self.userNonce == nil, let nonceFromSync = syncResponse.likeNonce {
                 await MainActor.run { self.userNonce = nonceFromSync }
-                 AuthService.logger.info("Updated userNonce from sync (Foreground): \(nonceFromSync)")
+                 AuthService.logger.info("Updated userNonce from sync (Foreground): <redacted>")
             }
 
             await MainActor.run {
@@ -1367,7 +1367,7 @@ final class AuthService {
             guard let cookies = HTTPCookieStorage.shared.cookies(for: url) else { return }
             AuthService.logger.debug("Found \(cookies.count) cookies for domain to potentially clear.")
             for cookie in cookies {
-                 AuthService.logger.debug("Deleting cookie: Name='\(cookie.name)', Value='\(cookie.value.prefix(50))...', Domain='\(cookie.domain)', Path='\(cookie.path)'")
+                 AuthService.logger.debug("Deleting cookie: Name='\(cookie.name)', Value='<redacted>', Domain='\(cookie.domain)', Path='\(cookie.path)'")
                  HTTPCookieStorage.shared.deleteCookie(cookie)
             }
         }
@@ -1385,7 +1385,7 @@ final class AuthService {
             AuthService.logger.warning("Cookie '\(cookieName)' not found in HTTPCookieStorage.")
             return false
         }
-        AuthService.logger.info("Found cookie '\(cookieName)' with value '\(specificCookie.value.prefix(50))...'.")
+        AuthService.logger.info("Found cookie '\(cookieName)' with value '<redacted>'.")
         guard let properties = specificCookie.properties else {
             AuthService.logger.warning("Could not get properties from cookie '\(cookieName)'.")
             return false
@@ -1412,7 +1412,7 @@ final class AuthService {
             return false
         }
         await MainActor.run { HTTPCookieStorage.shared.setCookie(restoredCookie) }
-        AuthService.logger.info("Successfully restored cookie '\(restoredCookie.name)' with value '\(restoredCookie.value.prefix(50))...' into HTTPCookieStorage.")
+        AuthService.logger.info("Successfully restored cookie '\(restoredCookie.name)' with value '<redacted>' into HTTPCookieStorage.")
         return true
     }
 
@@ -1431,14 +1431,14 @@ final class AuthService {
         AuthService.logger.debug("Attempting to extract nonce from cookie storage (trying JSON format first, then shorten)...")
          guard let url = URL(string: "https://pr0gramm.com") else { return nil }
          guard let sessionCookie = await MainActor.run(body: { HTTPCookieStorage.shared.cookies(for: url)?.first(where: { $0.name == self.sessionCookieName }) }) else { AuthService.logger.warning("Could not find session cookie named '\(self.sessionCookieName)' in storage."); return nil }
-        let cookieValue = sessionCookie.value; AuthService.logger.debug("[EXTRACT NONCE] Found session cookie '\(self.sessionCookieName)' with value: \(cookieValue)")
+        let cookieValue = sessionCookie.value; AuthService.logger.debug("[EXTRACT NONCE] Found session cookie '\(self.sessionCookieName)' with value: <redacted>")
         AuthService.logger.debug("[EXTRACT NONCE] Attempting URL-decoded JSON parsing...")
         if let decodedValue = cookieValue.removingPercentEncoding, let jsonData = decodedValue.data(using: .utf8) {
             do {
                 if let jsonDict = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any], let longNonceFromJson = jsonDict["id"] as? String {
-                    AuthService.logger.debug("[EXTRACT NONCE] Found 'id' field in JSON: \(longNonceFromJson)"); let expectedNonceLength = 16
-                    if longNonceFromJson.count >= expectedNonceLength { let shortNonce = String(longNonceFromJson.prefix(expectedNonceLength)); AuthService.logger.info("[EXTRACT NONCE] Successfully extracted and shortened nonce from JSON 'id' field: '\(shortNonce)'"); return shortNonce }
-                    else { AuthService.logger.warning("[EXTRACT NONCE] Nonce from JSON 'id' field is shorter than expected length (\(expectedNonceLength)): '\(longNonceFromJson)'"); return nil }
+                    AuthService.logger.debug("[EXTRACT NONCE] Found 'id' field in JSON: <redacted>"); let expectedNonceLength = 16
+                    if longNonceFromJson.count >= expectedNonceLength { let shortNonce = String(longNonceFromJson.prefix(expectedNonceLength)); AuthService.logger.info("[EXTRACT NONCE] Successfully extracted and shortened nonce from JSON 'id' field: '<redacted>'"); return shortNonce }
+                    else { AuthService.logger.warning("[EXTRACT NONCE] Nonce from JSON 'id' field is shorter than expected length (\(expectedNonceLength)); actual length: \(longNonceFromJson.count). Value: '<redacted>'"); return nil }
                 } else { AuthService.logger.warning("[EXTRACT NONCE] Failed to parse URL-decoded cookie value as JSON Dictionary or find 'id' key."); return nil }
             } catch { AuthService.logger.warning("[EXTRACT NONCE] Error parsing URL-decoded cookie value as JSON: \(error.localizedDescription)"); return nil }
         } else { AuthService.logger.warning("[EXTRACT NONCE] Failed to URL-decode cookie value or convert to Data."); return nil }
@@ -1448,7 +1448,7 @@ final class AuthService {
         guard let url = URL(string: "https://pr0gramm.com") else { return }
          AuthService.logger.debug("--- Current Cookies for \(url.host ?? "pr0gramm.com") ---")
          let cookies = await MainActor.run { HTTPCookieStorage.shared.cookies(for: url) }
-        if let cookies = cookies, !cookies.isEmpty { for cookie in cookies { AuthService.logger.debug("- Name: \(cookie.name), Value: \(cookie.value.prefix(60))..., Expires: \(cookie.expiresDate?.description ?? "Session"), Path: \(cookie.path), Secure: \(cookie.isSecure), HTTPOnly: \(cookie.isHTTPOnly)") } }
+        if let cookies = cookies, !cookies.isEmpty { for cookie in cookies { AuthService.logger.debug("- Name: \(cookie.name), Value: <redacted>, Expires: \(cookie.expiresDate?.description ?? "Session"), Path: \(cookie.path), Secure: \(cookie.isSecure), HTTPOnly: \(cookie.isHTTPOnly)") } }
         else { AuthService.logger.debug("(No cookies found for domain)") }
          AuthService.logger.debug("--- End Cookie List ---")
     }

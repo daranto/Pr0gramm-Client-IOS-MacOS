@@ -33,6 +33,7 @@ struct SearchView: View {
     @State private var isSearchActive = true
     @State private var suppressSearchActivationFromProgrammaticTextChange = false
     @State private var wasPlayingBeforeTabSwitch = false
+    @State private var filterRefreshTask: Task<Void, Never>?
 
     @State private var minBenisFilter: Int = 0
     @State private var scrollResetCounter: Int = 0
@@ -164,7 +165,7 @@ struct SearchView: View {
                     }
                 }
         }
-        .sheet(isPresented: $showingFilterSheet) {
+        .sheet(isPresented: $showingFilterSheet, onDismiss: triggerFilterRefreshTask) {
             FilterView(relevantFeedTypeForFilterBehavior: nil, hideFeedOptions: true, hideSeenItemsToggleContext: .search, showExcludedTagsSection: false)
                 .environment(settings)
                 .environment(authService)
@@ -180,12 +181,8 @@ struct SearchView: View {
             hasAttemptedSearchSinceAppear = false
             isSearchActive = true
         }
-        .onChange(of: settings.showSFW) { _, _ in handleApiFlagsChange() }
-        .onChange(of: settings.showNSFW) { _, _ in handleApiFlagsChange() }
-        .onChange(of: settings.showNSFL) { _, _ in handleApiFlagsChange() }
-        .onChange(of: settings.showPOL) { _, _ in handleApiFlagsChange() }
-        .onChange(of: settings.hideSeenItemsInSearch) { _, _ in
-            Task { await performSearchLogic(isInitialSearch: true) }
+        .onDisappear {
+            filterRefreshTask?.cancel()
         }
         .task(id: navigationService.selectedTab) {
             let newTab = navigationService.selectedTab
@@ -212,8 +209,13 @@ struct SearchView: View {
         }
     }
 
-    private func handleApiFlagsChange() {
-        SearchView.logger.info("SearchView: Relevant global filter flag changed. Not auto-triggering search (awaiting explicit submit).")
+    private func triggerFilterRefreshTask() {
+        filterRefreshTask?.cancel()
+        filterRefreshTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            await performSearchLogic(isInitialSearch: true)
+        }
     }
     
     /// Determines if the search term uses advanced search syntax

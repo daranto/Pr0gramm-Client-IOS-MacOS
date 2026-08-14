@@ -59,6 +59,7 @@ struct UnlimitedStyleFeedView: View {
     @State private var feedTypeUsedForLastLoad: FeedType? = nil
     @State private var hideSeenUsedForLastLoad: Bool? = nil
     @State private var loggedInUsedForLastLoad: Bool? = nil
+    @State private var hadActiveContentFilterForLastLoad: Bool? = nil
 
     @State private var currentRefreshFeedTask: Task<Void, Never>? = nil
     @State private var debouncedRefreshTask: Task<Void, Never>? = nil
@@ -174,7 +175,12 @@ struct UnlimitedStyleFeedView: View {
                  scrolledItemID = activeItemID ?? dummyStartItemID
             }
         }
-        .task(id: "\(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.feedType.rawValue)-\(settings.hideSeenItems)-\(settings.excludedTags.map { "\($0.id.uuidString):\($0.isEnabled)" }.joined())") {
+        .task(id: "\(authService.isLoggedIn)-\(settings.apiFlags)-\(settings.hasActiveContentFilter)-\(settings.feedType.rawValue)-\(settings.hideSeenItems)-\(settings.excludedTags.map { "\($0.id.uuidString):\($0.isEnabled)" }.joined())") {
+            guard !showingFilterSheet else {
+                Self.logger.info("Filter sheet is open. Deferring feed refresh until dismissal.")
+                return
+            }
+
             guard !isCurrentlyInSystemFullscreen else {
                 Self.logger.info("Task for parameter change skipped: Currently in system fullscreen.")
                 return
@@ -184,13 +190,15 @@ struct UnlimitedStyleFeedView: View {
             let currentFeedType = settings.feedType
             let currentHideSeen = settings.hideSeenItems
             let currentLoggedIn = authService.isLoggedIn
+            let currentlyHasActiveContentFilter = settings.hasActiveContentFilter
 
             Self.logger.info("UnlimitedStyleFeedView .task triggered. Current ID: \(currentLoggedIn)-\(currentApiFlags)-\(currentFeedType.displayName)-\(currentHideSeen). Previous ID: \(loggedInUsedForLastLoad ?? false)-\(flagsUsedForLastItemsLoad ?? -1)-\(feedTypeUsedForLastLoad?.displayName ?? "nil")-\(hideSeenUsedForLastLoad ?? false)")
 
             let parametersActuallyChanged = (flagsUsedForLastItemsLoad != currentApiFlags ||
                                              feedTypeUsedForLastLoad != currentFeedType ||
                                              hideSeenUsedForLastLoad != currentHideSeen ||
-                                             loggedInUsedForLastLoad != currentLoggedIn)
+                                             loggedInUsedForLastLoad != currentLoggedIn ||
+                                             hadActiveContentFilterForLastLoad != currentlyHasActiveContentFilter)
             
             let isConsideredInitialLaunch = flagsUsedForLastItemsLoad == nil
             let performFullResetAndLoad = isConsideredInitialLaunch || parametersActuallyChanged
@@ -322,7 +330,7 @@ struct UnlimitedStyleFeedView: View {
             }
         }
         // Sheets nacheinander, nicht verschachtelt
-        .sheet(isPresented: $showingFilterSheet, onDismiss: { resumePlayerAfterAppSheet(activeItem: currentActiveItem) }) {
+        .sheet(isPresented: $showingFilterSheet, onDismiss: refreshFeedAfterFilterDismissal) {
             FilterView(relevantFeedTypeForFilterBehavior: settings.feedType, hideFeedOptions: false, hideSeenItemsToggleContext: .feed)
                 .environment(settings)
                 .environment(authService)
@@ -461,6 +469,16 @@ struct UnlimitedStyleFeedView: View {
         playerManager.player?.pause()
         wasPlayingBeforeAppSheet = true
         Self.logger.info("Player paused for app sheet presentation (item: \(currentItem.id)).")
+    }
+
+    private func refreshFeedAfterFilterDismissal() {
+        wasPlayingBeforeAppSheet = false
+        debouncedRefreshTask?.cancel()
+        currentRefreshFeedTask?.cancel()
+        playerManager.cleanupPlayer()
+        currentRefreshFeedTask = Task { @MainActor in
+            await refreshItems()
+        }
     }
 
     private func resumePlayerAfterAppSheet(activeItem: Item?) {
@@ -811,6 +829,7 @@ struct UnlimitedStyleFeedView: View {
         let currentFeedTypeForThisRefresh = settings.feedType
         let currentHideSeenForThisRefresh = settings.hideSeenItems
         let currentLoggedInForThisRefresh = authService.isLoggedIn
+        let currentlyHasActiveContentFilter = settings.hasActiveContentFilter
 
         Self.logger.info("RefreshItems (Unlimited) Task started. Attempting with apiFlags: \(currentApiFlagsForThisRefresh)")
 
@@ -823,7 +842,7 @@ struct UnlimitedStyleFeedView: View {
 
         if Task.isCancelled { Self.logger.info("RefreshItems (Unlimited) Task was cancelled before guard settings.hasActiveContentFilter."); return }
 
-        guard settings.hasActiveContentFilter || currentApiFlagsForThisRefresh != 0 else {
+        guard currentlyHasActiveContentFilter else {
             await MainActor.run {
                 self.errorMessage = nil
                 self.canLoadMore = false
@@ -831,6 +850,7 @@ struct UnlimitedStyleFeedView: View {
                 self.feedTypeUsedForLastLoad = currentFeedTypeForThisRefresh
                 self.hideSeenUsedForLastLoad = currentHideSeenForThisRefresh
                 self.loggedInUsedForLastLoad = currentLoggedInForThisRefresh
+                self.hadActiveContentFilterForLastLoad = currentlyHasActiveContentFilter
             }
             Self.logger.info("Refresh (Unlimited) aborted: No active content filter (apiFlags: \(currentApiFlagsForThisRefresh)). UI shows dummy item.")
             return
@@ -915,6 +935,7 @@ struct UnlimitedStyleFeedView: View {
                 self.feedTypeUsedForLastLoad = currentFeedTypeForThisRefresh
                 self.hideSeenUsedForLastLoad = currentHideSeenForThisRefresh
                 self.loggedInUsedForLastLoad = currentLoggedInForThisRefresh
+                self.hadActiveContentFilterForLastLoad = currentlyHasActiveContentFilter
             }
 
             if !allFetchedUnseenItems.isEmpty {

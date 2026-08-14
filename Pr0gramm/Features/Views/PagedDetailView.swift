@@ -123,6 +123,7 @@ struct PagedDetailView: View {
     @Environment(AuthService.self) var authService
     @Environment(\.scenePhase) var scenePhase
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    @Environment(\.colorScheme) private var colorScheme
     static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "PagedDetailView")
 
     @StateObject private var keyboardActionHandler = KeyboardActionHandler()
@@ -148,6 +149,7 @@ struct PagedDetailView: View {
     @State private var currentItemTargetCommentID: Int?
 
     let loadMoreAction: () async -> Void
+    let navigationContextTitle: String?
     let onTagTappedInSheetCallback: ((String) -> Void)?
     let isPresentedInSheet: Bool // Neue Eigenschaft
 
@@ -163,6 +165,7 @@ struct PagedDetailView: View {
         selectedIndex: Int,
         playerManager: VideoPlayerManager,
         loadMoreAction: @escaping () async -> Void,
+        navigationContextTitle: String? = nil,
         initialTargetCommentID: Int? = nil,
         onTagTappedInSheetCallback: ((String) -> Void)? = nil,
         isPresentedInSheet: Bool = false // Neuer Initializer-Parameter
@@ -171,6 +174,7 @@ struct PagedDetailView: View {
         self._selectedIndex = State(initialValue: selectedIndex)
         self.playerManager = playerManager
         self.loadMoreAction = loadMoreAction
+        self.navigationContextTitle = navigationContextTitle
         self._currentItemTargetCommentID = State(initialValue: initialTargetCommentID)
         self.onTagTappedInSheetCallback = onTagTappedInSheetCallback
         self.isPresentedInSheet = isPresentedInSheet // Zuweisen
@@ -282,12 +286,12 @@ struct PagedDetailView: View {
             tabViewPages
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+        .navigationTitle(displayedNavigationTitle)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
-             ToolbarItem(placement: .principal) { Text(currentItemTitle).font(.headline).lineLimit(1) }
-             ToolbarItemGroup(placement: .navigationBarTrailing) {
+             ToolbarItemGroup(placement: .topBarTrailing) {
                  if selectedIndex >= 0 && selectedIndex < items.count && settings.seenItemIDs.contains(items[selectedIndex].id) {
                      Image(systemName: "checkmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, Color.accentColor).font(.body)
                  }
@@ -300,6 +304,7 @@ struct PagedDetailView: View {
         }
         .toolbarBackground(Material.bar, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(colorScheme, for: .navigationBar)
         .ignoresSafeArea(.container, edges: .bottom)
         .onChange(of: selectedIndex) { oldValue, newValue in
             if oldValue >= 0 && oldValue < items.count {
@@ -678,6 +683,14 @@ struct PagedDetailView: View {
         }
     }
 
+    private var displayedNavigationTitle: String {
+        if let contextTitle = navigationContextTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contextTitle.isEmpty {
+            return contextTitle
+        }
+        return currentItemTitle
+    }
+
     private func toggleFavorite() async {
         let localSettings = self.settings
         guard !isTogglingFavorite else { PagedDetailView.logger.debug("Favorite toggle skipped: Already processing."); return }
@@ -1053,6 +1066,5 @@ struct LinkedItemPreviewWrapperView: View {
     return PreviewWrapper()
 }
 // --- END OF COMPLETE FILE ---
-
 
 

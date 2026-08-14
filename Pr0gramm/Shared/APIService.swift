@@ -686,7 +686,7 @@ class APIService {
 
     func fetchCaptcha() async throws -> CaptchaResponse {
         let endpoint = "/user/captcha"; let url = baseURL.appendingPathComponent(endpoint); let request = URLRequest(url: url); APIService.logger.info("Fetching new captcha...")
-        do { let (data, response) = try await URLSession.shared.data(for: request); let captchaResponse: CaptchaResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint); APIService.logger.info("Successfully fetched captcha with token: \(captchaResponse.token)"); return captchaResponse }
+        do { let (data, response) = try await URLSession.shared.data(for: request); let captchaResponse: CaptchaResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint); APIService.logger.info("Successfully fetched captcha with token: <redacted>"); return captchaResponse }
         catch { APIService.logger.error("Error fetching or decoding captcha: \(error.localizedDescription)"); throw error }
     }
 
@@ -712,7 +712,7 @@ class APIService {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             let syncResponse: UserSyncResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint + " (offset: \(offset))")
-            APIService.logger.info("User sync successful. Nonce: \(syncResponse.likeNonce ?? "nil"). Inbox counts: \(String(describing: syncResponse.inbox))")
+            APIService.logger.info("User sync successful. Nonce available: \(syncResponse.likeNonce != nil). Inbox counts: \(String(describing: syncResponse.inbox))")
             return syncResponse
         }
         catch {
@@ -1199,9 +1199,7 @@ class APIService {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            if let jsonString = String(data: data, encoding: .utf8) {
-                APIService.logger.info("Raw JSON response from /inbox/post: \(jsonString)")
-            }
+            APIService.logger.info("Received response from /inbox/post (\(data.count) bytes).")
             let apiResponse: PostPrivateMessageAPIResponse = try handleApiResponse(data: data, response: response, endpoint: endpoint)
             
             if apiResponse.success {
@@ -1488,8 +1486,7 @@ class APIService {
     private func handleApiResponse<T: Decodable>(data: Data, response: URLResponse, endpoint: String) throws -> T {
         guard let httpResponse = response as? HTTPURLResponse else { APIService.logger.error("API Error (\(endpoint)): Response is not HTTPURLResponse."); throw URLError(.cannotParseResponse) }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            let responseBody = String(data: data, encoding: .utf8) ?? "No body"
-            APIService.logger.error("API Error (\(endpoint)): Invalid HTTP status code: \(httpResponse.statusCode). Body: \(responseBody)")
+            APIService.logger.error("API Error (\(endpoint)): Invalid HTTP status code: \(httpResponse.statusCode). Response body: <redacted> (\(data.count) bytes)")
             if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 { throw URLError(.userAuthenticationRequired, userInfo: [NSLocalizedDescriptionKey: "Authentication failed for \(endpoint)"]) }
             if let apiErrorResponse = try? decoder.decode(ApiResponse.self, from: data), let apiError = apiErrorResponse.error {
                  if apiError == "tooShort" {
@@ -1504,10 +1501,10 @@ class APIService {
                 APIService.logger.warning("API for \(endpoint) returned non-2xx status but decoded as FollowActionResponse. Detail: \(errorDetail)")
                 throw NSError(domain: "APIService.FollowAction", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Aktion fehlgeschlagen (Status: \(httpResponse.statusCode)). \(errorDetail)"])
             }
-            throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(httpResponse.statusCode) for \(endpoint). Body: \(responseBody)"])
+            throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: "Server returned status \(httpResponse.statusCode) for \(endpoint)."])
         }
         do { return try decoder.decode(T.self, from: data) }
-        catch { APIService.logger.error("API Error (\(endpoint)): Failed to decode JSON: \(error)"); if let decodingError = error as? DecodingError { APIService.logger.error("Decoding Error Details (\(endpoint)): \(String(describing: decodingError))") }; if let jsonString = String(data: data, encoding: .utf8) { APIService.logger.error("Problematic JSON string (\(endpoint)): \(jsonString)") }; throw error }
+        catch { APIService.logger.error("API Error (\(endpoint)): Failed to decode JSON: \(error)"); if let decodingError = error as? DecodingError { APIService.logger.error("Decoding Error Details (\(endpoint)): \(String(describing: decodingError))") }; APIService.logger.error("Problematic JSON payload (\(endpoint)): <redacted> (\(data.count) bytes)"); throw error }
     }
 
     private func handleApiResponseVoid(response: URLResponse, endpoint: String) throws {
@@ -1532,21 +1529,45 @@ class APIService {
 
     private func logRequestDetails(_ request: URLRequest, for endpoint: String) {
         APIService.logger.debug("--- Request Details for \(endpoint) ---")
-        if let url = request.url { APIService.logger.debug("URL: \(url.absoluteString)") } else { APIService.logger.debug("URL: MISSING") }
+        if let url = request.url { APIService.logger.debug("URL: \(self.redactedURLString(url))") } else { APIService.logger.debug("URL: MISSING") }
         APIService.logger.debug("Method: \(request.httpMethod ?? "MISSING")"); APIService.logger.debug("Headers:")
-        if let headers = request.allHTTPHeaderFields, !headers.isEmpty { headers.forEach { key, value in let displayValue = (key.lowercased() == "cookie") ? "\(value.prefix(10))... (masked)" : value; APIService.logger.debug("- \(key): \(displayValue)") } }
+        if let headers = request.allHTTPHeaderFields, !headers.isEmpty { headers.forEach { key, value in let displayValue = self.shouldRedactLogValue(for: key) ? "<redacted>" : value; APIService.logger.debug("- \(key): \(displayValue)") } }
         else { APIService.logger.debug("- (No Headers)") }
         APIService.logger.debug("Body:")
         if let bodyData = request.httpBody, let bodyString = String(data: bodyData, encoding: .utf8) {
-            var displayBody = bodyString
-            if endpoint == "/user/login" {
-                 displayBody = bodyString.replacingOccurrences(of: #"password=([^&]+)"#, with: "password=****", options: .regularExpression)
-            }
-            APIService.logger.debug("\(displayBody)")
+            APIService.logger.debug("\(self.redactedFormBody(bodyString))")
         } else {
             APIService.logger.debug("(No Body or Could not decode body)")
         }
         APIService.logger.debug("--- End Request Details ---")
+    }
+
+    private func shouldRedactLogValue(for fieldName: String) -> Bool {
+        let normalizedFieldName = fieldName.lowercased()
+        let sensitiveFragments = ["authorization", "cookie", "password", "token", "nonce", "captcha", "secret", "api-key", "apikey"]
+        return sensitiveFragments.contains { normalizedFieldName.contains($0) }
+    }
+
+    private func redactedFormBody(_ body: String) -> String {
+        body.split(separator: "&", omittingEmptySubsequences: false).map { pair in
+            let components = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let rawKey = components.first else { return String(pair) }
+            let decodedKey = String(rawKey).removingPercentEncoding ?? String(rawKey)
+            guard self.shouldRedactLogValue(for: decodedKey) else { return String(pair) }
+            return "\(rawKey)=<redacted>"
+        }.joined(separator: "&")
+    }
+
+    private func redactedURLString(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let queryItems = components.queryItems else {
+            return url.absoluteString
+        }
+        components.queryItems = queryItems.map { item in
+            guard self.shouldRedactLogValue(for: item.name) else { return item }
+            return URLQueryItem(name: item.name, value: "redacted")
+        }
+        return components.url?.absoluteString ?? url.absoluteString
     }
 }
 // --- END OF COMPLETE FILE ---

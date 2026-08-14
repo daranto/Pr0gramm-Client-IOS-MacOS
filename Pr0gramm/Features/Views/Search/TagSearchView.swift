@@ -12,6 +12,7 @@ struct TagSearchView: View {
     @Environment(AppSettings.self) var settings
     @Environment(AuthService.self) var authService
     @Environment(\.dismiss) var dismiss
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var items: [Item] = []
     @State private var isLoading = false
@@ -19,6 +20,7 @@ struct TagSearchView: View {
     @State private var canLoadMore = true
     @State private var isLoadingMore = false
     @State private var hasSearched = false
+    @State private var loadedSearchTag: String?
 
     @State private var playerManager = VideoPlayerManager()
     @State private var navigationPath = NavigationPath()
@@ -53,12 +55,21 @@ struct TagSearchView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
+            .toolbarBackground(Material.bar, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(colorScheme, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Schließen") { dismiss() }
                 }
             }
             .task(id: currentSearchTag) {
+                let normalizedTag = currentSearchTag.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard loadedSearchTag != normalizedTag || !hasSearched else {
+                    TagSearchView.logger.debug("TagSearchView already contains results for '\(normalizedTag)'. Preserving its scroll position.")
+                    return
+                }
+
                 TagSearchView.logger.info("TagSearchView task triggered for currentSearchTag: \(currentSearchTag)")
                 playerManager.configure(settings: settings)
                 await performSearch(isInitialSearch: true)
@@ -84,6 +95,7 @@ struct TagSearchView: View {
                 selectedIndex: index,
                 playerManager: playerManager,
                 loadMoreAction: { Task { await triggerLoadMoreWithDebounce() } },
+                navigationContextTitle: currentSearchTag,
                 onTagTappedInSheetCallback: self.onNewTagSelectedInSheet
             )
             .environment(settings)
@@ -204,7 +216,17 @@ struct TagSearchView: View {
             TagSearchView.logger.info("Performing LOAD MORE: Tag='\(tagToSearch)', API Query='\(apiTagsParameter)', OlderThan=\(items.last?.id ?? -1)")
         }
 
-        defer { Task { @MainActor in if isInitialSearch { self.isLoading = false } else { self.isLoadingMore = false }; self.hasSearched = true } }
+        defer {
+            if isInitialSearch {
+                isLoading = false
+                if !Task.isCancelled {
+                    loadedSearchTag = tagToSearch
+                }
+            } else {
+                isLoadingMore = false
+            }
+            hasSearched = true
+        }
 
         do {
             let olderThanIdForAPI: Int?
