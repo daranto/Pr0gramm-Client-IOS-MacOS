@@ -17,6 +17,7 @@ extension Notification.Name {
 @MainActor
 final class VideoPlayerManager {
     nonisolated private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "VideoPlayerManager")
+    private static weak var playbackOwner: VideoPlayerManager?
 
     // MARK: - Player State
     private(set) var player: AVPlayer? = nil
@@ -56,6 +57,8 @@ final class VideoPlayerManager {
     private weak var settings: AppSettings?
     private var shouldAutoplayWhenReady: Bool = false
     private var playCommandFromViewPending: Bool = false
+    private var shouldResumeAfterSceneActivation: Bool = false
+    private var isSceneActive: Bool = true
 
 
     // Seek time constants
@@ -71,6 +74,56 @@ final class VideoPlayerManager {
         }
         self.settings = settings
         VideoPlayerManager.logger.debug("VideoPlayerManager configured with AppSettings.")
+    }
+
+    /// Makes this manager the only one allowed to start or resume foreground playback.
+    /// Presenting a second detail view (for example from a pr0gramm link) must not
+    /// leave the covered view's player running behind it.
+    @MainActor
+    private func claimPlaybackOwnership() {
+        guard Self.playbackOwner !== self else { return }
+
+        if let previousOwner = Self.playbackOwner {
+            previousOwner.player?.pause()
+            previousOwner.shouldResumeAfterSceneActivation = false
+        }
+        Self.playbackOwner = self
+    }
+
+    /// Captures the actual playback intent once while the scene leaves the foreground.
+    /// SwiftUI can deliver both `.inactive` and `.background`, and multiple live views
+    /// can reference the same manager, so a later callback must not overwrite `true`.
+    @MainActor
+    func pauseForSceneDeactivation() -> Bool {
+        isSceneActive = false
+        guard Self.playbackOwner === self, let player else { return false }
+
+        let hadPlaybackIntent = player.timeControlStatus != .paused
+            || shouldAutoplayWhenReady
+            || playCommandFromViewPending
+        shouldResumeAfterSceneActivation = shouldResumeAfterSceneActivation || hadPlaybackIntent
+
+        guard player.timeControlStatus != .paused else { return false }
+        player.pause()
+        return true
+    }
+
+    /// Resumes at most once, and only for the manager that owns visible playback.
+    @MainActor
+    func resumeAfterSceneActivation() -> Bool {
+        isSceneActive = true
+        guard Self.playbackOwner === self,
+              shouldResumeAfterSceneActivation,
+              let player else {
+            return false
+        }
+
+        shouldResumeAfterSceneActivation = false
+        shouldAutoplayWhenReady = false
+        playCommandFromViewPending = false
+        guard player.timeControlStatus != .playing else { return false }
+        player.play()
+        return true
     }
     
     /// Preserves the current player state before a sheet is presented
@@ -129,6 +182,9 @@ final class VideoPlayerManager {
             VideoPlayerManager.logger.warning("[Manager] requestPlay for item \(itemID) ignored: Player not set up for this item or player is nil.")
             return
         }
+
+        claimPlaybackOwnership()
+        isSceneActive = true
         
         if player.currentItem?.status == .readyToPlay {
             if player.timeControlStatus != .playing {
@@ -195,6 +251,7 @@ final class VideoPlayerManager {
 
         // Wenn Player für dieses Item schon existiert
         if !forceReload && playerItemID == item.id, let existingPlayer = player {
+            claimPlaybackOwnership()
             VideoPlayerManager.logger.debug("[Manager] Player already exists for video item \(item.id). Ensuring state. IsFullscreen: \(isFullscreen)")
             
             let targetMuteState = settings.transientSessionMuteState ?? settings.isVideoMuted
@@ -256,6 +313,7 @@ final class VideoPlayerManager {
         if !isSheetPlayer {
             self.currentItem = item
         }
+        claimPlaybackOwnership()
 
         setupObservers(for: newPlayer, item: item)
 
@@ -301,9 +359,16 @@ final class VideoPlayerManager {
                 case .readyToPlay:
                     VideoPlayerManager.logger.info("[Manager] PlayerItem for item \(itemForObserver.id) is now readyToPlay.")
                     if strongSelf.shouldAutoplayWhenReady || strongSelf.playCommandFromViewPending {
-                        if player.timeControlStatus != .playing {
+                        if Self.playbackOwner === strongSelf,
+                           strongSelf.isSceneActive,
+                           player.timeControlStatus != .playing {
                             VideoPlayerManager.logger.info("[Manager] PlayerItem ready. Autoplaying (auto: \(strongSelf.shouldAutoplayWhenReady), pending: \(strongSelf.playCommandFromViewPending)).")
                             player.play()
+                        } else if Self.playbackOwner !== strongSelf {
+                            VideoPlayerManager.logger.debug("[Manager] PlayerItem ready, but this manager no longer owns playback. Skipping autoplay.")
+                        } else if !strongSelf.isSceneActive {
+                            VideoPlayerManager.logger.debug("[Manager] PlayerItem ready while the scene is inactive. Deferring autoplay.")
+                            return
                         }
                         strongSelf.shouldAutoplayWhenReady = false
                         strongSelf.playCommandFromViewPending = false
@@ -363,7 +428,8 @@ final class VideoPlayerManager {
                        (notification.object as? AVPlayerItem) == capturedItem,
                        currentPlayer.currentItem == capturedItem,
                        let currentManagerItemID = strongSelf.playerItemID,
-                       currentManagerItemID == itemID else {
+                       currentManagerItemID == itemID,
+                       Self.playbackOwner === strongSelf else {
                      return
                  }
                  VideoPlayerManager.logger.debug("[Manager] Video did play to end time for item \(itemID). Seeking to zero and replaying.")
@@ -572,6 +638,10 @@ final class VideoPlayerManager {
         self.showRetryButton = false
         self.retryCount = 0
         self.currentItem = nil
+        self.shouldResumeAfterSceneActivation = false
+        if Self.playbackOwner === self {
+            Self.playbackOwner = nil
+        }
         let hadObservers = muteObserver != nil || loopObserver != nil || timeObserverToken != nil || playerItemStatusObserver != nil
         if hadPlayer || hadObservers || hadSubtitleTask || hadSubtitles {
              VideoPlayerManager.logger.debug("[Manager] Cleaning up player state for item \(cleanupItemID)...")

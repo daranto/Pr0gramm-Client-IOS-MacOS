@@ -140,6 +140,14 @@ struct PagedDetailView: View {
     @State private var fullscreenImageTarget: FullscreenImageTarget? = nil
     @State private var collectionSelectionSheetTarget: CollectionSelectionSheetTarget? = nil
 
+    private var isPresentingOverlay: Bool {
+        previewLinkTarget != nil
+            || userProfileSheetTarget != nil
+            || fullscreenImageTarget != nil
+            || collectionSelectionSheetTarget != nil
+            || commentReplyTarget != nil
+    }
+
     @State private var isTogglingFavorite = false
     @State private var localFavoritedStatus: [Int: Bool] = [:]
     @State private var collapsedCommentIDs: Set<Int> = []
@@ -261,7 +269,7 @@ struct PagedDetailView: View {
         if wasPlayingBeforeAnySheet {
             if selectedIndex >= 0 && selectedIndex < items.count && items[selectedIndex].isVideo && items[selectedIndex].id == playerManager.playerItemID {
                 if !isFullscreen {
-                    playerManager.player?.play()
+                    playerManager.requestPlay(for: items[selectedIndex].id)
                     PagedDetailView.logger.debug("Player resumed after sheet dismissed (not fullscreen).")
                 } else {
                     PagedDetailView.logger.debug("Sheet dismissed, but view is in fullscreen. Player state managed by system.")
@@ -592,17 +600,19 @@ struct PagedDetailView: View {
               if !isFullscreen, let player = playerManager.player, player.isMuted != settings.isVideoMuted {
                   player.isMuted = settings.isVideoMuted
               }
-              if !isFullscreen, let player = playerManager.player, player.timeControlStatus != .playing {
-                  player.play()
-                  PagedDetailView.logger.debug("Scene became active. Resuming player (not fullscreen).")
+              if !isFullscreen,
+                 !isPresentingOverlay,
+                 selectedIndex >= 0,
+                 selectedIndex < items.count,
+                 items[selectedIndex].id == playerManager.playerItemID,
+                 playerManager.resumeAfterSceneActivation() {
+                  PagedDetailView.logger.debug("Scene became active. Resuming the visible playback owner.")
               }
           } else if newPhase == .inactive || newPhase == .background {
-              if !isFullscreen && previewLinkTarget == nil && userProfileSheetTarget == nil && collectionSelectionSheetTarget == nil,
-                 let player = playerManager.player, player.timeControlStatus == .playing {
-                  PagedDetailView.logger.debug("Scene became inactive/background. Pausing player (not fullscreen, no sheets active).")
-                  player.pause()
+              if !isFullscreen && playerManager.pauseForSceneDeactivation() {
+                  PagedDetailView.logger.debug("Scene became inactive/background. Pausing the playback owner.")
               } else {
-                  PagedDetailView.logger.debug("Scene became inactive/background. NOT pausing player (is fullscreen or a sheet is active or player not playing).")
+                  PagedDetailView.logger.debug("Scene became inactive/background. No active playback owned by this view.")
               }
               
               PagedDetailView.logger.info("App going to background/inactive. Forcing save of seen items.")
@@ -642,7 +652,7 @@ struct PagedDetailView: View {
             let currentItem = items[selectedIndex]
             if currentItem.id == playerManager.playerItemID {
                 if !wasPlayingBeforeAnySheet && previewLinkTarget == nil && userProfileSheetTarget == nil && collectionSelectionSheetTarget == nil {
-                    playerManager.player?.play()
+                    playerManager.requestPlay(for: currentItem.id)
                     PagedDetailView.logger.debug("Resuming player after ending fullscreen (no sheets active, was not playing due to sheet).")
                 } else if wasPlayingBeforeAnySheet {
                     PagedDetailView.logger.debug("Player was paused for a sheet; resumePlayerIfNeeded will handle it.")
@@ -1066,5 +1076,4 @@ struct LinkedItemPreviewWrapperView: View {
     return PreviewWrapper()
 }
 // --- END OF COMPLETE FILE ---
-
 
