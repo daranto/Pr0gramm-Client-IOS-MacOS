@@ -190,8 +190,9 @@ struct SearchView: View {
                 if wasPlayingBeforeTabSwitch {
                     // Small delay to ensure Search is fully active
                     try? await Task.sleep(for: .milliseconds(150))
-                    if playerManager.player?.timeControlStatus != .playing {
-                        playerManager.player?.play()
+                    if let itemID = playerManager.playerItemID,
+                       playerManager.player?.timeControlStatus != .playing {
+                        playerManager.requestPlay(for: itemID)
                         SearchView.logger.info("Resumed player after returning to Search tab.")
                     }
                     wasPlayingBeforeTabSwitch = false

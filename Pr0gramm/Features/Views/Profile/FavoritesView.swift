@@ -208,8 +208,9 @@ struct FavoritesView: View {
                 if wasPlayingBeforeTabSwitch {
                     // Small delay to ensure Favorites is fully active
                     try? await Task.sleep(for: .milliseconds(150))
-                    if playerManager.player?.timeControlStatus != .playing {
-                        playerManager.player?.play()
+                    if let itemID = playerManager.playerItemID,
+                       playerManager.player?.timeControlStatus != .playing {
+                        playerManager.requestPlay(for: itemID)
                         FavoritesView.logger.info("Resumed player after returning to Favorites tab.")
                     }
                     wasPlayingBeforeTabSwitch = false
@@ -256,7 +257,7 @@ struct FavoritesView: View {
                        currentItemID == savedState.itemID {
                         // Same item, just resume if it was playing
                         if savedState.isPlaying && playerManager.player?.timeControlStatus != .playing {
-                            playerManager.player?.play()
+                            playerManager.requestPlay(for: currentItemID)
                             FavoritesView.logger.info("Resumed player for same item \(savedState.itemID)")
                         }
                     } else {

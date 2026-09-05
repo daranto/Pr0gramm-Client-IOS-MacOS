@@ -819,7 +819,7 @@ struct DetailViewContent: View {
         if wasPlayingBeforeAnySheet {
             let appIsActive = UIApplication.shared.applicationState == .active
             if item.isVideo, item.id == playerManager.playerItemID, !onWillBeginFullScreenCalledRecently, appIsActive {
-                playerManager.player?.play()
+                playerManager.requestPlay(for: item.id)
                 DetailViewContent.logger.debug("Player resumed after sheet dismissed (not fullscreen, app active).")
             } else {
                 DetailViewContent.logger.debug("Not resuming player: conditions not met (item not video/player changed, or fullscreen, or app not active).")

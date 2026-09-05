@@ -169,7 +169,7 @@ struct AppRootView: View {
     @State private var didPrepareInitialAppState = false
     @State private var isShowingWhatsNew = false
 
-    private let whatsNewContentVersion = 4
+    private let whatsNewContentVersion = 5
 
     private var currentAppVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
@@ -242,6 +242,12 @@ struct WhatsNewView: View {
     let onDone: () -> Void
 
     private let features: [WhatsNewFeature] = [
+        WhatsNewFeature(
+            date: "05.09.2026",
+            iconName: "play.circle.fill",
+            title: "Zuverlässige Videowiedergabe",
+            description: "Videos starten nach der Rückkehr zur App wieder zuverlässig und laufen nach dem Schließen einer Tagsuche weiter in der Schleife."
+        ),
         WhatsNewFeature(
             date: "14.08.2026",
             iconName: "line.3.horizontal.decrease.circle.fill",

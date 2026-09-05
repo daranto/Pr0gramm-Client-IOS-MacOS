@@ -223,7 +223,7 @@ struct PagedDetailView: View {
             .environment(settings)
             .presentationDetents([.medium, .large])
         }
-        .sheet(item: $commentReplyTarget) { target in
+        .sheet(item: $commentReplyTarget, onDismiss: resumeAfterSceneActivationIfNeeded) { target in
             CommentInputView(
                 itemId: target.itemId,
                 parentId: target.parentId,
@@ -279,6 +279,7 @@ struct PagedDetailView: View {
             }
         }
         wasPlayingBeforeAnySheet = false
+        resumeAfterSceneActivationIfNeeded()
     }
     
     private var tabViewPages: some View {
@@ -600,14 +601,7 @@ struct PagedDetailView: View {
               if !isFullscreen, let player = playerManager.player, player.isMuted != settings.isVideoMuted {
                   player.isMuted = settings.isVideoMuted
               }
-              if !isFullscreen,
-                 !isPresentingOverlay,
-                 selectedIndex >= 0,
-                 selectedIndex < items.count,
-                 items[selectedIndex].id == playerManager.playerItemID,
-                 playerManager.resumeAfterSceneActivation() {
-                  PagedDetailView.logger.debug("Scene became active. Resuming the visible playback owner.")
-              }
+              resumeAfterSceneActivationIfNeeded()
           } else if newPhase == .inactive || newPhase == .background {
               if !isFullscreen && playerManager.pauseForSceneDeactivation() {
                   PagedDetailView.logger.debug("Scene became inactive/background. Pausing the playback owner.")
@@ -619,6 +613,18 @@ struct PagedDetailView: View {
               handleAppBackgrounding()
           }
      }
+
+    private func resumeAfterSceneActivationIfNeeded() {
+        guard scenePhase == .active else { return }
+        let allowPlayback = !isFullscreen
+            && !isPresentingOverlay
+            && selectedIndex >= 0
+            && selectedIndex < items.count
+            && items[selectedIndex].id == playerManager.playerItemID
+        if playerManager.resumeAfterSceneActivation(allowPlayback: allowPlayback) {
+            PagedDetailView.logger.debug("Resuming the visible playback owner after scene activation.")
+        }
+    }
 
     private func handleAppBackgrounding() {
         let currentSettings = self.settings
@@ -1076,4 +1082,3 @@ struct LinkedItemPreviewWrapperView: View {
     return PreviewWrapper()
 }
 // --- END OF COMPLETE FILE ---
-

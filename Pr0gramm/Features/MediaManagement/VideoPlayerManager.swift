@@ -108,11 +108,13 @@ final class VideoPlayerManager {
         return true
     }
 
-    /// Resumes at most once, and only for the manager that owns visible playback.
+    /// Always records activation, even while an overlay prevents playback.
+    /// Keeps the resume intent until the owning view becomes visible again.
     @MainActor
-    func resumeAfterSceneActivation() -> Bool {
+    func resumeAfterSceneActivation(allowPlayback: Bool = true) -> Bool {
         isSceneActive = true
-        guard Self.playbackOwner === self,
+        guard allowPlayback,
+              Self.playbackOwner === self,
               shouldResumeAfterSceneActivation,
               let player else {
             return false
@@ -185,6 +187,7 @@ final class VideoPlayerManager {
 
         claimPlaybackOwnership()
         isSceneActive = true
+        shouldResumeAfterSceneActivation = false
         
         if player.currentItem?.status == .readyToPlay {
             if player.timeControlStatus != .playing {
@@ -358,6 +361,9 @@ final class VideoPlayerManager {
                 switch capturedItem.status {
                 case .readyToPlay:
                     VideoPlayerManager.logger.info("[Manager] PlayerItem for item \(itemForObserver.id) is now readyToPlay.")
+                    // Activation can arrive while a sheet still covers this player.
+                    // Let the view release the saved resume intent after dismissal.
+                    guard !strongSelf.shouldResumeAfterSceneActivation else { return }
                     if strongSelf.shouldAutoplayWhenReady || strongSelf.playCommandFromViewPending {
                         if Self.playbackOwner === strongSelf,
                            strongSelf.isSceneActive,

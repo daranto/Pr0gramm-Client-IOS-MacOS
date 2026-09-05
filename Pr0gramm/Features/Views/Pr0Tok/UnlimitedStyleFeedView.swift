@@ -447,7 +447,7 @@ struct UnlimitedStyleFeedView: View {
                     try? await Task.sleep(for: .milliseconds(100))
                     if playerManager.playerItemID == activeItem.id && playerManager.player?.timeControlStatus != .playing {
                         Self.logger.info("Attempting to resume player for item \(activeItem.id) after exiting fullscreen.")
-                        playerManager.player?.play()
+                        playerManager.requestPlay(for: activeItem.id)
                     }
                 }
             }
@@ -495,7 +495,7 @@ struct UnlimitedStyleFeedView: View {
             Task {
                 try? await Task.sleep(for: .milliseconds(100))
                 if self.activeItemID == currentItem.id && playerManager.playerItemID == currentItem.id && !self.isCurrentlyInSystemFullscreen {
-                    playerManager.player?.play()
+                    playerManager.requestPlay(for: currentItem.id)
                     Self.logger.info("Player resumed after app sheet dismissal (item: \(currentItem.id)).")
                 } else {
                     Self.logger.debug("Not resuming player after app sheet (post-delay check): Conditions changed. Active: \(self.activeItemID ?? -1), PlayerItemID: \(playerManager.playerItemID ?? -1), SystemFS: \(self.isCurrentlyInSystemFullscreen)")
@@ -708,11 +708,11 @@ struct UnlimitedStyleFeedView: View {
                                             return
                                         }
                                         if player.status == .readyToPlay {
-                                            player.play()
+                                            playerManager.requestPlay(for: currentItemFromScroll.id)
                                             Self.logger.info("Explicitly started player for (newly) active video item \(currentItemFromScroll.id) after delay and status check.")
                                         } else {
                                             Self.logger.warning("Player for item \(currentItemFromScroll.id) not readyToPlay. Status: \(String(describing: player.status)). Play command might not be effective immediately.")
-                                            player.play()
+                                            playerManager.requestPlay(for: currentItemFromScroll.id)
                                         }
                                     }
                                 }
