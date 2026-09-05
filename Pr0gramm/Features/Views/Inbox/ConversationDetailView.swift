@@ -710,23 +710,14 @@ struct ConversationMessageRow: View {
     }
 
     private var attributedMessageContent: AttributedString {
-        var attributedString = AttributedString(message.message ?? "")
+        var attributedString = MessageTextFormatter.attributedString(for: message.message ?? "")
         let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont)
         attributedString.font = baseUIFont
         attributedString.foregroundColor = textColorForBubble
 
-        do {
-            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-            let matches = detector.matches(in: message.message ?? "", options: [], range: NSRange(location: 0, length: (message.message ?? "").utf16.count))
-            for match in matches {
-                guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
-                attributedString[range].link = url
-                attributedString[range].foregroundColor = isSentByCurrentUser ? .white.opacity(0.85) : Color.accentColor
-                attributedString[range].underlineStyle = .single
-                attributedString[range].font = baseUIFont
-            }
-        } catch {
-            Self.logger.error("Error creating NSDataDetector in ConversationMessageRow: \(error.localizedDescription)")
+        for run in attributedString.runs where run.link != nil {
+            attributedString[run.range].foregroundColor = isSentByCurrentUser ? .white.opacity(0.85) : Color.accentColor
+            attributedString[run.range].underlineStyle = .single
         }
         return attributedString
     }
@@ -772,6 +763,7 @@ struct ConversationMessageRow: View {
                 }
 
                 Text(attributedMessageContent)
+                    .userMentionNavigation()
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
                     .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))

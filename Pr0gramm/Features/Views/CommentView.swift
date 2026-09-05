@@ -38,21 +38,10 @@ struct CommentView: View {
     }
 
     private var attributedCommentContent: AttributedString {
-        var attributedString = AttributedString(comment.content)
+        var attributedString = MessageTextFormatter.attributedString(for: comment.content)
         let baseUIFont = UIFont.uiFont(from: UIConstants.footnoteFont)
         attributedString.font = baseUIFont
 
-        do {
-            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-            let matches = detector.matches(in: comment.content, options: [], range: NSRange(location: 0, length: comment.content.utf16.count))
-            for match in matches {
-                guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
-                attributedString[range].link = url
-                attributedString[range].font = baseUIFont
-            }
-        } catch {
-            CommentView.logger.error("Error creating NSDataDetector: \(error.localizedDescription)")
-        }
         return attributedString
     }
 
@@ -119,6 +108,7 @@ struct CommentView: View {
 
             if !isCollapsed {
                 CommentTextView(attributedText: attributedCommentContent)
+                    .userMentionNavigation()
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, hasChildren ? 20 : 20)
             }

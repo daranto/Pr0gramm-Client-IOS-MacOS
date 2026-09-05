@@ -29,6 +29,7 @@ Testflight Link: https://testflight.apple.com/join/41yj2PYp
 *   **Bewerten:** Bewerte Posts und Kommentare mit Up-/Downvotes (Benis).
 *   **Favorisieren:** Markiere Posts und Kommentare als Favoriten.
 *   **Antworten:** Antworte direkt auf Kommentare.
+*   **Nutzer markieren:** Erwähnungen mit `@nutzername` öffnen in Kommentaren und Nachrichten das Profil direkt in der App.
 *   **Highlighting:** Kommentare des Original-Posters (OP) werden hervorgehoben.
 *   **Kontextmenüs:** Schneller Zugriff auf Aktionen wie Antworten, Bewerten, Favorisieren und Profil anzeigen für Kommentare.
 

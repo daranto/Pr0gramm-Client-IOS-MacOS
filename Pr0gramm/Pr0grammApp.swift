@@ -169,7 +169,7 @@ struct AppRootView: View {
     @State private var didPrepareInitialAppState = false
     @State private var isShowingWhatsNew = false
 
-    private let whatsNewContentVersion = 5
+    private let whatsNewContentVersion = 6
 
     private var currentAppVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
@@ -242,6 +242,12 @@ struct WhatsNewView: View {
     let onDone: () -> Void
 
     private let features: [WhatsNewFeature] = [
+        WhatsNewFeature(
+            date: "05.09.2026",
+            iconName: "at",
+            title: "Nutzer markieren",
+            description: "Erwähnungen mit @nutzername sind in Kommentaren und Nachrichten antippbar und öffnen das Profil direkt in der App."
+        ),
         WhatsNewFeature(
             date: "05.09.2026",
             iconName: "play.circle.fill",

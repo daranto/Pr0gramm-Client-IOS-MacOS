@@ -11,6 +11,19 @@ struct Pr0grammLinkParser {
     static func isSupportedHost(_ host: String) -> Bool {
         supportedHosts.contains(host.lowercased())
     }
+
+    /// Recognizes exact profile paths before numeric usernames can be treated as post IDs.
+    static func profileUsername(from url: URL) -> String? {
+        guard let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme),
+              let host = url.host, isSupportedHost(host),
+              url.user == nil, url.password == nil else { return nil }
+
+        let components = url.path.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 3, components[0].isEmpty, components[1] == "user" else { return nil }
+        let username = String(components[2])
+        guard username.range(of: #"\A[A-Za-z0-9]{2,32}\z"#, options: .regularExpression) != nil else { return nil }
+        return username
+    }
     
     /// Parses a pr0gramm URL and extracts the item ID and optional comment ID
     /// - Parameter url: The URL to parse
