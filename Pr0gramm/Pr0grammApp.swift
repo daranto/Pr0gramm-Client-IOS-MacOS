@@ -246,13 +246,13 @@ struct WhatsNewView: View {
             date: "05.09.2026",
             iconName: "at",
             title: "Nutzer markieren",
-            description: "Erwähnungen mit @nutzername sind in Kommentaren und Nachrichten antippbar und öffnen das Profil direkt in der App."
+            description: "Erwähnungen mit @nutzername sind in Kommentaren und Nachrichten antippbar und öffnen das Profil direkt in der App. Danke @VladimirObama."
         ),
         WhatsNewFeature(
             date: "05.09.2026",
             iconName: "play.circle.fill",
             title: "Zuverlässige Videowiedergabe",
-            description: "Videos starten nach der Rückkehr zur App wieder zuverlässig und laufen nach dem Schließen einer Tagsuche weiter in der Schleife."
+            description: "Videos starten nach der Rückkehr zur App wieder zuverlässig und laufen nach dem Schließen einer Tagsuche weiter in der Schleife. Danke @VladimirObama."
         ),
         WhatsNewFeature(
             date: "14.08.2026",

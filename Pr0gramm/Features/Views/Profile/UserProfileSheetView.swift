@@ -214,7 +214,9 @@ struct UserProfileSheetView: View {
             await authService.fetchFollowList()
         }
         await loadProfileInfo(forceRefresh: forceRefresh)
-        
+
+        guard profileInfoError == nil else { return }
+
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await loadUserUploads(isRefresh: forceRefresh, initialLoad: true) }
             group.addTask { await loadUserComments(isRefresh: forceRefresh, initialLoad: true) }
@@ -377,7 +379,10 @@ struct UserProfileSheetView: View {
             UserProfileSheetView.logger.info("Profile info for \(username) loaded. API-Reported Follows: \(followsStatus), Subscribed: \(subscribedStatus)")
         } catch {
             UserProfileSheetView.logger.error("Failed to load profile info for \(username): \(error.localizedDescription)")
-            await MainActor.run { profileInfoError = error.localizedDescription }
+            let message: String = error.localizedDescription == "userNotFound"
+                ? "Dieser Nutzer existiert nicht."
+                : error.localizedDescription
+            await MainActor.run { profileInfoError = message }
         }
         await MainActor.run { isLoadingProfileInfo = false }
     }
