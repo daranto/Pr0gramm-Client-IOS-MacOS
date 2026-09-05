@@ -915,21 +915,12 @@ struct InboxMessageRow: View {
             return AttributedString("")
         }
         
-        var attributedString = AttributedString(msgText)
+        var attributedString = MessageTextFormatter.attributedString(for: msgText)
         let baseUIFont = UIFont.uiFont(from: UIConstants.subheadlineFont)
         attributedString.font = baseUIFont
 
-        do {
-            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-            let matches = detector.matches(in: msgText, options: [], range: NSRange(location: 0, length: msgText.utf16.count))
-            for match in matches {
-                guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
-                attributedString[range].link = url
-                attributedString[range].foregroundColor = .accentColor
-                attributedString[range].font = baseUIFont
-            }
-        } catch {
-            InboxView.logger.error("Error creating NSDataDetector in InboxMessageRow: \(error.localizedDescription)")
+        for run in attributedString.runs where run.link != nil {
+            attributedString[run.range].foregroundColor = .accentColor
         }
         return attributedString
     }
@@ -965,6 +956,7 @@ struct InboxMessageRow: View {
                 
                 if messageType != "follow" && messageType != "follows", let msg = message.message, !msg.isEmpty {
                     Text(attributedMessageContent)
+                        .userMentionNavigation()
                         .font(.subheadline)
                         .foregroundColor(.primary)
                         .lineLimit(messageType == "notification" ? 3 : nil)
@@ -1001,21 +993,12 @@ struct SystemNotificationDetailView: View {
     }
 
     private var attributedMessageContent: AttributedString {
-        var attributedString = AttributedString(messageText)
+        var attributedString = MessageTextFormatter.attributedString(for: messageText)
         let baseUIFont = UIFont.uiFont(from: UIConstants.bodyFont)
         attributedString.font = baseUIFont
 
-        do {
-            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-            let matches = detector.matches(in: messageText, options: [], range: NSRange(location: 0, length: messageText.utf16.count))
-            for match in matches {
-                guard let range = Range(match.range, in: attributedString), let url = match.url else { continue }
-                attributedString[range].link = url
-                attributedString[range].foregroundColor = .accentColor
-                attributedString[range].font = baseUIFont
-            }
-        } catch {
-            InboxView.logger.error("Error creating NSDataDetector in SystemNotificationDetailView: \(error.localizedDescription)")
+        for run in attributedString.runs where run.link != nil {
+            attributedString[run.range].foregroundColor = .accentColor
         }
 
         return attributedString
@@ -1039,6 +1022,7 @@ struct SystemNotificationDetailView: View {
                 }
 
                 Text(attributedMessageContent)
+                    .userMentionNavigation()
                     .font(.body)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
